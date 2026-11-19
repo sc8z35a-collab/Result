@@ -7,7 +7,7 @@ export function imageFrom(url) {
     im.src = url
   })
 }
-export const labelNames = ['HBR', 'NORTH', 'TIDE', 'serial', 'hazard', '04', '05', '07', 'berth', 'door', 'gate', 'yard', 'arrow', 'mark04', 'ship', 'portal'];
+export const labelNames = ['HBR', 'NORTH', 'TIDE', 'serial', 'hazard', '04', '05', '07', 'berth', 'door', 'gate', 'yard', 'arrow', 'mark04', 'ship', 'portal', 'supply'];
 export function makeLabel(name, ctx, s) {
   ctx.clearRect(0, 0, s, s);
   ctx.save();
@@ -129,6 +129,21 @@ export function makeLabel(name, ctx, s) {
     label('PORT  AUTHORITY', 200, 115, 36);
     ctx.fillRect(36, 171, 328, 5);
     label('HARBOR  04', 200, 249, 49)
+  } else if (name === 'supply') {
+    ctx.fillStyle = '#18343a';
+    ctx.fillRect(0, 0, 400, 400);
+    ctx.fillStyle = '#eab854';
+    ctx.fillRect(0, 0, 400, 34);
+    ctx.fillRect(0, 366, 400, 34);
+    ctx.strokeStyle = '#7ce2d2';
+    ctx.lineWidth = 6;
+    ctx.strokeRect(18, 50, 364, 300);
+    ctx.fillStyle = '#7ce2d2';
+    label('AMMO TANKER', 200, 118, 42);
+    ctx.fillStyle = ink;
+    label('+100 RDS', 200, 208, 66);
+    ctx.fillStyle = '#f2c96b';
+    label('REFINE  1.5×', 200, 294, 42)
   }
   ctx.restore();
   return ctx.getImageData(0, 0, s, s)

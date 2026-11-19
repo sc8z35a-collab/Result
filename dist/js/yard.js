@@ -65,6 +65,11 @@ export const props = [
   ['spool', 17, 60, 2.4, 1.95, 2.4]
 ];
 export const craneSites = [{x: -18, z: 37, scale: 1, number: '04'}, {x: -18, z: -66, scale: .95, number: '05'}];
+export const tankers = [
+  {id: 0, label: 'SOUTH TANKER', x: 10.0, z: 62.0, w: 2.4, h: 2.85, d: 5.6, radius: 4.6, facing: -1},
+  {id: 1, label: 'CENTRAL TANKER', x: -6.5, z: -5.0, w: 2.4, h: 2.85, d: 5.6, radius: 4.6, facing: 1},
+  {id: 2, label: 'NORTH TANKER', x: 12.0, z: -58.0, w: 2.4, h: 2.85, d: 5.6, radius: 4.6, facing: 1}
+];
 export const teams = [[[1, 84], [-16, 85], [6, 70], [-18, 56], [19, 61], [-2, 89]], [[0, -84], [18, -85], [-17, -73], [18, -61], [-3, -77], [4, -91]]];
 export const obstacles = [];
 function obstacle(x, z, w, d, y0, y1) {
@@ -72,6 +77,7 @@ function obstacle(x, z, w, d, y0, y1) {
 }
 for (const [x, z, w, d, y] of cargo)obstacle(x, z, w, d, y, y + 2.62);
 for (const [, x, z, w, h, d] of props)obstacle(x, z, w, d, 0, h);
+for (const t of tankers)obstacle(t.x, t.z, t.w, t.d, 0, t.h);
 for (const c of craneSites)for (const dx of [-4.4, 4.4])for (const dz of [-8, 8])obstacle(c.x + dx * c.scale, c.z + dz * c.scale, 1.6 * c.scale, 2.9 * c.scale, 0, 8 * c.scale);
 for (let z = -94; z <= 96; z += 19)obstacle(-23.7, z, .9, 1.2, 0, .86);
 // A uniform index keeps visibility, swept shots and navigation queries local.

@@ -106,7 +106,7 @@ export function spendP1(a, t) {
 export function updateDF(match, a, dt) {
   const d = a.df;
   if (d.p1 < 20) {
-    d.p1Clock += dt;
+    d.p1Clock += dt * (a.ammoRate || 1);
     if (d.p1Clock + 1e-8 >= 8) {
       d.p1++;
       d.p1Clock = Math.max(0, d.p1Clock - 8)

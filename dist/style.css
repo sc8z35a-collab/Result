@@ -23,3 +23,134 @@
   100% { opacity: 1; transform: translate(-1.6%, .6%) scale(1.015); }
 }
 @media (prefers-reduced-motion: reduce) { #app.cinematic #backdrop i { animation: none; } }
+
+/* 5-weapon loadout layout & Extra graphics highlight */
+.guns { flex-wrap: nowrap; }
+.guns button { font-size: 13.5px; padding: 8px 6px; white-space: nowrap; }
+#graphics button[data-value="extra"][aria-pressed="true"] {
+  border-color: #ffd57a;
+  background: linear-gradient(135deg, #eab95c30, #5fd3cf24);
+  color: #fff0b8;
+  box-shadow: inset 0 -2px #ffd57a, 0 0 12px #edc16638;
+}
+
+/* Dynamic spread reticle */
+#reticle { --spread: 0px; }
+#reticle i:nth-child(1) { width: 6px; height: 1.5px; left: calc(-11px - var(--spread)); top: -.75px; }
+#reticle i:nth-child(2) { width: 6px; height: 1.5px; left: calc(5px + var(--spread)); top: -.75px; }
+#reticle i:nth-child(3) { height: 6px; width: 1.5px; top: calc(-11px - var(--spread)); left: -.75px; }
+#reticle i:nth-child(4) { height: 6px; width: 1.5px; top: calc(5px + var(--spread)); left: -.75px; }
+#reticle em { width: 2px; height: 2px; top: -1px; left: -1px; border-radius: 50%; }
+#reticle.is-ms10 i, #reticle.is-ms10 em { background: #e8fcff; box-shadow: 0 0 4px #56d7f299, 0 0 1px #0c2228; }
+
+/* Deluxe multi-tier animated hitmark (normal / shield / shield-break / kill) */
+#hitmark {
+  opacity: 0;
+  --hgap: 6px;
+  --hlen: 10px;
+  --hthk: 2.2px;
+  --hrot: 45deg;
+  --hscale: 1;
+  --hring: 16px;
+  --hring-op: 0;
+  --hcol: #ffe5a3;
+  --hglow: #f7b654;
+  transform: rotate(var(--hrot)) scale(var(--hscale));
+  will-change: transform, opacity;
+}
+#hitmark:before, #hitmark:after { content: none; }
+#hitmark i {
+  position: absolute;
+  display: block;
+  background: var(--hcol);
+  border-radius: 1px;
+  box-shadow: 0 0 7px var(--hglow), 0 0 2px #0f1c1e;
+}
+#hitmark i:nth-child(1) { width: var(--hlen); height: var(--hthk); left: calc(-1 * var(--hgap) - var(--hlen)); top: calc(var(--hthk) * -.5); }
+#hitmark i:nth-child(2) { width: var(--hlen); height: var(--hthk); left: var(--hgap); top: calc(var(--hthk) * -.5); }
+#hitmark i:nth-child(3) { height: var(--hlen); width: var(--hthk); top: calc(-1 * var(--hgap) - var(--hlen)); left: calc(var(--hthk) * -.5); }
+#hitmark i:nth-child(4) { height: var(--hlen); width: var(--hthk); top: var(--hgap); left: calc(var(--hthk) * -.5); }
+#hitmark em {
+  position: absolute;
+  display: block;
+  width: var(--hring);
+  height: var(--hring);
+  left: calc(var(--hring) * -.5);
+  top: calc(var(--hring) * -.5);
+  border-radius: 50%;
+  border: 1.8px solid var(--hcol);
+  opacity: var(--hring-op);
+  box-shadow: 0 0 10px var(--hglow), inset 0 0 6px var(--hglow);
+}
+#hitmark.is-hit { --hcol: #ffe8ad; --hglow: #f8b34e; --hlen: 10px; --hthk: 2.2px; }
+#hitmark.is-shield { --hcol: #9af4ff; --hglow: #38d5f7; --hlen: 11px; --hthk: 2.4px; }
+#hitmark.is-break { --hcol: #d8fdff; --hglow: #36e8ff; --hlen: 14px; --hthk: 2.8px; }
+#hitmark.is-kill { --hcol: #ff9c6e; --hglow: #ff4f2e; --hlen: 16px; --hthk: 3px; }
+#hitmark.is-kill em { border-color: #ffd886; box-shadow: 0 0 16px #ff5c36, inset 0 0 8px #ffd886; }
+
+/* Hit banner (SHIELD BREAK / ELIMINATED) */
+#hitBanner {
+  position: absolute;
+  left: 50%;
+  top: calc(50% + 28px);
+  transform: translate(-50%, 0) scale(1);
+  font: 800 11px/1 var(--mono);
+  letter-spacing: .22em;
+  opacity: 0;
+  pointer-events: none;
+  white-space: nowrap;
+}
+#hitBanner.is-break { color: #9df7ff; text-shadow: 0 0 10px #2cd8ff, 0 1px 3px #09171a; }
+#hitBanner.is-kill { color: #ffd48a; text-shadow: 0 0 12px #ff5a32, 0 1px 3px #180b08; }
+
+/* Directional incoming damage arc */
+#damageArc {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 210px;
+  height: 210px;
+  opacity: 0;
+  --dmg-ang: 0deg;
+  transform: translate(-50%, -50%) rotate(var(--dmg-ang));
+  pointer-events: none;
+  will-change: transform, opacity;
+}
+#damageArc i {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  background: conic-gradient(from -24deg, transparent 0deg, #ff5d38f0 18deg, #ffba78ff 24deg, #ff5d38f0 30deg, transparent 48deg);
+  -webkit-mask-image: radial-gradient(circle, transparent 58%, #000 63%, #000 71%, transparent 75%);
+  mask-image: radial-gradient(circle, transparent 58%, #000 63%, #000 71%, transparent 75%);
+  filter: drop-shadow(0 0 8px #ff4f28cc);
+}
+
+/* Supply tanker boost badge & proximity hint */
+#ammoBoost {
+  display: inline-block;
+  margin-bottom: 4px;
+  padding: 2px 7px;
+  font: 700 9px/1.3 var(--mono);
+  letter-spacing: .12em;
+  color: #102426;
+  background: linear-gradient(90deg, #7feae0, #f5d178);
+  border-radius: 2px;
+  box-shadow: 0 0 10px #6be3d855;
+}
+#tankerHint {
+  display: block;
+  margin-top: 3px;
+  font-size: 9px;
+  color: #8fe8de;
+  letter-spacing: .05em;
+}
+#tankerHint:empty { display: none; }
+
+@media (max-width: 600px) {
+  .guns { flex-wrap: wrap; }
+  .guns button { flex: 1 1 30%; font-size: 13px; padding: 7px 6px; }
+  #damageArc { width: 156px; height: 156px; }
+}
+

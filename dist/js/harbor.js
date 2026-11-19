@@ -1,5 +1,5 @@
 import {Mesh, random, blend, add, sub, scale, unit} from './geometry.js';
-import {cargo, props, craneSites} from './yard.js';
+import {cargo, props, craneSites, tankers} from './yard.js';
 const paint = {red: '#ba6049', blue: '#547486', teal: '#478381', green: '#657d6e', ivory: '#c4bd9f', ochre: '#c29a58'};
 const trim = {red: '#9c493a', blue: '#415e6a', teal: '#436b66', green: '#4a635b', ivory: '#a5a18d', ochre: '#987240'};
 const rubber = '#455052', iron = '#697779', white = '#d4d2bb';
@@ -213,6 +213,60 @@ function tanks(m, x, z, rad, hh) {
   }
   m.tube([x + rad * .77, 0, z + rad * .73], [x + rad * .77, hh, z + rad * .73], .20, .20, 'white', '#929d95', 8)
 }
+function supplyTanker(m, t) {
+  const {x, z, facing = 1} = t, f = facing;
+  // Painted harbor supply bay markings on the dock apron around the tanker.
+  m.plane(x, .043, z, 3.8, 7.2, 'tread', '#304347', 2, 4);
+  for (const sx of [-1, 1])m.plane(x + sx * 1.98, .046, z, .22, 7.4, 'labelhazard', '#e5c16c', 1, 14);
+  for (const sz of [-1, 1])m.plane(x, .046, z + sz * 3.68, 4.18, .22, 'labelhazard', '#e5c16c', 8, 1);
+  // Heavy chassis frame and axles.
+  m.box(x, .64, z, 2.08, .30, 5.25, 'blackMetal', '#566163', 1, 1);
+  m.box(x, .52, z + f * 2.66, 2.26, .28, .22, 'labelhazard', '#dfbc65', 4, 1);
+  m.box(x, .52, z - f * 2.66, 2.22, .26, .20, 'blackMetal', '#495456', 1, 1);
+  for (const dz of [-1.72, -.52, 1.65]) {
+    const wz = z + f * dz;
+    m.tube([x - 1.10, .46, wz], [x + 1.10, .46, wz], .11, .11, 'steel', iron, 8);
+    for (const sx of [-1, 1]) {
+      m.tube([x + sx * .88, .46, wz], [x + sx * 1.18, .46, wz], .45, .45, 'rubber', '#373e40', 12);
+      m.tube([x + sx * 1.16, .46, wz], [x + sx * 1.21, .46, wz], .23, .23, 'steel', '#a3b0ad', 10)
+    }
+  }
+  // Forward armored harbor cab.
+  const cz = z + f * 1.88;
+  m.box(x, 1.48, cz, 2.14, 1.38, 1.56, 'panel', '#d5a84e', 2, 1);
+  m.box(x, 2.21, cz - f * .04, 2.08, .12, 1.48, 'steel', '#b7c0b3', 1, 1);
+  m.box(x, 1.72, cz + f * .79, 1.88, .58, .06, 'white', '#2c4850', 0, 1);
+  for (const sx of [-1, 1]) {
+    m.box(x + sx * 1.08, 1.72, cz + f * .08, .05, .52, .94, 'white', '#32515a', 0, 1);
+    m.box(x + sx * .76, 1.02, cz + f * .79, .34, .18, .06, 'white', '#fff2c2', 0, 3);
+    m.box(x + sx * .96, .82, z - f * .35, .14, .22, 2.35, 'blackMetal', '#3e4a4c', 1, 1)
+  }
+  m.box(x, 1.02, cz + f * .79, .95, .36, .06, 'grate', '#394648', 2, 1);
+  // Pressurized ammo-refinery cylindrical tank + hemispherical end caps.
+  const ta = z - f * 2.26, tb = z + f * .86;
+  m.tube([x, 1.66, ta], [x, 1.66, tb], .96, .96, 'steel', '#d7d9cb', 18, 1);
+  m.ellipsoid(x, 1.66, ta, .94, .94, .34, 'steel', '#c3c8bc', 1, 14, 6);
+  m.ellipsoid(x, 1.66, tb, .94, .94, .30, 'steel', '#c3c8bc', 1, 14, 6);
+  // Reinforcement ribs, glowing refinery core strips, and side signage.
+  for (const u of [-2.0, -1.1, -.2, .65]) {
+    const rz = z + f * u;
+    m.tube([x, 1.66, rz - .07], [x, 1.66, rz + .07], 1.01, 1.01, 'blackMetal', '#31494d', 18, 1);
+    m.box(x, .82, rz, 1.65, .28, .22, 'steel', '#697879', 0, 1)
+  }
+  // Upper catwalk, refinery intake dome, and side fuel/ammo conduits.
+  m.box(x, 2.66, z - f * .70, .92, .08, 2.86, 'grate', '#768684', 1, 1);
+  for (const dz of [-1.55, -.70, .15])m.tube([x, 2.55, z + f * dz], [x, 2.83, z + f * dz], .26, .22, 'blackMetal', '#44585c', 12, 1);
+  for (const sx of [-1, 1]) {
+    m.tube([x + sx * .98, 1.24, z - f * 2.20], [x + sx * .98, 1.24, z + f * .76], .08, .08, 'steel', '#66c7b8', 8, 1);
+    side(m, x + sx * 1.02, 1.72, z - f * .68, 2.25, 1.08, 'supply', sx);
+    m.box(x + sx * 1.01, 1.08, z - f * .68, .06, .10, 2.7, 'white', '#7de8d8', 0, 3)
+  }
+  // Rear automated ammo dispenser bay and hose manifold.
+  const rz = z - f * 2.48;
+  m.box(x, 1.38, rz, 1.68, 1.02, .38, 'blackMetal', '#324246', 1, 1);
+  m.box(x, 1.46, rz - f * .20, 1.18, .54, .06, 'white', '#75e4d4', 0, 3);
+  for (const sx of [-.66, .66])m.tube([x + sx, 1.02, rz - f * .16], [x + sx, 1.82, rz - f * .16], .07, .07, 'steel', '#e0b85a', 8, 1)
+}
 function shore(m) {
   const r = random(93);
   for (const radius of [470, 355]) {
@@ -276,6 +330,7 @@ export function buildHarbor() {
   }
   for (const c of cargo)container(m, ...c);
   for (const p of props)prop(m, p);
+  for (const t of tankers)supplyTanker(m, t);
   for (const c of craneSites)crane(m, c.x, c.z, c.scale, c.number);
   ship(m);
   // A separate landside service strip, drainage verge and industrial buildings.

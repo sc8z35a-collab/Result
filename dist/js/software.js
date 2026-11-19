@@ -1,7 +1,7 @@
 // Perspective-correct textured rasterization for devices on which WebGL is unavailable.
 // Both renderers consume the same metric meshes, camera, actors and match simulation.
 import {buildHarbor} from './harbor.js';
-import {character, viewModel, movingDetails} from './models.js';
+import {character, viewModel, movingDetails, muzzleFlashMesh} from './models.js';
 import {weapons, npcWeapons} from './match.js';
 import {sizes} from './renderer.js';
 import {layers, unit, sub, cross, add, scale, dot, clamp} from './geometry.js';
@@ -323,7 +323,12 @@ export class SoftwareRenderer {
           z -= p.crouch * .095 * clamp(y / .48, 0, 1) * (1 - clamp((y - .52) / .6, 0, 1));
           y *= 1 - .34 * p.crouch;
           y += p.aimPose * .14 * clamp((-z - .16) / .24, 0, 1);
-          z -= p.aimPose * .045 * upper
+          z -= p.aimPose * .045 * upper;
+          if (p.hitRecoil > .01) {
+            const flinch = Math.sin(p.hitRecoil * Math.PI) * p.hitRecoil * clamp((y - .72) / .96, 0, 1);
+            z += flinch * .20;
+            y -= flinch * .06
+          }
         }
         if (gait) {
           const leg = clamp((.91 - y) / .46, 0, 1) * Math.sign(x);
@@ -359,7 +364,16 @@ export class SoftwareRenderer {
         depth = coords.reduce((s, p) => s + p[2], 0) / coords.length;
       const fog = view ? 0 : clamp(1 - Math.exp(-Math.pow(Math.max(0, depth) * .00265, 1.38)), 0, .94);
       let sr = (.25 + .41 * hemi + 1.63 * nl) ** .455, sg = (.27 + .52 * hemi + 1.30 * nl) ** .455, sb = (.25 + .62 * hemi + .88 * nl) ** .455;
-      if (kind === 3)sr = sg = sb = 1.39;
+      if (transform?.pose?.shieldFlash > .02) {
+        const f = transform.pose.shieldFlash;
+        sg += f * .75;
+        sb += f * .95
+      } else if (transform?.pose?.hitFlash > .02) {
+        const f = transform.pose.hitFlash;
+        sr += f * .85;
+        sg += f * .45
+      }
+      if (kind === 3)sr = sg = sb = this.config?.graphics === 'extra' ? 1.65 : 1.39;
       if (kind === 5) {
         sr = (sr + 1.1) * .5;
         sg = (sg + 1.1) * .5;
@@ -370,7 +384,8 @@ export class SoftwareRenderer {
       for (let k = 1; k < ps.length - 1; k++)this.triangle(ps[0], ps[k], ps[k + 1], mat, shade, kind === 2, kind === 4)
     }
   }
-  render(cam, time, match, view) {
+  render(cam, time, match, view = {}) {
+    const extra = this.config?.graphics === 'extra';
     this.tanY = Math.tan(cam.fov * Math.PI / 360);
     this.tanX = this.tanY * this.aspect;
     this.fy = this.h * .5 / this.tanY;
@@ -387,12 +402,20 @@ export class SoftwareRenderer {
         this.mesh(this.actors[a.team + a.gun], {pose: a, p: [a.x, a.y, a.z], r: [cy, 0, sy], u: [0, 1, 0], b: [-sy, 0, cy]}, Math.sin(a.stride * 2.75) * Math.min(1, Math.hypot(a.vx, a.vz) / 4))
       }
     }
-    this.mesh(chunk(movingDetails(match, time)));
+    this.mesh(chunk(movingDetails(match, time, extra)));
     if (match?.player.alive && view.firstPerson) {
-      const a = match.player, drop = a.reload ? Math.sin((1 - a.reload / weapons[a.gun].reload) * Math.PI) : 0;
+      const a = match.player,
+        m = view.motion || {},
+        drop = a.reload ? Math.sin((1 - a.reload / weapons[a.gun].reload) * Math.PI) : 0;
+      this.tanY = Math.tan(66 * Math.PI / 360);
+      this.tanX = this.tanY * this.aspect;
+      this.fy = this.h * .5 / this.tanY;
+      this.fx = this.w * .5 / this.tanX;
       this.depth.fill(0);
-      const p = add(eye, add(scale(right, .215), add(scale(up, -.208 - drop * .14), scale(dir, .55 - view.kick * .062))));
-      this.mesh(this.devices[a.gun], {p, r: right, u: up, b: scale(dir, -1)}, null, true)
+      const p = add(eye, add(scale(right, .205 + (m.swayX || 0)), add(scale(up, -.205 - drop * .14 + (m.kickY || 0) + (m.swayY || 0)), scale(dir, .54 - (m.kickZ ?? (view.kick || 0) * .062)))));
+      const tr = {p, r: right, u: up, b: scale(dir, -1)};
+      this.mesh(this.devices[a.gun], tr, null, true);
+      if (a.flash > .005) this.mesh(chunk(muzzleFlashMesh(a.gun, clamp(a.flash / .11, 0, 1), a.shotCount || 1, extra)), tr, null, true)
     }
     this.ctx.putImageData(this.img, 0, 0)
   }

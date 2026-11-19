@@ -1,6 +1,6 @@
-import {clamp, forward, dot, sub, add, scale, random} from './geometry.js';
-import {teams, walkable, moveActor, floorAt, obstruction} from './yard.js';
-import {NV11} from './nv11.js';
+import {clamp, forward, dot, sub, add, scale, random, cross, unit} from './geometry.js';
+import {teams, tankers, walkable, moveActor, floorAt, obstruction} from './yard.js';
+import {NV12} from './nv12.js';
 import {eyeOf, torso, bodyCenter, postureStep} from './posture.js';
 import {DF, initialDF, assist, scheduleDF, directionDF, spendP1, updateDF} from './df1.js';
 const baseSpeed = 360, baseInterval = .24;
@@ -8,11 +8,12 @@ export const weapons = {
   'SW T': {capacity: 10, damage: 9, rate: 100, velocity: 100, speed: baseSpeed, interval: baseInterval, burst: 1, reload: 1.4},
   SRA: {capacity: 30, damage: 6, rate: 120, velocity: 80, speed: baseSpeed * .8, interval: baseInterval / 1.2, burst: 1, reload: 1.65},
   D1: {capacity: 40, damage: 5, rate: 100, velocity: 60, speed: baseSpeed * .6, interval: baseInterval, burst: 2, reload: 1.85},
+  MS10: {capacity: 24, damage: 9, rate: 130, velocity: 180, speed: baseSpeed * 1.8, interval: baseInterval / 1.3, burst: 1, reload: 1.55, auto: true},
   [DF]: {capacity: 50, damage: 2.8, rate: 150, velocity: 65, speed: baseSpeed * .65, interval: baseInterval / 1.5, burst: 3, reload: 1.85, playerOnly: true}
 };
 export const modes = {'3v3': [3, 3], '1v2': [1, 2], '1v1': [1, 1]};
 const names = [['YOU', 'NAGI', 'KAI'], ['RIN', 'SORA', 'AO']];
-export const npcWeapons = ['SW T', 'SRA', 'D1'];
+export const npcWeapons = ['SW T', 'SRA', 'D1', 'MS10'];
 const sphereHit = (a, d, c, r) => {
   const v = sub(a, c), A = dot(d, d), B = dot(v, d), C = dot(v, v) - r * r;
   if (C <= 0)return 0;
@@ -56,15 +57,17 @@ export class Match {
     this.actors = [];
     this.shots = [];
     this.effects = [];
+    this.casings = [];
+    this.tankers = tankers.map(t => ({...t, cooldown: 0, maxCooldown: 25, pulse: 0, lastTeam: -1}));
     this.rng = random(1939);
     this.seq = 0;
     const counts = modes[config.mode] || modes['3v3'];
     this.goals = counts.map(n => config.limit === 'unlimited' ? Infinity : n * clamp(Math.round(config.multiplier) || 5, 1, 99));
     this.receiptId = globalThis.crypto?.randomUUID?.() || Date.now().toString(36) + Math.random().toString(36).slice(2);
-    this.nv = new NV11(this);
+    this.nv = new NV12(this);
     for (let team = 0; team < 2; team++)for (let slot = 0; slot < counts[team]; slot++) {
       const human = team === 0 && slot === 0;
-      const gun = human ? config.loadout : npcWeapons[(slot + team + 1) % 3];
+      const gun = human ? config.loadout : npcWeapons[(slot + team + 1) % npcWeapons.length];
       const a = {id: this.actors.length, team, slot, human, name: names[team][slot], gun, kills: 0, deaths: 0, earned: 0};
       this.actors.push(a);
       this.spawn(a, true)
@@ -108,6 +111,8 @@ export class Match {
       mag: this.weapon(a).capacity,
       stock: 100,
       ammoClock: 0,
+      ammoRate: 1,
+      tankerUses: a.tankerUses || 0,
       alive: true,
       respawn: 0,
       cooldown: 0,
@@ -119,6 +124,13 @@ export class Match {
       vy: 0,
       stride: 0,
       flash: 0,
+      recoil: 0,
+      recoilSide: 0,
+      hitRecoil: 0,
+      hitFlash: 0,
+      shieldFlash: 0,
+      hitDir: null,
+      shotCount: a.shotCount || 0,
       onGround: true,
       crouch: 0,
       lean: 0,
@@ -158,20 +170,77 @@ export class Match {
       a.mag--
     }
     a.cooldown = w.interval;
-    a.flash = .09;
+    a.flash = a.gun === 'MS10' ? .115 : .095;
+    a.recoil = 1;
+    a.recoilSide = (this.rng() - .5) * 2;
+    a.shotCount = (a.shotCount || 0) + 1;
     const dir = a.df ? directionDF(a) : forward(a.yaw, a.pitch), p = eyeOf(a);
-    this.shots.push({id: ++this.seq, owner: a, team: a.team, dir, p, old: p, damage: w.damage, speed: w.speed, life: 1.25});
+    const right = unit(cross(dir, [0, 1, 0]));
+    const up = cross(right, dir);
+    const barrelLen = a.gun === 'MS10' ? .92 : a.gun === 'D1' ? .78 : a.gun === 'SW T' ? .60 : .74;
+    const muzzle = add(p, add(scale(dir, barrelLen), add(scale(right, a.human ? .14 : .11), scale(up, a.human ? -.12 : -.18))));
+    this.shots.push({
+      id: ++this.seq,
+      owner: a,
+      team: a.team,
+      gun: a.gun,
+      source,
+      dir,
+      p,
+      old: p,
+      origin: [...muzzle],
+      damage: w.damage,
+      speed: w.speed,
+      life: 1.35,
+      age: 0,
+      whizzed: false
+    });
+    // Spawn muzzle flash & drifting smoke puff in world space.
+    this.effects.push({
+      kind: 'muzzle',
+      p: muzzle,
+      dir: [...dir],
+      gun: a.gun,
+      team: a.team,
+      source,
+      actor: a.id,
+      human: a.human,
+      life: a.gun === 'MS10' ? .15 : .12,
+      max: a.gun === 'MS10' ? .15 : .12,
+      seed: this.seq
+    });
+    // Eject spinning brass / thermal cartridge casing from right ejection port.
+    const port = add(p, add(scale(dir, .36), add(scale(right, a.human ? .22 : .18), scale(up, a.human ? -.13 : -.18))));
+    const spreadR = 1.6 + this.rng() * 1.3, spreadU = 1.1 + this.rng() * .95, spreadF = -.35 + (this.rng() - .5) * .6;
+    this.casings.push({
+      p: port,
+      v: add(add(scale(right, spreadR), scale(up, spreadU)), scale(dir, spreadF)),
+      rot: this.rng() * 6.28,
+      spin: (this.rng() > .5 ? 1 : -1) * (14 + this.rng() * 16),
+      gun: a.gun,
+      life: .95,
+      bounced: false
+    });
+    if (this.casings.length > 42)this.casings.shift();
     this.nv.sound(a);
-    this.event('fire', {actor: a, source})
+    this.event('fire', {actor: a, source, gun: a.gun, p: muzzle, dir})
   }
-  damage(v, owner, power) {
-    if (this.ended || !v.alive || owner.team === v.team)return;
+  damage(v, owner, power, dir = null) {
+    if (this.ended || !v.alive || owner.team === v.team)return null;
+    const hadShield = v.shield > 0;
     const absorbed = Math.min(v.shield, power);
     v.shield = Math.round((v.shield - absorbed) * 10) / 10;
     v.hp = Math.max(0, Math.round((v.hp - (power - absorbed)) * 10) / 10);
+    const shieldBreak = hadShield && v.shield <= 0;
+    const kill = v.hp <= 0;
+    v.hitRecoil = Math.min(1, (v.hitRecoil || 0) + .58 + power * .038);
+    v.hitFlash = 1;
+    if (absorbed > 0)v.shieldFlash = 1;
+    if (dir)v.hitDir = [...dir];
     this.nv.learn(v, false);
-    this.event('hit', {victim: v, actor: owner, shield: absorbed > 0});
-    if (v.hp > 0)return;
+    this.nv.onHit?.(v, owner, dir, power);
+    this.event('hit', {victim: v, actor: owner, shield: absorbed > 0, shieldBreak, kill, damage: power, dir});
+    if (!kill)return {shield: absorbed > 0, shieldBreak, kill: false};
     v.alive = false;
     v.respawn = 3;
     v.reload = 0;
@@ -186,6 +255,38 @@ export class Match {
       this.winner = owner.team;
       this.ended = true;
       this.event('end', {winner: owner.team})
+    }
+    return {shield: absorbed > 0, shieldBreak, kill: true}
+  }
+  updateTankers(dt) {
+    for (const tk of this.tankers) {
+      if (tk.cooldown > 0)tk.cooldown = Math.max(0, tk.cooldown - dt);
+      if (tk.pulse > 0)tk.pulse = Math.max(0, tk.pulse - dt * 1.4);
+      if (tk.cooldown > 0)continue;
+      for (const a of this.actors) {
+        if (!a.alive)continue;
+        const d = Math.hypot(a.x - tk.x, a.z - tk.z);
+        if (d <= tk.radius) {
+          a.stock += 100;
+          a.ammoRate = 1.5;
+          a.tankerUses = (a.tankerUses || 0) + 1;
+          tk.cooldown = tk.maxCooldown;
+          tk.pulse = 1;
+          tk.lastTeam = a.team;
+          this.effects.push({
+            kind: 'tanker',
+            p: [tk.x, 1.55, tk.z],
+            dir: [0, 1, 0],
+            actor: a.id,
+            team: a.team,
+            life: .95,
+            max: .95,
+            seed: ++this.seq
+          });
+          this.event('tanker', {actor: a, tanker: tk});
+          break
+        }
+      }
     }
   }
   updatePlayer(dt, input) {
@@ -225,6 +326,10 @@ export class Match {
       return
     }
     a.flash = Math.max(0, a.flash - dt);
+    a.recoil = Math.max(0, (a.recoil || 0) - dt * 6.5);
+    a.hitRecoil = Math.max(0, (a.hitRecoil || 0) - dt * 4.2);
+    a.hitFlash = Math.max(0, (a.hitFlash || 0) - dt * 5.2);
+    a.shieldFlash = Math.max(0, (a.shieldFlash || 0) - dt * 4.2);
     a.cooldown = Math.max(0, a.cooldown - dt);
     if (a.shield < 10) {
       a.shieldClock += dt;
@@ -234,7 +339,7 @@ export class Match {
       }
     } else a.shieldClock = 0;
     if (a.stock < 100) {
-      a.ammoClock += dt;
+      a.ammoClock += dt * (a.ammoRate || 1);
       if (a.ammoClock + 1e-8 >= 3) {
         a.stock = Math.min(100, a.stock + 1);
         a.ammoClock = Math.max(0, a.ammoClock - 3)
@@ -271,13 +376,76 @@ export class Match {
         target = v
       }
     }
+    // Detect close bullet flyby near the human player for diverse spatial whiz/crack audio.
+    const pl = this.player;
+    if (pl && pl.alive && s.owner !== pl && !s.whizzed && target !== pl) {
+      const eye = eyeOf(pl);
+      const ab = sub(b, a), ab2 = dot(ab, ab);
+      if (ab2 > 1e-8) {
+        const u = clamp(dot(sub(eye, a), ab) / ab2, 0, 1);
+        const closest = add(a, scale(ab, u));
+        const d = Math.hypot(closest[0] - eye[0], closest[1] - eye[1], closest[2] - eye[2]);
+        if (d < 6.0 && (at > 1 || u <= at)) {
+          s.whizzed = true;
+          const rx = Math.cos(pl.yaw), rz = Math.sin(pl.yaw);
+          const p0 = sub(a, eye), p1 = sub(b, eye);
+          const pan = clamp((p0[0] * rx + p0[2] * rz) / (Math.hypot(p0[0], p0[2]) + .7), -1, 1);
+          const panEnd = clamp((p1[0] * rx + p1[2] * rz) / (Math.hypot(p1[0], p1[2]) + .7), -1, 1);
+          this.event('whiz', {
+            shot: s,
+            actor: s.owner,
+            dist: d,
+            speed: s.speed,
+            gun: s.gun,
+            source: s.source,
+            pan,
+            panEnd,
+            point: closest,
+            enemy: s.team !== pl.team
+          })
+        }
+      }
+    }
     s.old = a;
     s.p = b;
     s.life -= dt;
+    s.age = (s.age || 0) + dt;
     if (at <= 1) {
       const p = add(a, scale(sub(b, a), at));
-      if (target)this.damage(target, s.owner, s.damage);
-      this.effects.push({p, life: .14, max: .14, actor: s.owner.id, target: !!target});
+      if (target) {
+        const res = this.damage(target, s.owner, s.damage, s.dir);
+        const kind = res?.kill ? 'kill' : res?.shieldBreak ? 'break' : res?.shield ? 'shield' : 'hit';
+        const dur = kind === 'kill' ? .62 : kind === 'break' ? .48 : kind === 'shield' ? .34 : .28;
+        this.effects.push({
+          kind,
+          p,
+          dir: [...s.dir],
+          gun: s.gun,
+          team: s.team,
+          life: dur,
+          max: dur,
+          actor: s.owner.id,
+          target: true,
+          seed: ++this.seq
+        })
+      } else {
+        const metal = p[1] >= .08;
+        const dur = s.gun === 'MS10' ? .34 : .26;
+        this.effects.push({
+          kind: 'wall',
+          p,
+          dir: [...s.dir],
+          gun: s.gun,
+          team: s.team,
+          metal,
+          life: dur,
+          max: dur,
+          actor: s.owner.id,
+          target: false,
+          seed: ++this.seq
+        });
+        this.event('impact', {point: p, dir: s.dir, gun: s.gun, metal, actor: s.owner})
+      }
       return false
     }
     return s.life > 0 && Math.abs(b[0]) < 120 && Math.abs(b[2]) < 200
@@ -290,12 +458,34 @@ export class Match {
     for (const a of this.actors)this.systems(a, dt);
     this.updatePlayer(dt, input);
     this.nv.tick(dt);
+    this.updateTankers(dt);
     let write = 0;
     for (const shot of this.shots) {
       if (!this.ended && this.projectile(shot, dt))this.shots[write++] = shot
     }
     this.shots.length = write;
+    let cw = 0;
+    for (const c of this.casings) {
+      c.life -= dt;
+      if (c.life <= 0)continue;
+      c.v[1] -= 13.5 * dt;
+      c.p[0] += c.v[0] * dt;
+      c.p[1] += c.v[1] * dt;
+      c.p[2] += c.v[2] * dt;
+      c.rot += c.spin * dt;
+      if (c.p[1] <= .03) {
+        c.p[1] = .03;
+        c.v[1] = Math.abs(c.v[1]) * .38;
+        c.v[0] *= .68;
+        c.v[2] *= .68;
+        c.spin *= .65;
+        c.bounced = true
+      }
+      this.casings[cw++] = c
+    }
+    this.casings.length = cw;
     for (const e of this.effects)e.life -= dt;
-    this.effects = this.effects.filter(e => e.life > 0)
+    this.effects = this.effects.filter(e => e.life > 0);
+    if (this.effects.length > 130)this.effects = this.effects.slice(-130)
   }
 }

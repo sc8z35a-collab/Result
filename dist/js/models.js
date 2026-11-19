@@ -1,9 +1,67 @@
-import {Mesh, scale, add, sub, unit} from './geometry.js';
+import {Mesh, scale, add, sub, unit, cross, clamp} from './geometry.js';
 const rubber = '#485050', cloth = '#64716b', metal = '#9babad', ink = '#536067', ivory = '#c8c7ad';
+
+// Helper: draw a crisp polygonal glowing shockwave / energy ring around center oriented along axis.
+function ring(m, center, axis, radius, thick, segs, tint, kind = 3) {
+  const n = unit(axis);
+  const u = unit(cross(n, Math.abs(n[1]) > .9 ? [1, 0, 0] : [0, 1, 0]));
+  const v = cross(n, u);
+  let prev = add(center, scale(u, radius));
+  for (let i = 1; i <= segs; i++) {
+    const a = i / segs * Math.PI * 2;
+    const cur = add(center, add(scale(u, Math.cos(a) * radius), scale(v, Math.sin(a) * radius)));
+    m.beam(prev, cur, thick, thick, 'white', tint, kind);
+    prev = cur;
+  }
+}
+
+// MS10: Hyper-velocity electromagnetic rail carbine (fastest projectile velocity: 180, auto fire rate: 130).
+function ms10Device(m) {
+  const frame = '#39464d', alloy = '#b5c4c8', accent = '#58c9e8', gold = '#edc060', dark = '#242f34';
+  // Angular main receiver & upper rail spine
+  m.box(0, .016, -.085, .092, .112, .38, 'blackMetal', frame, .34, 1);
+  m.box(0, .082, -.115, .104, .038, .44, 'steel', alloy, .25, 1);
+  // Twin upper & lower magnetic accelerator rails extending forward
+  m.box(0, .054, -.50, .052, .026, .46, 'steel', alloy, .22, 1);
+  m.box(0, -.008, -.48, .056, .028, .42, 'blackMetal', frame, .24, 1);
+  // Central recessed precision rail barrel & glowing accelerator channel
+  m.tube([0, .023, -.26], [0, .023, -.79], .024, .021, 'blackMetal', dark, 10, 1);
+  m.box(0, .023, -.49, .018, .022, .42, 'white', '#7deaff', 0, 3);
+  // Finned hyper-velocity muzzle brake
+  m.box(0, .023, -.76, .068, .056, .11, 'steel', '#96a8ad', .2, 1);
+  m.tube([0, .023, -.815], [0, .023, -.845], .028, .024, 'blackMetal', dark, 10, 1);
+  // Glowing capacitor coils & gold voltage accents along both flanks
+  for (const sx of [-1, 1]) {
+    m.box(sx * .050, .024, -.46, .012, .058, .36, 'steel', '#697c84', 0, 1);
+    for (let i = 0; i < 6; i++) {
+      m.box(sx * .058, .024, -.31 - i * .062, .009, .020, .028, 'white', i % 2 ? accent : '#a8f6ff', 0, 3);
+    }
+    m.box(sx * .052, .064, -.10, .009, .014, .22, 'white', gold, 0, 3);
+  }
+  // Angled 24-round high-pressure magazine & ergonomic grip
+  m.beam([0, -.035, -.14], [0, -.155, -.20], .064, .088, 'blackMetal', '#3a464a', 1);
+  m.box(0, -.115, -.18, .068, .022, .092, 'white', gold, 0, 1);
+  m.beam([0, -.038, .022], [0, -.152, .072], .062, .082, 'rubber', rubber, 0);
+  // Lightweight skeleton stock
+  m.beam([0, .048, .095], [0, .022, .255], .038, .028, 'steel', alloy, 1);
+  m.beam([0, -.016, .095], [0, -.072, .245], .032, .026, 'blackMetal', frame, 1);
+  m.box(0, -.026, .258, .064, .135, .046, 'rubber', dark, 0, 0);
+  // Open-frame reflex holo-sight with glowing cyan aiming reticle pip
+  m.box(0, .112, -.09, .066, .024, .115, 'blackMetal', dark, 0, 1);
+  for (const sx of [-1, 1]) m.box(sx * .030, .148, -.09, .010, .054, .072, 'steel', alloy, 0, 1);
+  m.box(0, .174, -.09, .068, .010, .072, 'steel', alloy, 0, 1);
+  m.box(0, .146, -.09, .008, .008, .008, 'white', '#9cfaff', 0, 3);
+  m.box(0, .118, -.68, .016, .034, .032, 'white', gold, 0, 3);
+}
+
 function device(m, gun) {
   if (gun === 'DF1 OUT') {
     dfDevice(m);
-    return
+    return;
+  }
+  if (gun === 'MS10') {
+    ms10Device(m);
+    return;
   }
   const long = gun === 'SW T' ? .52 : gun === 'SRA' ? .69 : .72;
   const w = gun === 'D1' ? .123 : .096, tag = gun === 'SW T' ? '#deaa58' : gun === 'SRA' ? '#67a69e' : '#c87b60';
@@ -18,15 +76,16 @@ function device(m, gun) {
   m.box(0, .127, -.05, w * .61, .055, .065, 'blackMetal', ink);
   m.box(0, .127, -long + .14, .023, .055, .036, 'white', tag);
   for (const s of [-1, 1]) {
-    for (let i = 0; i < 4; i++)m.box(s * (w / 2 + .005), .034, -.28 - i * .038, .009, .024, .017, 'blackMetal', ink);
-    m.box(s * (w / 2 + .009), .047, -.073, .008, .018, .062, 'white', '#74c8b2', 0, 3)
+    for (let i = 0; i < 4; i++) m.box(s * (w / 2 + .005), .034, -.28 - i * .038, .009, .024, .017, 'blackMetal', ink);
+    m.box(s * (w / 2 + .009), .047, -.073, .008, .018, .062, 'white', '#74c8b2', 0, 3);
   }
   if (gun !== 'SW T') {
     m.beam([0, .012, .082], [0, -.035, .225], w * .65, .066, 'white', ink);
-    m.box(0, -.033, .2, w * .84, .145, .065, 'rubber', rubber)
+    m.box(0, -.033, .2, w * .84, .145, .065, 'rubber', rubber);
   }
-  if (gun === 'D1')m.tube([.040, .02, -long + .18], [.040, .02, -long - .003], .025, .025, 'steel', metal, 8)
+  if (gun === 'D1') m.tube([.040, .02, -long + .18], [.040, .02, -long - .003], .025, .025, 'steel', metal, 8);
 }
+
 // A fictional ceramic-bodied launcher. Its two illuminated channels distinguish
 // the standard magazine and the independently replenished P1 cell.
 function dfDevice(m) {
@@ -36,7 +95,7 @@ function dfDevice(m) {
     m.beam([sx * .06, .01, .14], [sx * .054, .046, -.32], .039, .058, 'greenHull', trim);
     m.box(sx * .069, -.036, -.118, .031, .060, .30, 'blackMetal', '#9da79c');
     m.tube([sx * .052, -.026, -.31], [sx * .048, -.018, -.62], .033, .030, 'steel', trim, 10);
-    for (let i = 0; i < 5; i++)m.box(sx * .087, -.021, -.025 - i * .036, .012, .014, .020, 'white', '#89d9ca', 0, 3)
+    for (let i = 0; i < 5; i++) m.box(sx * .087, -.021, -.025 - i * .036, .012, .014, .020, 'white', '#89d9ca', 0, 3);
   }
   m.tube([0, .022, -.42], [0, .032, -.66], .057, .042, 'blackMetal', '#9aa6a0', 10);
   m.tube([0, .032, -.615], [0, .032, -.674], .056, .047, 'steel', copper, 10);
@@ -51,6 +110,43 @@ function dfDevice(m) {
   m.tube([0, .142, -.037], [0, .142, -.044], .044, .044, 'white', '#4a8180', 12);
   m.box(-.046, .14, -.116, .034, .041, .055, 'white', copper);
 }
+
+export function muzzleOffset(gun) {
+  if (gun === 'MS10') return [0, .024, -.86];
+  if (gun === 'DF1 OUT') return [0, .032, -.70];
+  if (gun === 'SW T') return [0, .024, -.58];
+  if (gun === 'SRA') return [0, .024, -.75];
+  return [0, .024, -.78];
+}
+
+// Local-space 3D star-burst muzzle flash attached right to the first-person weapon barrel tip.
+export function muzzleFlashMesh(gun, intensity, seed, extra = false) {
+  const m = new Mesh();
+  if (intensity <= .01) return m;
+  const [mx, my, mz] = muzzleOffset(gun);
+  const s = intensity * (gun === 'MS10' ? 1.25 : gun === 'D1' ? 1.05 : .95);
+  const coreCol = gun === 'MS10' ? '#e8ffff' : gun === 'DF1 OUT' ? '#dcfff7' : '#fff8dc';
+  const outerCol = gun === 'MS10' ? '#4de2ff' : gun === 'DF1 OUT' ? '#6de8d5' : gun === 'SRA' ? '#ffcf76' : '#ffaa4e';
+  const blades = extra ? 6 : 4;
+  const rot = (seed * 1.618) % 6.28;
+  // Bright central flash core + forward gas spear
+  m.ellipsoid(mx, my, mz - .05 * s, .052 * s, .052 * s, .095 * s, 'white', coreCol, 3, 8, 4);
+  m.tube([mx, my, mz], [mx, my, mz - .34 * s], .048 * s, .006, 'white', outerCol, 8, 3);
+  // Radial star-burst fins
+  for (let i = 0; i < blades; i++) {
+    const a = rot + i * Math.PI / blades;
+    const len = (.14 + ((i * 37 + seed) % 7) * .018) * s;
+    const cx = Math.cos(a) * len, cy = Math.sin(a) * len;
+    m.beam([mx - cx, my - cy, mz - .03 * s], [mx + cx, my + cy, mz - .03 * s], .024 * s, .016 * s, 'white', outerCol, 3);
+    m.beam([mx - cx * .55, my - cy * .55, mz - .025 * s], [mx + cx * .55, my + cy * .55, mz - .025 * s], .014 * s, .012 * s, 'white', coreCol, 3);
+  }
+  // Muzzle pressure shock ring (extra crisp for MS10 rail discharge)
+  if (gun === 'MS10' || extra) {
+    ring(m, [mx, my, mz - .12 * s], [0, 0, -1], .095 * s + (1 - intensity) * .09, .013 * s, 10, gun === 'MS10' ? '#7cf2ff' : '#ffe29c', 3);
+  }
+  return m;
+}
+
 export function viewModel(gun) {
   const m = new Mesh();
   device(m, gun);
@@ -59,8 +155,9 @@ export function viewModel(gun) {
   m.tube([.020, -.138, .093], [.026, -.156, .126], .072, .072, 'blackMetal', rubber, 9);
   m.ellipsoid(-.04, -.089, -.205, .066, .048, .088, 'rubber', '#727d76', 0, 10, 5);
   m.tube([-.055, -.11, -.189], [-.166, -.249, .008], .056, .072, 'canvas', '#899585', 8);
-  return m
+  return m;
 }
+
 export function character(team, gun) {
   const m = new Mesh(), accent = team ? '#df8054' : '#55b9b4', light = team ? '#f2a16e' : '#88ded2';
   for (const side of [-1, 1]) {
@@ -69,7 +166,7 @@ export function character(team, gun) {
     m.tube([x, .19, .018], [x, .56, .014], .086, .102, 'canvas', cloth, 9);
     m.ellipsoid(x, .52, -.04, .105, .09, .085, 'steel', '#848e83', 0, 8, 4);
     m.tube([x, .57, .017], [side * .13, .90, .014], .102, .13, 'canvas', '#869085', 9);
-    m.box(x, .41, -.067, .115, .051, .04, 'white', accent)
+    m.box(x, .41, -.067, .115, .051, .04, 'white', accent);
   }
   m.ellipsoid(0, .91, .015, .251, .15, .172, 'blackMetal', '#89968a', 0, 12, 5);
   m.ellipsoid(0, 1.19, .008, .287, .342, .173, 'canvas', '#a2ac9c', 0, 14, 7);
@@ -86,43 +183,266 @@ export function character(team, gun) {
     m.ellipsoid(...a, .118, .104, .114, 'steel', accent, 0, 10, 5);
     m.tube(a, e, .079, .085, 'canvas', cloth, 9);
     m.tube(e, hand, .077, .068, 'canvas', '#9ca598', 8);
-    m.ellipsoid(...hand, .076, .065, .079, 'rubber', rubber, 0, 8, 4)
+    m.ellipsoid(...hand, .076, .065, .079, 'rubber', rubber, 0, 8, 4);
   }
   // The rounded left module is the shield charger; the vented right cassette is the ammo generator.
   m.box(0, 1.23, .177, .407, .404, .086, 'blackMetal', ink);
   m.tube([-.102, 1.032, .241], [-.102, 1.438, .241], .085, .085, 'steel', metal, 10);
-  for (const y of [1.09, 1.21, 1.34])m.tube([-.102, y, .241], [-.102, y + .04, .241], .089, .089, 'white', '#77d4c6', 10, 3);
+  for (const y of [1.09, 1.21, 1.34]) m.tube([-.102, y, .241], [-.102, y + .04, .241], .089, .089, 'white', '#77d4c6', 10, 3);
   m.box(.098, 1.224, .242, .163, .404, .14, 'blackMetal', '#969d8d');
-  for (let j = 0; j < 4; j++)m.box(.098, 1.11 + j * .068, .317, .131, .022, .016, 'white', '#e1b163', 0, 1);
+  for (let j = 0; j < 4; j++) m.box(.098, 1.11 + j * .068, .317, .131, .022, .016, 'white', '#e1b163', 0, 1);
   m.transform = {origin: [.071, 1.255, -.26], right: [.85, 0, 0], up: [0, .85, 0], back: [0, 0, .85]};
   device(m, gun);
   m.transform = null;
   m.tube([.069, 1.408, -.285], [.069, 1.408, -.337], .029, .027, 'blackMetal', metal, 8);
-  return m
+  return m;
 }
-export function movingDetails(match, time) {
+
+function shotPalette(s) {
+  if (s.gun === 'MS10') return {core: '#f4ffff', outer: s.team ? '#ff8e5a' : '#4ce6ff', ring: s.team ? '#ffd285' : '#96f6ff', spark: '#ffe07d'};
+  if (s.source === 'p1') return {core: '#f6f0ff', outer: '#c58cff', ring: '#7ff4ff', spark: '#ffd0ff'};
+  if (s.gun === 'DF1 OUT') return {core: '#ecfffc', outer: '#5eead4', ring: '#f0b878', spark: '#99f6e4'};
+  if (s.gun === 'D1') return {core: '#fff7e8', outer: s.team ? '#ff7c4d' : '#ffad5c', ring: '#ffe082', spark: '#ffd280'};
+  if (s.gun === 'SRA') return {core: '#f4fff8', outer: s.team ? '#ff9962' : '#58e2be', ring: '#a8ffea', spark: '#d0fff0'};
+  return {core: '#fffdf0', outer: s.team ? '#ffa25b' : '#ffe078', ring: '#fff2b0', spark: '#ffd36b'};
+}
+
+export function movingDetails(match, time, extra = false) {
   const m = new Mesh();
-  for (let i = 0; i < 7; i++) {
+  const gullCount = extra ? 11 : 7;
+  for (let i = 0; i < gullCount; i++) {
     const a = time * (.041 + i * .0007) + i * .61,
       x = -54 + Math.sin(a) * (24 + i * 2.4),
       z = -39 + Math.cos(a) * 62 + i * 8,
       y = 22 + i * .67 + Math.sin(a * 3.2),
       b = Math.sin(time * 3 + i) * .22;
     m.tri([x - .62, y + b, z + .16], [x, y, z], [x - .30, y + .1, z - .07], 'white', '#d4d4c8', 5, [0, 1, 0]);
-    m.tri([x + .62, y + b, z + .14], [x + .31, y + .08, z - .08], [x, y, z], 'white', '#d4d4c8', 5, [0, 1, 0])
+    m.tri([x + .62, y + b, z + .14], [x + .31, y + .08, z - .08], [x, y, z], 'white', '#d4d4c8', 5, [0, 1, 0]);
   }
-  if (match) {
-    for (const s of match.shots) {
-      const tail = add(s.p, scale(s.dir, -Math.min(2.65, s.speed * .007)));
-      m.beam(tail, s.p, .026, .026, 'white', s.team ? '#ffb678' : '#acf7df', 3)
-    }
-    for (const e of match.effects) {
-      const r = .034 + (.14 - e.life) * .55;
-      for (let k = 0; k < 3; k++) {
-        const dir = [Math.sin(k * 5.41 + e.p[0]) * .85, .65 + k * .27, Math.cos(k * 4.82 + e.p[2]) * .7];
-        m.beam(add(e.p, scale(dir, r * .9)), add(e.p, scale(dir, r * 2.4)), .018, .018, 'white', e.target ? '#b2ffe7' : '#ffd99a', 3)
+  if (!match) return m;
+
+  // Supply tanker live status rings, beacon holograms, and recharge progress bars.
+  if (match.tankers) {
+    for (const tk of match.tankers) {
+      const ready = tk.cooldown <= 0;
+      const fill = ready ? 1 : clamp(1 - tk.cooldown / tk.maxCooldown, 0, 1);
+      const bob = Math.sin(time * 2.7 + tk.id * 2.1) * .12;
+      const ringCol = ready ? (Math.sin(time * 4 + tk.id) > 0 ? '#79f7e4' : '#ffe082') : '#d99a56';
+      // Ground supply zone ring around the tanker
+      ring(m, [tk.x, .09, tk.z], [0, 1, 0], tk.radius * .94, ready ? .065 : .035, extra ? 24 : 16, ringCol, 3);
+      if (ready && extra) {
+        const waveR = tk.radius * (.55 + ((time * .55 + tk.id * .33) % 1) * .45);
+        ring(m, [tk.x, .14, tk.z], [0, 1, 0], waveR, .032, 20, '#b5fff4', 3);
+      }
+      // Elevated rotating holographic ammo-crystal beacon above the tanker
+      const bx = tk.x, by = 3.55 + bob, bz = tk.z;
+      const rot = time * (ready ? 1.8 : .55) + tk.id;
+      const cr = Math.cos(rot) * .36, sr = Math.sin(rot) * .36;
+      const top = [bx, by + .42, bz], bot = [bx, by - .42, bz];
+      const p0 = [bx + cr, by, bz + sr], p1 = [bx - sr, by, bz + cr], p2 = [bx - cr, by, bz - sr], p3 = [bx + sr, by, bz - cr];
+      const bCol = ready ? '#84ffec' : '#c78a4e';
+      for (const [a, b] of [[p0, p1], [p1, p2], [p2, p3], [p3, p0]]) {
+        m.tri(a, b, top, 'white', bCol, 3);
+        m.tri(b, a, bot, 'white', ready ? '#ffd978' : '#7a593b', 3);
+      }
+      ring(m, [bx, by, bz], [Math.sin(rot) * .35, 1, Math.cos(rot) * .35], .56, .024, 12, ready ? '#ffe38c' : '#8d6c49', 3);
+      // Horizontal charge bar along top of tanker
+      const barLen = 2.6 * fill;
+      if (barLen > .08) {
+        m.box(tk.x, 2.94, tk.z - tk.facing * .68, .18, .09, barLen, 'white', ready ? '#88ffee' : '#f0b865', 0, 3);
       }
     }
   }
-  return m
+
+  // Deluxe multi-layer projectiles: spear core, glowing plasma shroud, tapered tail, Mach rings, and trailing sparks.
+  for (const s of match.shots) {
+    const pal = shotPalette(s);
+    const isMS10 = s.gun === 'MS10';
+    const maxTail = isMS10 ? (extra ? 9.8 : 7.6) : (extra ? 4.4 : 3.4);
+    const tailLen = Math.min(maxTail, s.speed * (isMS10 ? .015 : .0095));
+    const head = s.p;
+    const tip = add(head, scale(s.dir, isMS10 ? .34 : .22));
+    const mid = add(head, scale(s.dir, -tailLen * .38));
+    const tail = add(head, scale(s.dir, -tailLen));
+    const right = unit(cross(s.dir, Math.abs(s.dir[1]) > .92 ? [1, 0, 0] : [0, 1, 0]));
+    const up = cross(right, s.dir);
+
+    // 1. Sharp incandescent warhead spear + intense inner core
+    m.tube(add(head, scale(s.dir, -.36)), tip, isMS10 ? .034 : .026, .005, 'white', pal.core, 6, 3);
+    m.beam(mid, head, isMS10 ? .036 : .026, isMS10 ? .036 : .026, 'white', pal.core, 3);
+    // 2. Wide outer plasma/tracer ribbon shroud + fading secondary tail
+    m.beam(mid, add(head, scale(s.dir, .06)), isMS10 ? .082 : .058, isMS10 ? .022 : .018, 'white', pal.outer, 3);
+    m.beam(mid, add(head, scale(s.dir, .06)), isMS10 ? .022 : .018, isMS10 ? .082 : .058, 'white', pal.outer, 3);
+    m.beam(tail, mid, isMS10 ? .042 : .028, isMS10 ? .042 : .028, 'white', pal.outer, 3);
+
+    // 3. Supersonic Mach shock rings along fast projectiles (signature visual for MS10 & SW T)
+    const ringCount = isMS10 ? (extra ? 3 : 2) : (s.speed >= 320 || extra ? 1 : 0);
+    for (let r = 0; r < ringCount; r++) {
+      const distBack = .35 + r * (isMS10 ? 1.55 : 1.1) + ((time * 28 + s.id) % .65);
+      if (distBack > tailLen) continue;
+      const rad = (isMS10 ? .13 : .085) + r * .055;
+      ring(m, add(head, scale(s.dir, -distBack)), s.dir, rad, isMS10 ? .015 : .011, extra ? 10 : 8, pal.ring, 3);
+    }
+
+    // 4. Trailing micro-sparks spinning off the bullet slipstream
+    const spCount = isMS10 ? (extra ? 4 : 2) : (extra ? 2 : 1);
+    for (let k = 0; k < spCount; k++) {
+      const phase = s.id * 1.7 + k * 2.4 + time * 26;
+      const back = .45 + k * (tailLen * .24);
+      const off = add(scale(right, Math.cos(phase) * .11), scale(up, Math.sin(phase) * .11));
+      const pA = add(add(head, scale(s.dir, -back)), off);
+      const pB = add(pA, scale(s.dir, -.32));
+      m.beam(pB, pA, .012, .012, 'white', pal.spark, 3);
+    }
+  }
+
+  // Ejected spinning shell casings.
+  if (match.casings) {
+    for (const c of match.casings) {
+      const ca = Math.cos(c.rot) * .038, sa = Math.sin(c.rot) * .038;
+      const a = [c.p[0] - ca, c.p[1] - sa * .4, c.p[2] - sa];
+      const b = [c.p[0] + ca, c.p[1] + sa * .4, c.p[2] + sa];
+      const col = c.gun === 'MS10' ? '#7cefff' : c.gun === 'DF1 OUT' ? '#b8f2e6' : '#e6c16c';
+      m.beam(a, b, .013, .013, 'white', col, c.gun === 'MS10' ? 3 : 1);
+    }
+  }
+
+  // Multi-layered deluxe hit, shield-ripple, shield-break, kill-burst, wall-spark, muzzle-smoke & tanker effects.
+  for (const e of match.effects) {
+    const progress = clamp(1 - e.life / (e.max || .2), 0, 1);
+    const inv = 1 - progress;
+    const seed = e.seed || 1;
+    const axis = e.dir || [0, 1, 0];
+
+    if (e.kind === 'muzzle') {
+      // Third-person NPC muzzle flash + lingering smoke wisp for all actors
+      if (!e.human && progress < .48) {
+        const s = (1 - progress / .48) * (e.gun === 'MS10' ? 1.15 : .9);
+        const fCol = e.gun === 'MS10' ? '#63ecff' : '#ffc266';
+        m.ellipsoid(e.p[0], e.p[1], e.p[2], .08 * s, .08 * s, .08 * s, 'white', '#fffbe6', 3, 6, 3);
+        m.tube(e.p, add(e.p, scale(axis, .42 * s)), .06 * s, .01, 'white', fCol, 6, 3);
+        ring(m, add(e.p, scale(axis, .14 * s)), axis, .11 * s, .014 * s, 8, fCol, 3);
+      }
+      // Drifting hot propellant smoke puff rising from muzzle
+      const smokePos = add(e.p, add(scale(axis, .18 + progress * .48), [Math.sin(seed) * progress * .16, progress * .34, Math.cos(seed) * progress * .16]));
+      const sr = (.035 + progress * .11) * inv;
+      if (sr > .008) {
+        m.ellipsoid(smokePos[0], smokePos[1], smokePos[2], sr, sr, sr, 'white', e.gun === 'MS10' ? '#a6d8e4' : '#c6ccc5', 5, 6, 3);
+      }
+      continue;
+    }
+
+    if (e.kind === 'tanker') {
+      // Dramatic rising dual energy rings & ammo-refinery light pillars
+      const r1 = 1.4 + progress * 4.4;
+      const r2 = .9 + progress * 3.0;
+      ring(m, [e.p[0], .25 + progress * 2.9, e.p[2]], [0, 1, 0], r1, .085 * inv, 20, '#78ffec', 3);
+      ring(m, [e.p[0], .55 + progress * 2.1, e.p[2]], [0, 1, 0], r2, .065 * inv, 16, '#ffe07d', 3);
+      const nSparks = extra ? 14 : 8;
+      for (let k = 0; k < nSparks; k++) {
+        const ang = k / nSparks * Math.PI * 2 + progress * 2.2;
+        const rad = 1.6 + progress * 2.4;
+        const px = e.p[0] + Math.cos(ang) * rad, pz = e.p[2] + Math.sin(ang) * rad;
+        const py = .4 + progress * (2.6 + (k % 3) * .8);
+        m.beam([px, py, pz], [px, py + .65 * inv, pz], .032 * inv, .032 * inv, 'white', k % 2 ? '#8effef' : '#ffe48f', 3);
+      }
+      continue;
+    }
+
+    if (e.kind === 'kill') {
+      // Grand kill burst: incandescent star + dual shockwaves + rising ember shower
+      if (progress < .38) {
+        const cs = (.34 + progress * .75) * (1 - progress / .38);
+        m.ellipsoid(e.p[0], e.p[1], e.p[2], cs, cs, cs, 'white', '#fffef0', 3, 8, 4);
+      }
+      ring(m, e.p, axis, .22 + progress * 1.95, .072 * inv, 16, '#ffe27a', 3);
+      ring(m, e.p, [0, 1, 0], .18 + progress * 2.35, .058 * inv, 16, e.team ? '#ff9662' : '#72ffea', 3);
+      if (extra) ring(m, e.p, [axis[2], .4, -axis[0]], .15 + progress * 1.5, .042 * inv, 12, '#ffffff', 3);
+      const count = extra ? 22 : 14;
+      for (let k = 0; k < count; k++) {
+        const a1 = (seed * .7 + k * 2.39996) % 6.28;
+        const elev = -.35 + ((k * 17 + seed) % 10) * .15;
+        const spd = 1.6 + ((k * 13 + seed) % 9) * .28;
+        const d = unit([Math.cos(a1), elev, Math.sin(a1)]);
+        const start = add(e.p, [d[0] * progress * spd, d[1] * progress * spd - progress * progress * .75 + progress * .6, d[2] * progress * spd]);
+        const end = add(start, scale(d, .36 * inv + .05));
+        m.beam(start, end, .030 * inv + .006, .030 * inv + .006, 'white', k % 3 === 0 ? '#ffffff' : k % 2 ? '#ffd569' : '#76ffea', 3);
+      }
+      continue;
+    }
+
+    if (e.kind === 'break' || e.kind === 'shield') {
+      // Energy shield ripple & shatter effect
+      const isBreak = e.kind === 'break';
+      const coreR = (isBreak ? .28 : .18) * inv;
+      if (coreR > .02) m.ellipsoid(e.p[0], e.p[1], e.p[2], coreR, coreR, coreR, 'white', '#dcffff', 3, 8, 4);
+      ring(m, e.p, axis, .15 + progress * (isBreak ? 1.65 : .95), (isBreak ? .062 : .042) * inv, 14, '#6cf6ff', 3);
+      if (isBreak || extra) {
+        ring(m, add(e.p, scale(axis, -.08)), axis, .10 + progress * (isBreak ? 1.15 : .65), .035 * inv, 10, '#ffffff', 3);
+      }
+      const count = isBreak ? (extra ? 18 : 12) : (extra ? 12 : 7);
+      for (let k = 0; k < count; k++) {
+        const a1 = seed + k * 2.39996;
+        const d = unit([Math.cos(a1) * .9, -.2 + ((k * 7) % 10) * .14, Math.sin(a1) * .9]);
+        const dist = (.14 + progress * (isBreak ? 1.85 : 1.05)) * (.75 + (k % 3) * .22);
+        const p0 = add(e.p, scale(d, dist));
+        const p1 = add(p0, scale(d, (isBreak ? .28 : .18) * inv + .04));
+        m.beam(p0, p1, (isBreak ? .032 : .022) * inv + .005, .022 * inv + .005, 'white', k % 2 ? '#7cf7ff' : '#d6ffff', 3);
+      }
+      continue;
+    }
+
+    if (e.kind === 'hit') {
+      // Deluxe body hit spark burst + shockwave ring
+      if (progress < .42) {
+        const cr = .19 * (1 - progress / .42);
+        m.ellipsoid(e.p[0], e.p[1], e.p[2], cr, cr, cr, 'white', '#fff7d6', 3, 6, 3);
+      }
+      ring(m, e.p, axis, .12 + progress * .85, .042 * inv, 12, '#ffd976', 3);
+      const count = extra ? 14 : 8;
+      for (let k = 0; k < count; k++) {
+        const a1 = seed * 1.3 + k * 2.39996;
+        const d = unit([Math.cos(a1) - axis[0] * .6, .2 + ((k * 11) % 8) * .12, Math.sin(a1) - axis[2] * .6]);
+        const r0 = .08 + progress * (1.1 + (k % 4) * .22);
+        const p0 = add(e.p, [d[0] * r0, d[1] * r0 - progress * progress * .45, d[2] * r0]);
+        const p1 = add(p0, scale(d, .22 * inv + .04));
+        m.beam(p0, p1, .024 * inv + .005, .024 * inv + .005, 'white', k % 2 ? '#ffe585' : '#ff9955', 3);
+      }
+      continue;
+    }
+
+    // Wall / container / dock floor impact: bounce sparks, scorching glow, shock ring & dust debris
+    const back = scale(axis, -1);
+    if (progress < .45) {
+      const cr = (e.gun === 'MS10' ? .17 : .12) * (1 - progress / .45);
+      m.ellipsoid(e.p[0], e.p[1], e.p[2], cr, cr, cr, 'white', e.gun === 'MS10' ? '#bff8ff' : '#ffedb5', 3, 6, 3);
+    }
+    if (e.gun === 'MS10' || extra) {
+      ring(m, add(e.p, scale(back, .05)), back, .09 + progress * (e.gun === 'MS10' ? .78 : .48), .028 * inv, 10, e.gun === 'MS10' ? '#70eaff' : '#ffcf7d', 3);
+    }
+    const count = extra ? 12 : 7;
+    for (let k = 0; k < count; k++) {
+      const a1 = seed * 1.7 + k * 2.39996;
+      const d = unit([back[0] * .8 + Math.cos(a1) * .85, .35 + ((k * 9) % 7) * .14, back[2] * .8 + Math.sin(a1) * .85]);
+      const dist = .06 + progress * (.95 + (k % 3) * .28);
+      const p0 = add(e.p, [d[0] * dist, d[1] * dist - progress * progress * .75, d[2] * dist]);
+      const p1 = add(p0, scale(d, .18 * inv + .03));
+      const spCol = e.gun === 'MS10' && k % 2 === 0 ? '#7cf2ff' : e.metal ? '#ffd875' : '#d7cbb4';
+      m.beam(p0, p1, .019 * inv + .004, .019 * inv + .004, 'white', spCol, e.metal || e.gun === 'MS10' ? 3 : 5);
+    }
+  }
+
+  // Extra graphics atmospheric sea-mist motes glistening in the harbor sun.
+  if (extra && match.player) {
+    const px = match.player.x, pz = match.player.z;
+    for (let i = 0; i < 18; i++) {
+      const rx = ((Math.sin(i * 19.3) * 18 + time * (.5 + (i % 3) * .22) + 22) % 44) - 22;
+      const rz = ((Math.cos(i * 11.7) * 24 + time * (.35 + (i % 4) * .15) + 26) % 52) - 26;
+      const x = clamp(px + rx, -24, 24), z = clamp(pz + rz, -96, 96);
+      const y = .7 + (i % 6) * .85 + Math.sin(time * 1.4 + i) * .25;
+      m.box(x, y, z, .028, .028, .028, 'white', '#fff2cf', 0, 3);
+    }
+  }
+
+  return m;
 }
