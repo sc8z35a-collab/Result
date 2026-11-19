@@ -1,0 +1,30 @@
+<!doctype html><html lang="ja"><meta charset="utf-8"><title>EVR1 動作確認</title><output id="out">確認中</output><script type="module">
+import { PilotWallet } from '../dist/js/wallet.js';
+import { PilotEquipment } from '../dist/js/df-hud.js';
+import { Match } from '../dist/js/match.js';
+import { eyeOf, targetPoint } from '../dist/js/posture.js';
+const out=document.getElementById('out');
+const assert=(value,label)=>{if(!value)throw Error(label)};
+const pockets=['buyLobby','buyPause','mobileADS','mobilePattern','mobileBoost','mobileOptic','lobbyCredit','pauseWallet','opticName','creditResult','dfHud','touchDF','optics','lockDot','reticle','focusText','dfMode','p1Text','heatBar','dfKeys','dfSetup','pauseCredits'];
+for(const id of pockets){const el=document.createElement('div');el.id=id;el.hidden=true;document.body.appendChild(el)}
+const surface=document.createElement('canvas');surface.id='thermal';surface.hidden=true;document.body.appendChild(surface);
+try {
+const profile='qa-result-'+crypto.randomUUID(),a=new PilotWallet(()=>{},profile),b=new PilotWallet(()=>{},profile);
+await Promise.all([a.ready,b.ready]);assert(a.db&&b.db,'IndexedDB');
+assert(!await a.change(),'purchase without credit');
+const ok=await Promise.all([a.change('match/1'),b.change('match/1'),a.change('match/2')]);assert(ok.filter(Boolean).length===2,'single receipts');
+const purchases=await Promise.all([a.change(),b.change()]);assert(purchases.filter(Boolean).length===1,'one-time purchase');
+const restored=new PilotWallet(()=>{},profile);await restored.ready;
+assert(restored.state.evr&&restored.state.units===15,'persistent balance');
+const m=new Match({mode:'1v1',limit:'unlimited',loadout:'DF1 OUT'}),p=m.player,t=m.actors[1];
+const equipment=Object.create(PilotEquipment.prototype);Object.assign(equipment,{getMatch:()=>m,notice:()=>{},wallet:restored,buying:false});
+equipment.prepare(p);assert(p.df.scope==='thermal','equip unlocked optic');equipment.action('scope');assert(p.df.scope==='plastic'&&p.df.ads,'switch to plastic');equipment.action('scope');assert(p.df.scope==='thermal','switch back to EVR1');
+const {ThermalOptic}=await import('../dist/js/optic.js');equipment.thermal=new ThermalOptic(surface);
+const src=document.createElement('canvas');src.width=640;src.height=480;const ctx=src.getContext('2d');ctx.fillStyle='#353535';ctx.fillRect(0,0,640,480);
+const heat=(x,z1,z2,time)=>{Object.assign(p,{x,z:z1});Object.assign(t,{x,z:z2});equipment.draw({canvas:src,aspect:4/3},m,{pos:eyeOf(p),target:targetPoint(t),fov:42},time,true);let count=0;const rgba=surface.getContext('2d').getImageData(0,0,256,192).data;for(let i=0;i<rgba.length;i+=4)if(rgba[i]>180)count++;return count};
+assert(heat(2,85,75,1)>1000&&heat(-7.8,13,2,2)===0,'EVR1 depth');
+for(const w of [a,b,restored]){w.channel?.close();w.db.close()}
+indexedDB.deleteDatabase(profile);
+out.textContent='PASS — concurrent IndexedDB rewards, duplicate receipts, purchase and reload, both optic controls, 256×192 thermal silhouette and cover';
+} catch(e){out.textContent='FAIL — '+e.message; console.error(e)}
+</script></html>

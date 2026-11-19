@@ -1,0 +1,7 @@
+{
+  "name": "result-development-tools",
+  "private": true,
+  "devDependencies": {
+    "@napi-rs/canvas": "0.1.100"
+  }
+}
