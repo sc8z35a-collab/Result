@@ -262,6 +262,8 @@ export class Renderer {
     gl.uniform3f(p.uPose, 0, 0, 0);
     gl.uniform3f(p.uHit, 0, 0, 0);
     gl.uniform2f(p.uRecoil, 0, 0);
+    if (p.uAnim) gl.uniform4f(p.uAnim, 0, 0, 0, 0);
+    if (p.uAnim2) gl.uniform4f(p.uAnim2, 0, 0, 0, 0);
     gl.uniform2f(p.uHitFX, 0, 0);
     gl.uniform1f(p.uGunHeat, 0);
     gl.uniform1f(p.uTime, time);
@@ -304,7 +306,7 @@ export class Renderer {
     this.collectLights(match, eye, fwd, right, up, time);
 
     // 1. Shadow Flame 1.0 Depth Pass (Off / 1.0 Flash Dual-Cache / 1.0 Pro Focus-Snapped Dual-Cascade)
-    this.sf.prepare(sfMode, eye, fwd, match, this.terrain, this.actors, m => this.draw(m));
+    this.sf.prepare(sfMode, eye, fwd, match, this.terrain, this.actors, m => this.draw(m), time);
     this.sf.bindTextures(sfMode);
 
     for (const [i, type, tex] of [
@@ -359,10 +361,12 @@ export class Renderer {
           hitZ = clamp(dot(a.hitDir, bVec), -1, 1);
         }
         gl.uniformMatrix4fv(p.uModel, false, matrix(rVec, [0, 1, 0], bVec, [a.x, a.y, a.z]));
-        gl.uniform2f(p.uGait, a.stride * 2.75, clamp(Math.hypot(a.vx, a.vz) / 4, 0, 1));
+        gl.uniform2f(p.uGait, a.stride * 2.85, clamp(Math.hypot(a.vx, a.vz) / 4.2, 0, 1.2));
         gl.uniform3f(p.uPose, a.crouch, a.lean, a.aimPose);
         gl.uniform3f(p.uHit, a.hitRecoil || 0, hitX, hitZ);
         gl.uniform2f(p.uRecoil, a.recoil || 0, a.recoilSide || 0);
+        if (p.uAnim) gl.uniform4f(p.uAnim, a.fwdVel || 0, a.sideVel || 0, a.airBlend || 0, a.landCompress || 0);
+        if (p.uAnim2) gl.uniform4f(p.uAnim2, a.pitch || 0, time + a.id * 1.13, a.sprintAmt || 0, a.reloadFrac || 0);
         gl.uniform2f(p.uHitFX, a.hitFlash || 0, a.shieldFlash || 0);
         this.draw(this.actors[a.team + a.gun]);
       }

@@ -605,9 +605,19 @@ body.touch #dfHud {
   bottom: max(22px, calc(env(safe-area-inset-bottom) + 14px));
   font-size: 17px;
   letter-spacing: .08em;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
   border-color: #f3ca72cc;
   background: radial-gradient(circle at 35% 30%, #e4b55658, #1d2d2fd4);
   box-shadow: 0 8px 24px #07131685, 0 0 18px #edc1662e, inset 0 1px 0 #ffeab255;
+}
+#touchFire.is-active {
+  transform: scale(.94);
+  border-color: #fff0b8;
+  color: #fff8de;
+  background: radial-gradient(circle at 50% 50%, #f5c85c88, #273738e6);
+  box-shadow: 0 0 28px #f5ca6488, 0 0 12px #7bf2e355, inset 0 0 16px #ffe69966;
 }
 #touchCrouch {
   width: 66px;

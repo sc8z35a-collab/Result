@@ -1,5 +1,6 @@
 import {SHADOW_FLAME_WORLD_GLSL} from './shadowflame.js';
 import {KHDR_TONE_GLSL} from './khdr.js';
+import {ARTICULATED_RIG_GLSL} from './rig.js';
 
 export const shared = `
 precision highp float;
@@ -48,83 +49,28 @@ uniform vec2 uGait;
 uniform vec3 uPose;
 uniform vec3 uHit;
 uniform vec2 uRecoil;
+uniform vec4 uAnim;
+uniform vec4 uAnim2;
 out vec3 wPos,wNormal,wColor,lPos;
 out vec2 uv;
 flat out float layer;
 flat out float kind;
+${ARTICULATED_RIG_GLSL}
 void main(){
   vec3 p=aPos,n=aNormal;
   lPos=p;
+  float cleanKind=aKind;
   if(uMode==1){
-    float c=clamp(uPose.x,0.,1.);
-    float oy=lPos.y,oz=lPos.z;
-    float leg=(1.-smoothstep(.45,.91,oy))*sign(p.x),g=sin(uGait.x)*uGait.y*mix(1.,.48,c);
-    p.z+=leg*g*.23;
-    p.y+=abs(leg)*max(0.,g*sign(p.x))*.066;
-    p.z+=smoothstep(.22,.33,abs(p.x))*g*.027;
-    p.y+=abs(cos(uGait.x))*.022*uGait.y*mix(1.,.45,c);
-    float upper=smoothstep(.38,1.42,oy);
-    p.x+=uPose.y*upper;
-    // Anatomical tactical combat crouch: keep head/torso/arms/weapon at 100% true scale while bending knees & folding legs.
-    if(c>.001){
-      float s=p.x>=0.?1.:-1.;
-      float ankleZ=c*(s>0.?.16:-.11);
-      float kneeY=c*(s>0.?-.27:-.15);
-      float kneeZ=c*(s>0.?-.05:-.24);
-      float hipY=-.44*c;
-      float hipZ=.11*c;
-      if(oy<=.19){
-        p.x+=s*.042*c;
-        p.z+=ankleZ;
-      } else if(oy<=.55){
-        float t=(oy-.19)/.36;
-        p.x+=s*.042*c;
-        p.y+=mix(0.,kneeY,t);
-        p.z+=mix(ankleZ,kneeZ,t);
-      } else if(oy<=.91){
-        float t=(oy-.55)/.36;
-        p.x+=s*.042*c*(1.-t);
-        p.y+=mix(kneeY,hipY,t);
-        p.z+=mix(kneeZ,hipZ,t);
-      } else {
-        vec2 rel=vec2(p.y-.91,p.z-.015);
-        float ang=.13*c;
-        float ca=cos(ang),sa=sin(ang);
-        p.y=.91+hipY+rel.x*ca+rel.y*sa;
-        p.z=.015+hipZ-rel.x*sa+rel.y*ca;
-        vec2 nrot=vec2(n.y*ca+n.z*sa,-n.y*sa+n.z*ca);
-        n.y=nrot.x;
-        n.z=nrot.y;
-      }
-    }
-    p.y+=uPose.z*.14*smoothstep(.16,.40,-oz);
-    p.z-=uPose.z*.045*upper;
-    // 3D NPC firing recoil on upper body & weapon arms
-    float armMask=smoothstep(.95,1.45,oy)*smoothstep(-.05,-.32,oz);
-    p.z+=uRecoil.x*.065*armMask;
-    p.y+=uRecoil.x*.032*armMask;
-    // 3D hit stagger reaction: flinch backward & twist along incoming shot direction
-    float h=uHit.x;
-    if(h>.001){
-      float flinch=sin(h*3.14159)*h;
-      float headMask=smoothstep(.72,1.68,oy);
-      p.x+=uHit.y*flinch*.19*headMask;
-      p.z+=uHit.z*flinch*.22*headMask;
-      p.y-=flinch*.065*headMask;
-      float twist=uHit.y*flinch*.32*upper;
-      float ct=cos(twist),st=sin(twist);
-      vec2 xz=mat2(ct,-st,st,ct)*p.xz;
-      p.xz=xz;
-      vec2 nxz=mat2(ct,-st,st,ct)*n.xz;
-      n.xz=nxz;
-    }
+    int boneId=int(floor(aKind*.1+.001));
+    cleanKind=mod(aKind,10.);
+    rigApplyCharacter(p,n,boneId,uGait,uPose,uHit,uRecoil,uAnim,uAnim2);
   } else if(uMode==2 && uRecoil.x>.001){
-    // First-person weapon blowback: upper slide/rails kick back & barrel vibrates on shot
+    // First-person weapon blowback: upper slide/rails kick back & subtle barrel pulse on shot
     float slide=smoothstep(.038,.075,p.y)*smoothstep(.12,-.16,p.z)*smoothstep(-.78,-.35,p.z);
-    p.z+=uRecoil.x*.048*slide;
+    p.z+=uRecoil.x*.036*slide;
     float tip=smoothstep(-.35,-.80,p.z);
-    p.x+=uRecoil.y*uRecoil.x*.006*tip;
-    p.y+=uRecoil.x*.009*tip;
+    p.x+=uRecoil.y*uRecoil.x*.003*tip;
+    p.y+=uRecoil.x*.004*tip;
   }
   vec4 world=uModel*vec4(p,1.);
   wPos=world.xyz;
@@ -132,7 +78,7 @@ void main(){
   wColor=aColor;
   uv=aUV;
   layer=aLayer;
-  kind=aKind;
+  kind=cleanKind;
   gl_Position=uVP*world;
 }`;
 

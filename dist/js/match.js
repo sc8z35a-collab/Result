@@ -1,6 +1,6 @@
 import {clamp, forward, dot, sub, add, scale, random, cross, unit} from './geometry.js';
 import {teams, tankers, walkable, moveActor, floorAt, obstruction} from './yard.js';
-import {NV13Pro} from './nv13pro.js';
+import {NV2} from './nv2.js';
 import {eyeOf, torso, bodyCenter, postureStep} from './posture.js';
 import {DF, initialDF, assist, scheduleDF, directionDF, spendP1, updateDF} from './df1.js';
 const baseSpeed = 360, baseInterval = .24;
@@ -9,7 +9,7 @@ export const weapons = {
   SRA: {capacity: 30, damage: 6, rate: 120, velocity: 80, speed: baseSpeed * .8, interval: baseInterval / 1.2, burst: 1, reload: 1.65},
   D1: {capacity: 40, damage: 5, rate: 100, velocity: 60, speed: baseSpeed * .6, interval: baseInterval, burst: 2, reload: 1.85},
   MS10: {capacity: 24, damage: 9, rate: 130, velocity: 180, speed: baseSpeed * 1.8, interval: baseInterval / 1.3, burst: 1, reload: 1.55, auto: true},
-  [DF]: {capacity: 50, damage: 2.8, rate: 150, velocity: 65, speed: baseSpeed * .65, interval: baseInterval / 1.5, burst: 3, reload: 1.85, playerOnly: true}
+  [DF]: {capacity: 50, damage: 2.8, rate: 150, velocity: 65, speed: baseSpeed * .65, interval: baseInterval / 1.5, burst: 3, reload: 1.85, auto: true, playerOnly: true}
 };
 export const modes = {'3v3': [3, 3], '1v2': [1, 2], '1v1': [1, 1]};
 const names = [['YOU', 'NAGI', 'KAI'], ['RIN', 'SORA', 'AO']];
@@ -64,7 +64,7 @@ export class Match {
     const counts = modes[config.mode] || modes['3v3'];
     this.goals = counts.map(n => config.limit === 'unlimited' ? Infinity : n * clamp(Math.round(config.multiplier) || 5, 1, 99));
     this.receiptId = globalThis.crypto?.randomUUID?.() || Date.now().toString(36) + Math.random().toString(36).slice(2);
-    this.nv = new NV13Pro(this);
+    this.nv = new NV2(this);
     for (let team = 0; team < 2; team++)for (let slot = 0; slot < counts[team]; slot++) {
       const human = team === 0 && slot === 0;
       const gun = human ? config.loadout : npcWeapons[(slot + team + 1) % npcWeapons.length];
@@ -135,6 +135,12 @@ export class Match {
       crouch: 0,
       lean: 0,
       aimPose: 0,
+      fwdVel: 0,
+      sideVel: 0,
+      airBlend: 0,
+      landCompress: 0,
+      sprintAmt: 0,
+      reloadFrac: 0,
       queue: [],
       df: a.gun === DF ? {...initialDF(), pattern: a.df?.pattern || 'central', scope: a.df?.scope || 'plastic'} : null
     });
@@ -334,6 +340,21 @@ export class Match {
     a.hitFlash = Math.max(0, (a.hitFlash || 0) - dt * 5.2);
     a.shieldFlash = Math.max(0, (a.shieldFlash || 0) - dt * 4.2);
     a.cooldown = Math.max(0, a.cooldown - dt);
+    // Smooth body-frame velocity & posture signals for the 16-joint articulated humanoid rig
+    const sy = Math.sin(a.yaw), cy = Math.cos(a.yaw);
+    const localFwd = a.vx * sy - a.vz * cy;
+    const localSide = a.vx * cy + a.vz * sy;
+    const hSpd = Math.hypot(a.vx, a.vz);
+    const kSmooth = 1 - Math.exp(-16 * dt);
+    a.fwdVel = (a.fwdVel || 0) + (clamp(localFwd / 4.6, -1.2, 1.55) - (a.fwdVel || 0)) * kSmooth;
+    a.sideVel = (a.sideVel || 0) + (clamp(localSide / 4.6, -1.2, 1.2) - (a.sideVel || 0)) * kSmooth;
+    const airTarget = a.onGround ? 0 : 1;
+    a.airBlend = (a.airBlend || 0) + (airTarget - (a.airBlend || 0)) * (1 - Math.exp(-18 * dt));
+    a.landCompress = Math.max(0, (a.landCompress || 0) * Math.exp(-9.5 * dt) - dt * 0.35);
+    const sprintTarget = a.onGround && a.crouch < 0.25 && hSpd > 4.65 && localFwd > 2.2 ? clamp((hSpd - 4.4) / 1.4, 0, 1) : 0;
+    a.sprintAmt = (a.sprintAmt || 0) + (sprintTarget - (a.sprintAmt || 0)) * (1 - Math.exp(-12 * dt));
+    const wReload = this.weapon(a).reload;
+    a.reloadFrac = a.reload > 0 ? clamp(1 - a.reload / wReload, 0, 1) : 0;
     if (a.shield < 10) {
       a.shieldClock += dt;
       if (a.shieldClock + 1e-8 >= 5) {

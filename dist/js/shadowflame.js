@@ -17,6 +17,7 @@
 //   - SF-DynamicFlame: Dynamic point-light directional bounce & shadow-boundary warm-cool indirect wrap
 
 import {unit, scale, dot, clamp, multiply, lookAt, ortho, invert4} from './geometry.js';
+import {ARTICULATED_RIG_GLSL} from './rig.js';
 
 export const shadowModes = {off: 0, flash: 1, pro: 2};
 const SUN = unit([-.66, .28, -.70]);
@@ -99,67 +100,28 @@ function destroyColorTarget(gl, t) {
 
 const matrix = (right, up, back, p) => new Float32Array([...right, 0, ...up, 0, ...back, 0, ...p, 1]);
 
-// Animated NPC + Static World Depth Vertex Shader (crouching/running NPCs cast physically accurate animated shadows!)
+// Animated NPC + Static World Depth Vertex Shader (16-joint articulated FK/IK rig matches worldVS pixel-for-pixel!)
 export const sfShadowVS = `#version 300 es
 precision highp float;
 precision highp int;
 layout(location=0) in vec3 aPos;
+layout(location=1) in vec3 aNormal;
+layout(location=5) in float aKind;
 uniform mat4 uVP;
 uniform mat4 uModel;
 uniform int uMode;
 uniform vec2 uGait;
 uniform vec3 uPose;
 uniform vec3 uHit;
+uniform vec2 uRecoil;
+uniform vec4 uAnim;
+uniform vec4 uAnim2;
+${ARTICULATED_RIG_GLSL}
 void main(){
-  vec3 p=aPos;
+  vec3 p=aPos,n=aNormal;
   if(uMode==1){
-    float c=clamp(uPose.x,0.,1.);
-    float oy=p.y,oz=p.z;
-    float leg=(1.-smoothstep(.45,.91,oy))*sign(p.x),g=sin(uGait.x)*uGait.y*mix(1.,.48,c);
-    p.z+=leg*g*.23;
-    p.y+=abs(leg)*max(0.,g*sign(p.x))*.066;
-    p.z+=smoothstep(.22,.33,abs(p.x))*g*.027;
-    p.y+=abs(cos(uGait.x))*.022*uGait.y*mix(1.,.45,c);
-    float upper=smoothstep(.38,1.42,oy);
-    p.x+=uPose.y*upper;
-    if(c>.001){
-      float s=p.x>=0.?1.:-1.;
-      float ankleZ=c*(s>0.?.16:-.11);
-      float kneeY=c*(s>0.?-.27:-.15);
-      float kneeZ=c*(s>0.?-.05:-.24);
-      float hipY=-.44*c;
-      float hipZ=.11*c;
-      if(oy<=.19){
-        p.x+=s*.042*c;
-        p.z+=ankleZ;
-      } else if(oy<=.55){
-        float t=(oy-.19)/.36;
-        p.x+=s*.042*c;
-        p.y+=mix(0.,kneeY,t);
-        p.z+=mix(ankleZ,kneeZ,t);
-      } else if(oy<=.91){
-        float t=(oy-.55)/.36;
-        p.x+=s*.042*c*(1.-t);
-        p.y+=mix(kneeY,hipY,t);
-        p.z+=mix(kneeZ,hipZ,t);
-      } else {
-        vec2 rel=vec2(p.y-.91,p.z-.015);
-        float ang=.13*c;
-        float ca=cos(ang),sa=sin(ang);
-        p.y=.91+hipY+rel.x*ca+rel.y*sa;
-        p.z=.015+hipZ-rel.x*sa+rel.y*ca;
-      }
-    }
-    p.y+=uPose.z*.14*smoothstep(.16,.40,-oz);
-    p.z-=uPose.z*.045*upper;
-    float h=uHit.x;
-    if(h>.001){
-      float flinch=sin(h*3.14159)*h;
-      float headMask=smoothstep(.72,1.68,oy);
-      p.x+=uHit.y*flinch*.19*headMask;
-      p.z+=uHit.z*flinch*.22*headMask;
-      p.y-=flinch*.065*headMask;
-    }
+    int boneId=int(floor(aKind*.1+.001));
+    rigApplyCharacter(p,n,boneId,uGait,uPose,uHit,uRecoil,uAnim,uAnim2);
   }
   gl_Position=uVP*uModel*vec4(p,1.);
 }`;
@@ -561,7 +523,7 @@ export class ShadowFlame {
     };
   }
 
-  drawActorsShadow(match, drawFn, actorsMap) {
+  drawActorsShadow(match, drawFn, actorsMap, time = 0) {
     if (!match) return;
     const gl = this.gl, d = this.depthProg;
     gl.uniform1i(d.uMode, 1);
@@ -575,9 +537,12 @@ export class ShadowFlame {
         hitZ = clamp(dot(a.hitDir, bVec), -1, 1);
       }
       gl.uniformMatrix4fv(d.uModel, false, matrix(rVec, [0, 1, 0], bVec, [a.x, a.y, a.z]));
-      gl.uniform2f(d.uGait, a.stride * 2.75, clamp(Math.hypot(a.vx, a.vz) / 4, 0, 1));
+      gl.uniform2f(d.uGait, a.stride * 2.85, clamp(Math.hypot(a.vx, a.vz) / 4.2, 0, 1.2));
       gl.uniform3f(d.uPose, a.crouch, a.lean, a.aimPose);
       gl.uniform3f(d.uHit, a.hitRecoil || 0, hitX, hitZ);
+      if (d.uRecoil) gl.uniform2f(d.uRecoil, a.recoil || 0, a.recoilSide || 0);
+      if (d.uAnim) gl.uniform4f(d.uAnim, a.fwdVel || 0, a.sideVel || 0, a.airBlend || 0, a.landCompress || 0);
+      if (d.uAnim2) gl.uniform4f(d.uAnim2, a.pitch || 0, time + a.id * 1.13, a.sprintAmt || 0, a.reloadFrac || 0);
       drawFn(actorsMap[a.team + a.gun]);
     }
   }
@@ -594,6 +559,9 @@ export class ShadowFlame {
     gl.uniform2f(d.uGait, 0, 0);
     gl.uniform3f(d.uPose, 0, 0, 0);
     gl.uniform3f(d.uHit, 0, 0, 0);
+    if (d.uRecoil) gl.uniform2f(d.uRecoil, 0, 0);
+    if (d.uAnim) gl.uniform4f(d.uAnim, 0, 0, 0, 0);
+    if (d.uAnim2) gl.uniform4f(d.uAnim2, 0, 0, 0, 0);
     gl.enable(gl.POLYGON_OFFSET_FILL);
     gl.polygonOffset(1.15, 2.0);
     drawFn(terrain);
@@ -601,7 +569,7 @@ export class ShadowFlame {
     this.staticReady = true;
   }
 
-  prepare(mode, eye, fwd, match, terrain, actorsMap, drawFn) {
+  prepare(mode, eye, fwd, match, terrain, actorsMap, drawFn, time = 0) {
     if (mode <= 0) return;
     const gl = this.gl, d = this.depthProg;
     // Unbind depth textures from all sampler units before rendering into shadow FBOs (prevents WebGL2 feedback loops)
@@ -636,7 +604,7 @@ export class ShadowFlame {
         gl.uniformMatrix4fv(d.uVP, false, this.nearMatrix);
         gl.enable(gl.POLYGON_OFFSET_FILL);
         gl.polygonOffset(1.2, 2.0);
-        this.drawActorsShadow(match, drawFn, actorsMap);
+        this.drawActorsShadow(match, drawFn, actorsMap, time);
         gl.disable(gl.POLYGON_OFFSET_FILL);
       }
     } else if (mode === 2) {
@@ -661,10 +629,13 @@ export class ShadowFlame {
         gl.uniform2f(d.uGait, 0, 0);
         gl.uniform3f(d.uPose, 0, 0, 0);
         gl.uniform3f(d.uHit, 0, 0, 0);
+        if (d.uRecoil) gl.uniform2f(d.uRecoil, 0, 0);
+        if (d.uAnim) gl.uniform4f(d.uAnim, 0, 0, 0, 0);
+        if (d.uAnim2) gl.uniform4f(d.uAnim2, 0, 0, 0, 0);
         gl.enable(gl.POLYGON_OFFSET_FILL);
         gl.polygonOffset(1.0, 1.8);
         drawFn(terrain);
-        this.drawActorsShadow(match, drawFn, actorsMap);
+        this.drawActorsShadow(match, drawFn, actorsMap, time);
         gl.disable(gl.POLYGON_OFFSET_FILL);
       }
     }

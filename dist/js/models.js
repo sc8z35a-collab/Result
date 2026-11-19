@@ -160,41 +160,122 @@ export function viewModel(gun) {
 
 export function character(team, gun) {
   const m = new Mesh(), accent = team ? '#df8054' : '#55b9b4', light = team ? '#f2a16e' : '#88ded2';
+  const darkArmor = '#3d484b', jointMetal = '#59666b', plate = '#8e9c96', vest = '#9ca899';
+
+  // ---- Bones 9..14: Articulated Left & Right Legs (Hip -> Thigh -> Knee -> Shin -> Ankle -> Boot/Toe) ----
   for (const side of [-1, 1]) {
-    const x = side * .149;
-    m.ellipsoid(x, .13, -.038, .119, .11, .19, 'rubber', rubber, 0, 10, 5);
-    m.tube([x, .19, .018], [x, .56, .014], .086, .102, 'canvas', cloth, 9);
-    m.ellipsoid(x, .52, -.04, .105, .09, .085, 'steel', '#848e83', 0, 8, 4);
-    m.tube([x, .57, .017], [side * .13, .90, .014], .102, .13, 'canvas', '#869085', 9);
-    m.box(x, .41, -.067, .115, .051, .04, 'white', accent);
+    const hipX = side * .122, legX = side * .130;
+    const baseBone = side < 0 ? 9 : 12;
+
+    // Thigh (Bone 9 / 12): hip ball joint + sculpted quad/hamstring + tactical thigh armor & holster
+    m.boneOffset = baseBone * 10;
+    m.ellipsoid(hipX, .895, .012, .096, .092, .096, 'rubber', darkArmor, 0, 10, 5);
+    m.tube([legX, .510, .006], [hipX, .895, .012], .088, .112, 'canvas', '#818c82', 10, 0);
+    m.ellipsoid(legX, .71, -.026, .086, .145, .084, 'canvas', '#8a958b', 0, 10, 5);
+    m.box(legX + side * .078, .71, .005, .042, .145, .105, 'blackMetal', side < 0 ? darkArmor : ink, 0, 1);
+    m.box(legX, .68, -.088, .088, .11, .026, 'steel', plate, 0, 1);
+
+    // Knee + Shin (Bone 10 / 13): knee joint sphere + armored kneepad + sculpted shin/calf + team stripe
+    m.boneOffset = (baseBone + 1) * 10;
+    m.ellipsoid(legX, .500, .006, .082, .082, .084, 'rubber', jointMetal, 0, 10, 5);
+    m.ellipsoid(legX, .500, -.058, .078, .082, .054, 'steel', '#7d8a86', 1, 10, 5);
+    m.box(legX, .500, -.096, .072, .058, .024, 'white', accent, 0, 1);
+    m.tube([legX, .125, .014], [legX, .495, .006], .066, .084, 'canvas', cloth, 10, 0);
+    m.ellipsoid(legX, .33, .036, .072, .115, .068, 'canvas', '#5a6762', 0, 9, 5); // sculpted gastrocnemius calf
+    m.box(legX, .32, -.058, .084, .17, .032, 'blackMetal', darkArmor, 0, 1); // shin greave
+    m.box(legX, .37, -.074, .068, .036, .016, 'white', accent, 0, 0);
+
+    // Ankle + Multi-Part Articulated Combat Boot (Bone 11 / 14): ankle sphere, heel cup, midfoot, hinged toe box (sole at y=0)
+    m.boneOffset = (baseBone + 2) * 10;
+    m.ellipsoid(legX, .115, .014, .064, .064, .066, 'rubber', jointMetal, 0, 10, 5);
+    m.box(legX, .058, .026, .116, .112, .110, 'rubber', rubber, 0, 0); // heel cup & ankle collar
+    m.box(legX, .048, -.035, .120, .092, .085, 'blackMetal', darkArmor, 0, 0); // arch/midfoot
+    m.ellipsoid(legX, .042, -.108, .064, .042, .068, 'rubber', rubber, 0, 10, 5); // articulated forefoot toe box (bends at z<-0.055!)
+    m.box(legX, .014, -.042, .126, .028, .225, 'rubber', '#2d3436', 0, 0); // rugged outsole touching y=0.000
   }
-  m.ellipsoid(0, .91, .015, .251, .15, .172, 'blackMetal', '#89968a', 0, 12, 5);
-  m.ellipsoid(0, 1.19, .008, .287, .342, .173, 'canvas', '#a2ac9c', 0, 14, 7);
-  m.box(0, 1.20, -.14, .388, .287, .09, 'blackMetal', '#9aa8a1', 0, 1);
-  m.box(0, 1.305, -.195, .34, .054, .022, 'white', accent);
-  m.box(.097, 1.19, -.20, .091, .045, .024, 'white', light, 0, 3);
-  m.tube([0, 1.43, 0], [0, 1.55, 0], .096, .10, 'rubber', rubber, 9);
-  m.ellipsoid(0, 1.635, -.008, .161, .193, .151, 'steel', '#b0b8aa', 0, 14, 8);
-  m.ellipsoid(0, 1.655, -.075, .163, .113, .119, 'blackMetal', '#667779', 1, 14, 6);
-  m.box(0, 1.668, -.183, .215, .028, .022, 'white', light, 0, 3);
-  m.ellipsoid(0, 1.754, .012, .174, .080, .157, 'steel', accent, 1, 12, 5);
-  for (const s of [-1, 1]) {
-    const a = [s * .253, 1.40, 0], e = [s * .323, 1.145, -.068], hand = [s === 1 ? .12 : -.04, 1.20, s === 1 ? -.26 : -.40];
-    m.ellipsoid(...a, .118, .104, .114, 'steel', accent, 0, 10, 5);
-    m.tube(a, e, .079, .085, 'canvas', cloth, 9);
-    m.tube(e, hand, .077, .068, 'canvas', '#9ca598', 8);
-    m.ellipsoid(...hand, .076, .065, .079, 'rubber', rubber, 0, 8, 4);
+
+  // ---- Bone 0: Pelvis / Tactical Utility Belt ----
+  m.boneOffset = 0;
+  m.ellipsoid(0, .900, .012, .218, .115, .148, 'blackMetal', '#79877e', 0, 12, 6);
+  m.box(0, .945, .010, .410, .068, .285, 'blackMetal', darkArmor, 0, 1);
+  m.box(0, .945, -.142, .095, .054, .028, 'steel', metal, 0, 1); // belt buckle
+  for (const sx of [-1, 1]) m.box(sx * .205, .925, -.02, .056, .092, .115, 'canvas', '#5a6864', 0, 0); // hip mag pouches
+
+  // ---- Bone 1: Articulated Lumbar Waist / Abdomen ----
+  m.boneOffset = 10;
+  m.ellipsoid(0, 1.055, .010, .205, .145, .142, 'canvas', '#8f9b8c', 0, 12, 6);
+  m.box(0, 1.045, -.112, .265, .118, .064, 'blackMetal', '#6c7a76', 0, 1); // abdominal flex plates
+  m.box(0, 1.055, .122, .165, .130, .052, 'steel', jointMetal, 0, 1); // lumbar spine armor
+
+  // ---- Bone 2: Thoracic Chest Armor + Collar + Tactical Backpack ----
+  m.boneOffset = 20;
+  m.ellipsoid(0, 1.255, .006, .258, .215, .162, 'canvas', vest, 0, 14, 7);
+  m.box(0, 1.255, -.136, .372, .248, .092, 'blackMetal', '#8d9d97', 0, 1); // front chest rig
+  m.box(0, 1.350, -.186, .325, .048, .024, 'white', accent, 0, 0);
+  m.box(.095, 1.245, -.190, .088, .042, .022, 'white', light, 0, 3); // glowing team IFF tag
+  m.box(-.085, 1.215, -.190, .115, .085, .036, 'canvas', '#53615d', 0, 0); // chest magazine pouch (reload target!)
+  m.ellipsoid(0, 1.420, .002, .155, .052, .135, 'blackMetal', darkArmor, 0, 12, 5); // collarbone armor
+  // Tactical backpack: left shield charger cylinder + right vented ammo generator cassette
+  m.box(0, 1.245, .178, .388, .372, .084, 'blackMetal', ink, 0, 1);
+  m.tube([-.098, 1.06, .238], [-.098, 1.43, .238], .080, .080, 'steel', metal, 10, 1);
+  for (const y of [1.11, 1.22, 1.34]) m.tube([-.098, y, .238], [-.098, y + .036, .238], .084, .084, 'white', '#77d4c6', 10, 3);
+  m.box(.096, 1.24, .240, .156, .372, .134, 'blackMetal', '#969d8d', 0, 1);
+  for (let j = 0; j < 4; j++) m.box(.096, 1.13 + j * .064, .312, .125, .020, .015, 'white', '#e1b163', 0, 1);
+
+  // ---- Bone 3: Cervical Neck / Throat Guard ----
+  m.boneOffset = 30;
+  m.tube([0, 1.425, 0], [0, 1.545, -.006], .082, .078, 'rubber', rubber, 10, 0);
+  m.ellipsoid(0, 1.465, -.018, .096, .044, .092, 'blackMetal', darkArmor, 0, 10, 5);
+
+  // ---- Bone 4: Sculpted Visor Helmet & Head ----
+  m.boneOffset = 40;
+  m.ellipsoid(0, 1.640, -.010, .152, .182, .150, 'steel', '#b0b8aa', 0, 14, 8);
+  m.ellipsoid(0, 1.655, -.074, .154, .106, .114, 'blackMetal', '#56686b', 1, 14, 6);
+  m.box(0, 1.668, -.178, .204, .026, .020, 'white', light, 0, 3); // glowing optical visor strip
+  m.box(0, 1.565, -.112, .150, .072, .085, 'blackMetal', darkArmor, 0, 1); // angled jaw respirator guard
+  m.ellipsoid(0, 1.752, .010, .164, .076, .154, 'steel', accent, 1, 12, 5); // helmet crest shell
+  for (const sx of [-1, 1]) m.ellipsoid(sx * .152, 1.645, .005, .034, .056, .052, 'blackMetal', darkArmor, 1, 8, 4); // comms ear pods
+
+  // ---- Bones 5..8: 2-Bone IK Sculpted Arms (Shoulder Pauldron -> Upper Arm -> Elbow Pad -> Forearm -> Wrist -> Glove) ----
+  const arms = [
+    {s: -1, bUp: 5, bLo: 6, sh: [-.225, 1.400, .000], el: [-.210, 1.160, -.165], hn: [.035, 1.205, -.395]},
+    {s: 1, bUp: 7, bLo: 8, sh: [.225, 1.400, .000], el: [.265, 1.145, -.065], hn: [.072, 1.170, -.240]}
+  ];
+  for (const arm of arms) {
+    // Upper arm (Bone 5 / 7): shoulder ball joint + sculpted armored pauldron + deltoid/bicep
+    m.boneOffset = arm.bUp * 10;
+    m.ellipsoid(...arm.sh, .092, .088, .092, 'rubber', jointMetal, 0, 10, 5);
+    m.ellipsoid(arm.sh[0] + arm.s * .038, arm.sh[1] + .022, arm.sh[2], .092, .078, .106, 'steel', accent, 1, 10, 5); // shoulder pauldron
+    m.tube(arm.sh, arm.el, .074, .066, 'canvas', cloth, 10, 0);
+    m.ellipsoid(
+      (arm.sh[0] + arm.el[0]) * .5,
+      (arm.sh[1] + arm.el[1]) * .5,
+      (arm.sh[2] + arm.el[2]) * .5,
+      .074, .078, .074, 'canvas', '#73807a', 0, 9, 5
+    );
+
+    // Forearm + Wrist + Tactical Glove (Bone 6 / 8): elbow joint + pad + bracer + wrist cuff + articulated glove
+    m.boneOffset = arm.bLo * 10;
+    m.ellipsoid(...arm.el, .068, .068, .068, 'rubber', jointMetal, 0, 10, 5);
+    m.ellipsoid(arm.el[0] + arm.s * .026, arm.el[1] - .015, arm.el[2] + .035, .054, .062, .048, 'blackMetal', darkArmor, 1, 8, 4); // elbow guard
+    m.tube(arm.el, arm.hn, .064, .052, 'canvas', '#9ca598', 9, 0);
+    // Forearm armored bracer cuff near wrist
+    const wr = [
+      arm.el[0] * .24 + arm.hn[0] * .76,
+      arm.el[1] * .24 + arm.hn[1] * .76,
+      arm.el[2] * .24 + arm.hn[2] * .76
+    ];
+    m.ellipsoid(...wr, .058, .054, .060, 'blackMetal', darkArmor, 1, 9, 4);
+    m.ellipsoid(...arm.hn, .062, .056, .072, 'rubber', '#3a4244', 0, 9, 5); // tactical glove
   }
-  // The rounded left module is the shield charger; the vented right cassette is the ammo generator.
-  m.box(0, 1.23, .177, .407, .404, .086, 'blackMetal', ink);
-  m.tube([-.102, 1.032, .241], [-.102, 1.438, .241], .085, .085, 'steel', metal, 10);
-  for (const y of [1.09, 1.21, 1.34]) m.tube([-.102, y, .241], [-.102, y + .04, .241], .089, .089, 'white', '#77d4c6', 10, 3);
-  m.box(.098, 1.224, .242, .163, .404, .14, 'blackMetal', '#969d8d');
-  for (let j = 0; j < 4; j++) m.box(.098, 1.11 + j * .068, .317, .131, .022, .016, 'white', '#e1b163', 0, 1);
-  m.transform = {origin: [.071, 1.255, -.26], right: [.85, 0, 0], up: [0, .85, 0], back: [0, 0, .85]};
+
+  // ---- Bone 15: Weapon Assembly (tracks AimPitch, ADS, Sprint Low-Ready, Recoil & Reload Tilt) ----
+  m.boneOffset = 150;
+  m.transform = {origin: [.072, 1.245, -.255], right: [.85, 0, 0], up: [0, .85, 0], back: [0, 0, .85]};
   device(m, gun);
   m.transform = null;
-  m.tube([.069, 1.408, -.285], [.069, 1.408, -.337], .029, .027, 'blackMetal', metal, 8);
+  m.tube([.070, 1.398, -.280], [.070, 1.398, -.332], .028, .026, 'blackMetal', metal, 8, 1);
+  m.boneOffset = 0;
   return m;
 }
 

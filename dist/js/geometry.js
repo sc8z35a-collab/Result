@@ -77,7 +77,8 @@ export const STRIDE = 13;
 export class Mesh {
   constructor() {
     this.data = [];
-    this.transform = null
+    this.transform = null;
+    this.boneOffset = 0
   }
   get count() {
     return this.data.length / STRIDE
@@ -94,7 +95,7 @@ export class Mesh {
       b = n[0] * r[1] + n[1] * u[1] + n[2] * k[1];
       d = n[0] * r[2] + n[1] * u[2] + n[2] * k[2]
     }
-    this.data.push(x, y, z, a, b, d, uv[0], uv[1], layers[mat] ?? 0, c[0], c[1], c[2], kind)
+    this.data.push(x, y, z, a, b, d, uv[0], uv[1], layers[mat] ?? 0, c[0], c[1], c[2], kind + this.boneOffset)
   }
   tri(a, b, c, mat = 'white', tint = '#ffffff', kind = 0, normal = null, uvs = [[0, 1], [1, 1], [.5, 0]]) {
     const n = normal || unit(cross(sub(b, a), sub(c, a))), co = color(tint);

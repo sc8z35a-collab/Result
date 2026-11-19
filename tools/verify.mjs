@@ -8,7 +8,8 @@ import {obstruction} from '../dist/js/yard.js';
 import {perspective,lookAt,multiply,invert4} from '../dist/js/geometry.js';
 import {shadowModes,SHADOW_FLAME_WORLD_GLSL,sfScreenFS,sfBilateralFS} from '../dist/js/shadowflame.js';
 import {KHDR_TONE_GLSL} from '../dist/js/khdr.js';
-const h=1/120;
+import {BONE,ARTICULATED_RIG_GLSL} from '../dist/js/rig.js';
+const h=1/360;
 function duel(loadout='DF1 OUT',limit='unlimited',multiplier=2,events=[]) {
   return new Match({mode:'1v1', limit, multiplier,loadout},event=>events.push(event));
 }
@@ -24,6 +25,14 @@ for(const [id,cap,damage,rate,velocity,burstSize] of [['SW T',10,9,100,100,1],['
  assert(Object.entries(weapons).every(([k,w])=>k==='MS10'||ms10.speed>w.speed),'MS10 must have fastest bullet speed');
  assert(Math.abs(ms10.speed/weapons['SW T'].speed-1.8)<1e-6,'MS10 speed ratio 180 relative to SW T 100');
  assert(Math.abs((1/ms10.interval)/(1/weapons['SW T'].interval)-1.3)<1e-6,'MS10 fire rate ratio 130 relative to SW T 100');
+ // DF1 OUT full-auto 3-round burst: holding trigger chains consecutive 3-round bursts automatically
+ const df=weapons['DF1 OUT'];
+ assert(df.auto===true&&df.burst===3,'DF1 OUT must be full-auto 3-round burst');
+ const m=duel('DF1 OUT');
+ const p=m.player;
+ // Hold fire for 1.05s at 360Hz -> fires 2 full 3-round bursts (6 shots) + starts 3rd burst (>=7 shots)
+ for(let i=0;i<380;i++){if(df.auto)m.trigger(p);m.time+=h;m.systems(p,h)}
+ assert(m.shots.length>=6&&p.mag<=44,'Holding fire on DF1 OUT must chain full-auto 3-round bursts');
 }
 {
  // Supply tanker: +100 rounds immediately and 1.5x ammo refinement speed (2.0s/round vs 3.0s/round, plus DF1 P1 1.5x), cooldown enforced, reset on respawn.
@@ -36,13 +45,13 @@ for(const [id,cap,damage,rate,velocity,burstSize] of [['SW T',10,9,100,100,1],['
  assert.equal(p.ammoRate,1.5,'Tanker boosts ammo refinement to 1.5x');
  assert(tk.cooldown>20,'Tanker enters recharge cooldown');
  assert(ev.some(e=>e.type==='tanker'&&e.actor===p),'Tanker emits event');
- // Verify 1.5x ammo refinement: 3.0s / 1.5 = 2.0s (240 frames at 120Hz)
+ // Verify 1.5x ammo refinement: 3.0s / 1.5 = 2.0s (720 frames at 360Hz)
  p.stock=90;p.ammoClock=0;
- forward(m,p,239);assert.equal(p.stock,90);
+ forward(m,p,719);assert.equal(p.stock,90);
  forward(m,p,1);assert.equal(p.stock,91);
- // Verify DF1 P1 also refines at 1.5x: 8.0s / 1.5 = 5.3333s (640 frames at 120Hz)
+ // Verify DF1 P1 also refines at 1.5x: 8.0s / 1.5 = 5.3333s (1920 frames at 360Hz)
  p.df.p1=15;p.df.p1Clock=0;
- forward(m,p,639);assert.equal(p.df.p1,15);
+ forward(m,p,1919);assert.equal(p.df.p1,15);
  forward(m,p,1);assert.equal(p.df.p1,16);
  // Respawn resets ammoRate back to 1.0
  m.spawn(p);assert.equal(p.ammoRate,1);
@@ -52,27 +61,27 @@ for(const [id,cap,damage,rate,velocity,burstSize] of [['SW T',10,9,100,100,1],['
  const ev=[],m=duel('MS10','unlimited',2,ev),[p,t]=arrange(m,2,85,75);
  t.gun='MS10';t.mag=24;t.yaw=Math.PI+0.09;t.pitch=0;
  assert(m.trigger(t));
- for(let i=0;i<60&&m.shots.length;i++){m.time+=h;m.shots=m.shots.filter(s=>m.projectile(s,h))}
+ for(let i=0;i<180&&m.shots.length;i++){m.time+=h;m.shots=m.shots.filter(s=>m.projectile(s,h))}
  const whiz=ev.find(e=>e.type==='whiz');
  assert(whiz&&whiz.dist<6&&whiz.gun==='MS10'&&Number.isFinite(whiz.pan),'Near-miss shot emits spatial whiz event');
 }
 {
- const m=duel(),[p,t]=arrange(m,2,85,75);assert(obstruction(eyeOf(p),targetPoint(t))>1);forward(m,p,43);assert(!p.df.locked);forward(m,p,9);assert(p.df.locked);const yaw=p.yaw;burst(m);assert(Math.abs(p.yaw)<Math.abs(yaw)&&Math.abs(yaw-p.yaw)<=.0131);
- arrange(m,-7.8,13,2);assert(obstruction(eyeOf(p),targetPoint(t))<=1);const before=p.yaw;assert(m.trigger(p));assert.equal(before,p.yaw);forward(m,p,68);assert(!p.df.locked);
+ const m=duel(),[p,t]=arrange(m,2,85,75);assert(obstruction(eyeOf(p),targetPoint(t))>1);forward(m,p,129);assert(!p.df.locked);forward(m,p,27);assert(p.df.locked);const yaw=p.yaw;burst(m);assert(Math.abs(p.yaw)<Math.abs(yaw)&&Math.abs(yaw-p.yaw)<=.0131);
+ arrange(m,-7.8,13,2);assert(obstruction(eyeOf(p),targetPoint(t))<=1);const before=p.yaw;assert(m.trigger(p));assert.equal(before,p.yaw);forward(m,p,204);assert(!p.df.locked);
 }
 {
  const m=duel(),p=m.player;p.df.pattern='spread';p.df.boost=true;burst(m);assert.equal(m.shots.length,4);assert.equal(p.mag,47);assert.equal(p.df.p1,19);assert(new Set(m.shots.map(s=>s.dir.join(','))).size>=3);
- burst(m);assert.equal(m.shots.length,9);assert.equal(p.df.p1,17);assert.equal(p.mag,44);burst(m);burst(m);assert(!p.df.boost&&p.df.cooling>0);const left=p.df.p1,main=p.mag;burst(m);assert.equal(p.df.p1,left);assert.equal(p.mag,main-3);forward(m,p,610);assert.equal(p.df.cooling,0);
+ burst(m);assert.equal(m.shots.length,9);assert.equal(p.df.p1,17);assert.equal(p.mag,44);burst(m);burst(m);assert(!p.df.boost&&p.df.cooling>0);const left=p.df.p1,main=p.mag;burst(m);assert.equal(p.df.p1,left);assert.equal(p.mag,main-3);forward(m,p,1830);assert.equal(p.df.cooling,0);
 }
 {
- const m=duel(),p=m.player;p.stock=97;p.shield=7;p.hp=44;p.df.p1=17;forward(m,p,359);assert.equal(p.stock,97);forward(m,p,1);assert.equal(p.stock,98);forward(m,p,239);assert.equal(p.shield,7);forward(m,p,1);assert.equal(p.shield,8);forward(m,p,359);assert.equal(p.df.p1,17);forward(m,p,1);assert.equal(p.df.p1,18);forward(m,p,3000);assert.deepEqual([p.stock,p.shield,p.df.p1,p.hp],[100,10,20,44]);p.mag=46;assert(m.reload(p));forward(m,p,222);assert.deepEqual([p.mag,p.stock],[50,96]);
+ const m=duel(),p=m.player;p.stock=97;p.shield=7;p.hp=44;p.df.p1=17;forward(m,p,1079);assert.equal(p.stock,97);forward(m,p,1);assert.equal(p.stock,98);forward(m,p,719);assert.equal(p.shield,7);forward(m,p,1);assert.equal(p.shield,8);forward(m,p,1079);assert.equal(p.df.p1,17);forward(m,p,1);assert.equal(p.df.p1,18);forward(m,p,9000);assert.deepEqual([p.stock,p.shield,p.df.p1,p.hp],[100,10,20,44]);p.mag=46;assert(m.reload(p));forward(m,p,666);assert.deepEqual([p.mag,p.stock],[50,96]);
 }
 {
- const ev=[],m=duel('DF1 OUT','points',2,ev),[p,t]=arrange(m,2,85,75);const target=targetPoint(t);p.yaw=0;p.pitch=Math.atan2(target[1]-eyeOf(p)[1],10);const until=(fn)=>{for(let i=0;i<8000&&!fn();i++){m.time+=h;m.systems(p,h);if(!p.cooldown&&!p.burstLeft)m.trigger(p);m.shots=m.shots.filter(s=>m.projectile(s,h));}};until(()=>!t.alive);assert(!t.alive&&p.kills===1);m.damage(t,p,1000);assert.deepEqual(m.scores,[1,0]);assert.equal(p.earned,10);assert.equal(t.earned,0);m.spawn(t);m.damage(t,p,111);assert(m.ended&&m.winner===0);assert.deepEqual(m.scores,[2,0]);assert.equal(p.earned,20);assert.equal(new Set(ev.filter(e=>e.type==='point').map(e=>e.receipt)).size,2);
+ const ev=[],m=duel('DF1 OUT','points',2,ev),[p,t]=arrange(m,2,85,75);const target=targetPoint(t);p.yaw=0;p.pitch=Math.atan2(target[1]-eyeOf(p)[1],10);const until=(fn)=>{for(let i=0;i<24000&&!fn();i++){m.time+=h;m.systems(p,h);if(!p.cooldown&&!p.burstLeft)m.trigger(p);m.shots=m.shots.filter(s=>m.projectile(s,h));}};until(()=>!t.alive);assert(!t.alive&&p.kills===1);m.damage(t,p,1000);assert.deepEqual(m.scores,[1,0]);assert.equal(p.earned,10);assert.equal(t.earned,0);m.spawn(t);m.damage(t,p,111);assert(m.ended&&m.winner===0);assert.deepEqual(m.scores,[2,0]);assert.equal(p.earned,20);assert.equal(new Set(ev.filter(e=>e.type==='point').map(e=>e.receipt)).size,2);
 }
 for (const [mode,counts] of Object.entries(modes)) {
  const m=new Match({mode,limit:'points',multiplier:2,loadout:'DF1 OUT'});assert.deepEqual(m.goals,counts.map(c=>c*2));assert(m.actors.every(a=>a.human||a.gun!=='DF1 OUT'));
- for(let i=0;i<120*250&&!m.ended;i++)m.step(h,{});assert(m.ended);assert(m.nv.metrics.crouch+m.nv.metrics.scope>0);assert(m.nv.metrics.cover+m.nv.metrics.disengage+m.nv.metrics.evade>0,'NV1.3 Pro tactical survival behaviors active');assert(m.nv.metrics.beliefTrack+m.nv.metrics.commanderOrders+m.nv.metrics.suppress+m.nv.metrics.crossfire>0,'NV1.3 Pro cognitive behaviors active');console.log(mode,m.scores,Math.round(m.time)+'s',JSON.stringify(m.nv.metrics));
+ for(let i=0;i<360*250&&!m.ended;i++)m.step(h,{});assert(m.ended);assert(m.nv.metrics.crouch+m.nv.metrics.scope>0);assert(m.nv.metrics.cover+m.nv.metrics.disengage+m.nv.metrics.evade>0,'NV2 tactical survival behaviors active');assert(m.nv.metrics.beliefTrack+m.nv.metrics.commanderOrders+m.nv.metrics.suppress+m.nv.metrics.crossfire>0,'NV2 cognitive behaviors active');assert(m.nv.metrics.neuralInferences>0&&m.nv.metrics.neuralUpdates>0&&m.nv.metrics.lookaheadPlans>0,'NV2 deep transformer neural core & minimax lookahead active');console.log(mode,m.scores,Math.round(m.time)+'s',JSON.stringify(m.nv.metrics));
 }
 {
  const storage=new Map();globalThis.localStorage={getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v)};const w=new PilotWallet(()=>{});await w.ready;assert(!await w.change());assert(await w.change('m/1'));assert(!await w.change('m/1'));assert(await w.change());assert(!await w.change());const second=new PilotWallet(()=>{});await second.ready;assert.deepEqual(second.state,{units:5,evr:true});assert(!await second.change('m/1'));
@@ -86,7 +95,7 @@ for (const [mode,counts] of Object.entries(modes)) {
 }
 {
  // Verify invert4 precision (VP * invVP = I) for Shadow Flame 1.0 Pro world-position depth reconstruction
- const vp=multiply(perspective(44*Math.PI/180,16/9),lookAt([2.5,2.35,73.5],[0.5,1.55,42.0]));
+ const vp=multiply(perspective(24.7*Math.PI/180,16/9),lookAt([2.5,2.35,73.5],[0.5,1.55,42.0]));
  const inv=invert4(vp);
  const prod=multiply(vp,inv);
  for(let r=0;r<4;r++)for(let c=0;c<4;c++){
@@ -97,6 +106,8 @@ for (const [mode,counts] of Object.entries(modes)) {
  assert(SHADOW_FLAME_WORLD_GLSL.includes('sfFlashVisibility')&&SHADOW_FLAME_WORLD_GLSL.includes('sfProPCSS'));
  assert(sfScreenFS.includes('SF-SSCS')&&sfScreenFS.includes('SF-GTAO-Lite')&&sfBilateralFS.includes('exp(-abs'));
  assert(KHDR_TONE_GLSL.includes('K_INSET')&&KHDR_TONE_GLSL.includes('kFilmicSDR')&&KHDR_TONE_GLSL.includes('kFilmicExtended'));
+ assert.equal(Object.keys(BONE).length,16,'Articulated humanoid rig must have 16 bones');
+ assert(ARTICULATED_RIG_GLSL.includes('rigApplyCharacter')&&ARTICULATED_RIG_GLSL.includes('rigSolveElbow')&&ARTICULATED_RIG_GLSL.includes('rigLegKinematics'));
 }
-console.log('Weapon specs (incl. MS10), supply tankers, bullet whiz, focus and occlusion, credits, EVR1, separate regeneration timers, P1 heat, scoring, KHDR & Shadow Flame 1.0 Flash/Pro modules, and all three NV1.3 Pro matches passed.');
+console.log('360Hz sim, weapon specs (incl. MS10 & DF1 OUT full-auto 3-round burst), supply tankers, bullet whiz, focus and occlusion, credits, EVR1, separate regeneration timers, P1 heat, scoring, 16-joint rig, KHDR & Shadow Flame 1.0 Flash/Pro modules, and all three NV2 Deep Tactical matches passed.');
 

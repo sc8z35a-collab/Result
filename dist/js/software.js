@@ -325,52 +325,57 @@ export class SoftwareRenderer {
       nx /= len;
       ny /= len;
       nz /= len;
-      const mat = da[i + 8], kind = da[i + 12];
+      const mat = da[i + 8], rawKind = da[i + 12];
+      const boneId = transform?.pose ? Math.floor((rawKind + .01) / 10) : 0;
+      const kind = transform?.pose ? rawKind % 10 : rawKind;
       if (transform) {
         const tr = transform, n = [nx, ny, nz];
         nx = n[0] * tr.r[0] + n[1] * tr.u[0] + n[2] * tr.b[0];
         ny = n[0] * tr.r[1] + n[1] * tr.u[1] + n[2] * tr.b[1];
-        nz = n[0] * tr.r[2] + n[1] * tr.u[2] + n[2] * tr.b[2]
+        nz = n[0] * tr.r[2] + n[1] * tr.u[2] + n[2] * tr.b[2];
       } else if (kind !== 4 && kind !== 5 && (eye[0] - da[i]) * nx + (eye[1] - da[i + 1]) * ny + (eye[2] - da[i + 2]) * nz < -.05)continue;
       for (let k = i; k < i + 39; k += 13) {
         let x = da[k], y = da[k + 1], z = da[k + 2];
         const oy = y, oz = z;
         const c = transform?.pose ? clamp(transform.pose.crouch || 0, 0, 1) : 0;
-        if (gait) {
-          const leg = clamp((.91 - oy) / .46, 0, 1) * Math.sign(x), gs = gait * (1 - .52 * c);
-          z += leg * gs * .23;
-          y += Math.abs(leg) * Math.max(0, gs * Math.sign(x)) * .066
+        if (gait && boneId >= 9 && boneId <= 14) {
+          const s = boneId >= 12 ? 1 : -1;
+          const leg = clamp((.90 - oy) / .45, 0, 1) * s, gs = gait * (1 - .52 * c);
+          z += leg * gs * .26;
+          y += Math.abs(leg) * Math.max(0, gs * s) * .09;
         }
         if (transform?.pose) {
           const p = transform.pose, upper = clamp((oy - .38) / 1.04, 0, 1);
           x += p.lean * upper;
           if (c > .001) {
-            const s = x >= 0 ? 1 : -1;
-            const ankleZ = c * (s > 0 ? .16 : -.11);
-            const kneeY = c * (s > 0 ? -.27 : -.15);
-            const kneeZ = c * (s > 0 ? -.05 : -.24);
-            const hipY = -.44 * c, hipZ = .11 * c;
-            if (oy <= .19) {
-              x += s * .042 * c;
+            const s = (boneId >= 12 && boneId <= 14) || x >= 0 ? 1 : -1;
+            const ankleZ = c * (s > 0 ? .18 : -.12);
+            const kneeY = c * (s > 0 ? -.26 : -.14);
+            const kneeZ = c * (s > 0 ? -.05 : -.25);
+            const hipY = -.36 * c, hipZ = .08 * c;
+            if (oy <= .16) {
+              x += s * .036 * c;
               z += ankleZ
-            } else if (oy <= .55) {
-              const t = (oy - .19) / .36;
-              x += s * .042 * c;
+            } else if (oy <= .51) {
+              const t = (oy - .16) / .35;
+              x += s * .036 * c;
               y += kneeY * t;
               z += ankleZ + (kneeZ - ankleZ) * t
-            } else if (oy <= .91) {
-              const t = (oy - .55) / .36;
-              x += s * .042 * c * (1 - t);
+            } else if (oy <= .90) {
+              const t = (oy - .51) / .39;
+              x += s * .036 * c * (1 - t);
               y += kneeY + (hipY - kneeY) * t;
               z += kneeZ + (hipZ - kneeZ) * t
             } else {
-              const ry = y - .91, rz = z - .015, ang = .13 * c, ca = Math.cos(ang), sa = Math.sin(ang);
-              y = .91 + hipY + ry * ca + rz * sa;
-              z = .015 + hipZ - ry * sa + rz * ca
+              const ry = y - .90, rz = z - .01, ang = .14 * c, ca = Math.cos(ang), sa = Math.sin(ang);
+              y = .90 + hipY + ry * ca + rz * sa;
+              z = .01 + hipZ - ry * sa + rz * ca
             }
           }
-          y += p.aimPose * .14 * clamp((-oz - .16) / .24, 0, 1);
-          z -= p.aimPose * .045 * upper;
+          if (boneId === 15 || boneId === 6 || boneId === 8) {
+            y += p.aimPose * .06;
+            z += (p.recoil || 0) * .045;
+          }
           if (p.hitRecoil > .01) {
             const flinch = Math.sin(p.hitRecoil * Math.PI) * p.hitRecoil * clamp((oy - .72) / .96, 0, 1);
             z += flinch * .20;

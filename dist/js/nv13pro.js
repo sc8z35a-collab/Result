@@ -3,18 +3,18 @@ import {clamp, mix, angleDiff} from './geometry.js';
 import {walkable, obstacles, obstruction, rayBox, moveActor, floorAt, tankers as mapTankers} from './yard.js';
 import {eyeOf, targetPoint, postureStep, vertical} from './posture.js';
 
-const STEP = 2, W = 25, H = 100, CELLS = W * H;
-const cellX = i => -24 + (i % W) * STEP;
-const cellZ = i => -99 + ((i / W) | 0) * STEP;
-const cellOf = (x, z) => clamp(Math.round((z + 99) * .5), 0, H - 1) * W + clamp(Math.round((x + 24) * .5), 0, W - 1);
+export const STEP = 2, W = 25, H = 100, CELLS = W * H;
+export const cellX = i => -24 + (i % W) * STEP;
+export const cellZ = i => -99 + ((i / W) | 0) * STEP;
+export const cellOf = (x, z) => clamp(Math.round((z + 99) * .5), 0, H - 1) * W + clamp(Math.round((x + 24) * .5), 0, W - 1);
 const dist2 = (ax, az, bx, bz) => Math.hypot(ax - bx, az - bz);
 const sigmoid = x => 1 / (1 + Math.exp(-clamp(x, -12, 12)));
 
-const lowCover = obstacles.filter(o => o.y0 === 0 && o.y1 > .53 && o.y1 <= 1.05 && o.x1 - o.x0 + o.z1 - o.z0 > 3.4);
+export const lowCover = obstacles.filter(o => o.y0 === 0 && o.y1 > .53 && o.y1 <= 1.05 && o.x1 - o.x0 + o.z1 - o.z0 > 3.4);
 const tallCover = obstacles.filter(o => o.y0 <= .1 && o.y1 >= 1.15 && (o.x1 - o.x0 >= .9 || o.z1 - o.z0 >= .9));
 const DIRS8 = [[1, 0], [.707, .707], [0, 1], [-.707, .707], [-1, 0], [-.707, -.707], [0, -1], [.707, -.707]];
 
-const WEAPON_BAND = {
+export const WEAPON_BAND = {
   'SW T': {min: 19, ideal: 35, max: 58, burstMax: 3, cap: 10},
   MS10: {min: 16, ideal: 31, max: 56, burstMax: 5, cap: 24},
   SRA: {min: 12, ideal: 23, max: 40, burstMax: 6, cap: 30},
@@ -24,7 +24,7 @@ const WEAPON_BAND = {
 
 // Module-cached Prebaked Tactical Cover & Visibility Graph (computed once per harbor map, ~18 KB total).
 let cachedGraph = null;
-function getTacticalGraph() {
+export function getTacticalGraph() {
   if (cachedGraph) return cachedGraph;
   const walkMask = new Uint8Array(CELLS);
   const walkableCells = [];
@@ -117,7 +117,7 @@ function getTacticalGraph() {
   return cachedGraph;
 }
 
-function canSeeNode(g, i, j) {
+export function canSeeNode(g, i, j) {
   if (i < 0 || j < 0) return false;
   return ((g.visBits[i * g.visStride + (j >>> 5)] >>> (j & 31)) & 1) !== 0;
 }
