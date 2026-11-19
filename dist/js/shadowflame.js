@@ -543,7 +543,7 @@ export class ShadowFlame {
       if (d.uRecoil) gl.uniform2f(d.uRecoil, a.recoil || 0, a.recoilSide || 0);
       if (d.uAnim) gl.uniform4f(d.uAnim, a.fwdVel || 0, a.sideVel || 0, a.airBlend || 0, a.landCompress || 0);
       if (d.uAnim2) gl.uniform4f(d.uAnim2, a.pitch || 0, time + a.id * 1.13, a.sprintAmt || 0, a.reloadFrac || 0);
-      drawFn(actorsMap[a.team + a.gun]);
+      drawFn(actorsMap[(a.isSpy ? 'spy_' : '') + a.team + a.gun] || actorsMap[a.team + a.gun]);
     }
   }
 

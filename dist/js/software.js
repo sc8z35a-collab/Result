@@ -132,7 +132,10 @@ export class SoftwareRenderer {
     this.actors = {};
     this.devices = {};
     for (const g of Object.keys(weapons)) {
-      if (npcWeapons.includes(g))for (const team of [0, 1])this.actors[team + g] = chunk(character(team, g));
+      if (npcWeapons.includes(g)) for (const team of [0, 1]) {
+        this.actors[team + g] = chunk(character(team, g, 'standard', 'low'));
+        this.actors['spy_' + team + g] = chunk(character(team, g, 'spy', 'low'));
+      }
       this.devices[g] = chunk(viewModel(g))
     }
   }
@@ -446,7 +449,7 @@ export class SoftwareRenderer {
       for (const a of match.actors) {
         if (a.human || !a.alive)continue;
         const cy = Math.cos(a.yaw), sy = Math.sin(a.yaw);
-        this.mesh(this.actors[a.team + a.gun], {pose: a, p: [a.x, a.y, a.z], r: [cy, 0, sy], u: [0, 1, 0], b: [-sy, 0, cy]}, Math.sin(a.stride * 2.75) * Math.min(1, Math.hypot(a.vx, a.vz) / 4))
+        this.mesh(this.actors[(a.isSpy ? 'spy_' : '') + a.team + a.gun] || this.actors[a.team + a.gun], {pose: a, p: [a.x, a.y, a.z], r: [cy, 0, sy], u: [0, 1, 0], b: [-sy, 0, cy]}, Math.sin(a.stride * 2.75) * Math.min(1, Math.hypot(a.vx, a.vz) / 4))
       }
     }
     this.mesh(chunk(movingDetails(match, time, extra)));

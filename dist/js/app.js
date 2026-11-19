@@ -42,7 +42,7 @@ const aimRecoil = {
   'DF1 OUT': {pitch: .0016, yaw: .0005, recoverRate: 17.5, recoverRatio: .95, climb: .006}
 };
 let settings = {...defaults};
-let rules = {mode: '3v3', limit: 'points', multiplier: 5, loadout: 'SW T'};
+let rules = {mode: '3v3', limit: 'points', multiplier: 5, loadout: 'SW T', allyNv21: 0};
 try {
   const c = JSON.parse(localStorage.getItem('result.harbor.v1') || '{}');
   if (c.settings) {
@@ -64,6 +64,7 @@ if (settings.khdr) settings.hdr = true;
 if (![0, 120, 360].includes(settings.rate))settings.rate = 360;
 if (!modes[rules.mode])rules.mode = '3v3';
 if (!weapons[rules.loadout])rules.loadout = 'SW T';
+rules.allyNv21 = [0, 1, 2].includes(Number(rules.allyNv21)) ? Number(rules.allyNv21) : 0;
 rules.multiplier = clamp(Math.round(rules.multiplier) || 5, 1, 99);
 settings.sensitivity = clamp(Number(settings.sensitivity) || 1, .4, 2);
 settings.volume = clamp(Number(settings.volume) || 0, 0, 100);
@@ -425,6 +426,21 @@ function lobby() {
     save();
     lobby()
   });
+  const is3v3 = rules.mode === '3v3';
+  $('allyAiWrap').hidden = !is3v3;
+  group('allyNv21', rules.allyNv21, k => {
+    rules.allyNv21 = Number(k);
+    save();
+    lobby()
+  });
+  $('allyNv21Hint').textContent = rules.allyNv21 === 1
+    ? 'NAGI（D1）を NV2.1 に強化 · 高速反応 / 多弾同時回避 / 目視予測スパイ裏どり'
+    : rules.allyNv21 === 2
+      ? 'KAI（MS10）を NV2.1 に強化 · 高速反応 / 多弾同時回避 / 目視予測スパイ裏どり'
+      : '味方NPC2体は標準NV2（人間的な照準・戦術連携）で出撃します';
+  $('lobbyAiLabel').textContent = is3v3 && rules.allyNv21 > 0
+    ? `NV2 + NV2.1 SPY (${rules.allyNv21 === 1 ? 'NAGI' : 'KAI'})`
+    : 'NV2 Deep Tactical';
   group('limit', rules.limit, k => {
     rules.limit = k;
     save();
@@ -608,7 +624,9 @@ function event(e) {
     noticeUntil = match.time + 2.8
   }
   if (e.type === 'point') {
-    feed.push({line: `${e.actor.name}　›　${e.victim.name}`, team: e.actor.team, until: match.time + 4.5});
+    const aTag = e.actor.isSpy ? `${e.actor.name}<span class="tag-nv21">2.1</span>` : e.actor.name;
+    const vTag = e.victim.isSpy ? `${e.victim.name}<span class="tag-nv21">2.1</span>` : e.victim.name;
+    feed.push({line: `${aTag}　›　${vTag}`, team: e.actor.team, until: match.time + 4.5});
     equipment.award(e)
   }
   if (e.type === 'dry' && e.actor === p) {
@@ -623,6 +641,21 @@ function hud() {
   $('scoreA').textContent = match.scores[0];
   $('scoreB').textContent = match.scores[1];
   $('hudRule').textContent = Number.isFinite(match.goals[0]) ? (match.goals[0] === match.goals[1] ? `${match.goals[0]} 点先取` : `${match.goals[0]} / ${match.goals[1]} 点先取`) : '無制限';
+  const spy = match.nv.getSpyStatus?.();
+  const spyEl = $('spyStatus');
+  if (spy?.active) {
+    spyEl.hidden = false;
+    $('spyTag').textContent = `NV2.1 ${spy.name}`;
+    $('spyMode').textContent = !spy.alive
+      ? '再出撃待機'
+      : spy.markName && spy.mode === 'SPY_INFILTRATE'
+        ? `${spy.label} · ${spy.markName}`
+        : spy.label;
+    spyEl.classList.toggle('is-strike', spy.alive && spy.mode === 'SPY_STRIKE');
+    spyEl.classList.toggle('is-dodge', spy.alive && spy.dodging);
+  } else {
+    spyEl.hidden = true;
+  }
   $('hpVal').textContent = a.hp;
   $('shieldVal').textContent = a.shield;
   $('hpBar').style.width = a.hp + '%';
@@ -659,7 +692,7 @@ function resultUI() {
   $('outcome').textContent = match.winner === null ? '試合終了' : match.winner === 0 ? '味方チームの勝利' : '敵チームの勝利';
   $('finalA').textContent = match.scores[0];
   $('finalB').textContent = match.scores[1];
-  $('roster').innerHTML = '<div class="roster-row heading"><span>参加者</span><span>撃破</span><span>ダウン</span></div>' + match.actors.map(a => `<div class="roster-row"><span class="${a.team?'orange':'cyan'}">${a.name}${a.human?' · 自分':''}</span><span>${a.kills}</span><span>${a.deaths}</span></div>`).join('');
+  $('roster').innerHTML = '<div class="roster-row heading"><span>参加者</span><span>撃破</span><span>ダウン</span></div>' + match.actors.map(a => `<div class="roster-row"><span class="${a.team?'orange':'cyan'}">${a.name}${a.human?' · 自分':a.isSpy?'<span class="tag-nv21">NV2.1 SPY</span>':''}</span><span>${a.kills}</span><span>${a.deaths}</span></div>`).join('');
   equipment.result(match)
 }
 function turn(dx, dy) {

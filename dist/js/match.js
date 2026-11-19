@@ -65,14 +65,19 @@ export class Match {
     this.goals = counts.map(n => config.limit === 'unlimited' ? Infinity : n * clamp(Math.round(config.multiplier) || 5, 1, 99));
     this.receiptId = globalThis.crypto?.randomUUID?.() || Date.now().toString(36) + Math.random().toString(36).slice(2);
     this.nv = new NV2(this);
+    const rawSpy = config.allyNv21 === true ? 1 : Number(config.allyNv21 || 0);
+    this.allyNv21Slot = config.mode === '3v3' && (rawSpy === 1 || rawSpy === 2) ? rawSpy : 0;
     for (let team = 0; team < 2; team++)for (let slot = 0; slot < counts[team]; slot++) {
       const human = team === 0 && slot === 0;
       const gun = human ? config.loadout : npcWeapons[(slot + team + 1) % npcWeapons.length];
-      const a = {id: this.actors.length, team, slot, human, name: names[team][slot], gun, kills: 0, deaths: 0, earned: 0};
+      const isSpy = !human && team === 0 && slot === this.allyNv21Slot;
+      const aiVersion = human ? 'HUMAN' : isSpy ? 'NV2.1' : 'NV2';
+      const a = {id: this.actors.length, team, slot, human, name: names[team][slot], gun, aiVersion, isSpy, kills: 0, deaths: 0, earned: 0};
       this.actors.push(a);
       this.spawn(a, true)
     }
-    this.player = this.actors[0]
+    this.player = this.actors[0];
+    this.spyActor = this.actors.find(a => a.isSpy) || null
   }
   weapon(a) {
     return weapons[a.gun]
@@ -230,6 +235,7 @@ export class Match {
     });
     if (this.casings.length > 42)this.casings.shift();
     this.nv.sound(a);
+    this.nv.onShotFired?.(a, source);
     this.event('fire', {actor: a, source, gun: a.gun, p: muzzle, dir, speed: w.speed, burstIndex: a.shotCount})
   }
   damage(v, owner, power, dir = null) {
@@ -432,6 +438,27 @@ export class Match {
             enemy: s.team !== pl.team
           })
         }
+      }
+    }
+    // Notify NPCs of close enemy bullet flybys (<2.2m) for realistic suppression startle/flinch
+    if (this.nv.onBulletWhiz && (s.age || 0) < 0.45) {
+      const ab = sub(b, a), ab2 = dot(ab, ab);
+      if (ab2 > 1e-8) {
+        let mask = s.whizNpcMask || 0;
+        for (const v of this.actors) {
+          if (!v.alive || v.human || v.team === s.team || v === target) continue;
+          const bit = 1 << v.id;
+          if (mask & bit) continue;
+          const eye = eyeOf(v);
+          const u = clamp(dot(sub(eye, a), ab) / ab2, 0, 1);
+          const cx = a[0] + ab[0] * u - eye[0], cy = a[1] + ab[1] * u - eye[1], cz = a[2] + ab[2] * u - eye[2];
+          const d = Math.hypot(cx, cy, cz);
+          if (d < 2.25 && (at > 1 || u <= at)) {
+            mask |= bit;
+            this.nv.onBulletWhiz(v, s, d);
+          }
+        }
+        s.whizNpcMask = mask;
       }
     }
     s.old = a;

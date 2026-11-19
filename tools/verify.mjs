@@ -5,10 +5,12 @@ import {PilotWallet} from '../dist/js/wallet.js';
 import {ThermalOptic} from '../dist/js/optic.js';
 import {eyeOf,targetPoint} from '../dist/js/posture.js';
 import {obstruction,surfaceAt,raycastMaterial} from '../dist/js/yard.js';
-import {perspective,lookAt,multiply,invert4} from '../dist/js/geometry.js';
+import {perspective,lookAt,multiply,invert4,STRIDE,random} from '../dist/js/geometry.js';
+import {character} from '../dist/js/models.js';
 import {shadowModes,SHADOW_FLAME_WORLD_GLSL,sfScreenFS,sfBilateralFS} from '../dist/js/shadowflame.js';
 import {KHDR_TONE_GLSL} from '../dist/js/khdr.js';
 import {BONE,ARTICULATED_RIG_GLSL} from '../dist/js/rig.js';
+import {HumanAimController} from '../dist/js/nv21-spy.js';
 import {
   PortAudio,SoundEngin,SOUND_ENGIN_VERSION,SPEED_OF_SOUND,AUDIO_MODES,
   computePropagationDelay,computeAirAbsorption,computeDopplerShift,
@@ -87,7 +89,10 @@ for(const [id,cap,damage,rate,velocity,burstSize] of [['SW T',10,9,100,100,1],['
 }
 for (const [mode,counts] of Object.entries(modes)) {
  const m=new Match({mode,limit:'points',multiplier:2,loadout:'DF1 OUT'});assert.deepEqual(m.goals,counts.map(c=>c*2));assert(m.actors.every(a=>a.human||a.gun!=='DF1 OUT'));
- for(let i=0;i<360*250&&!m.ended;i++)m.step(h,{});assert(m.ended);assert(m.nv.metrics.crouch+m.nv.metrics.scope>0);assert(m.nv.metrics.cover+m.nv.metrics.disengage+m.nv.metrics.evade>0,'NV2 tactical survival behaviors active');assert(m.nv.metrics.beliefTrack+m.nv.metrics.commanderOrders+m.nv.metrics.suppress+m.nv.metrics.crossfire>0,'NV2 cognitive behaviors active');assert(m.nv.metrics.neuralInferences>0&&m.nv.metrics.neuralUpdates>0&&m.nv.metrics.lookaheadPlans>0,'NV2 deep transformer neural core & minimax lookahead active');console.log(mode,m.scores,Math.round(m.time)+'s',JSON.stringify(m.nv.metrics));
+ for(let i=0;i<360*250&&!m.ended;i++)m.step(h,{});assert(m.ended);assert(m.nv.metrics.crouch+m.nv.metrics.scope>0);assert(m.nv.metrics.cover+m.nv.metrics.disengage+m.nv.metrics.evade>0,'NV2 tactical survival behaviors active');assert(m.nv.metrics.beliefTrack+m.nv.metrics.commanderOrders+m.nv.metrics.suppress+m.nv.metrics.crossfire>0,'NV2 cognitive behaviors active');assert(m.nv.metrics.neuralInferences>0&&m.nv.metrics.neuralUpdates>0&&m.nv.metrics.lookaheadPlans>0,'NV2 deep transformer neural core & minimax lookahead active');
+ const hitRate=m.nv.metrics.npcShots>0?m.nv.metrics.npcHits/m.nv.metrics.npcShots:0;
+ assert(m.nv.metrics.npcShots>=50&&hitRate>0.10&&hitRate<0.72,`NPC accuracy in ${mode} must be authentically human (got ${(hitRate*100).toFixed(1)}% from ${m.nv.metrics.npcHits}/${m.nv.metrics.npcShots})`);
+ console.log(mode,m.scores,Math.round(m.time)+'s',`hitRate=${(hitRate*100).toFixed(1)}%`,JSON.stringify(m.nv.metrics));
 }
 {
  const storage=new Map();globalThis.localStorage={getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v)};const w=new PilotWallet(()=>{});await w.ready;assert(!await w.change());assert(await w.change('m/1'));assert(!await w.change('m/1'));assert(await w.change());assert(!await w.change());const second=new PilotWallet(()=>{});await second.ready;assert.deepEqual(second.state,{units:5,evr:true});assert(!await second.change('m/1'));
@@ -179,7 +184,105 @@ for (const [mode,counts] of Object.entries(modes)) {
  assert(m.trigger(m.player));
  for(let i=0;i<360;i++)m.step(h,{});
  assert(ev.some(e=>e.type==='casing'),'Ejected shell casings must emit physical bounce events');
- console.log('Sound Engin 1.0 acoustics OK:',{clearHz:Math.round(clearPath.cutoffHz),blockedHz:Math.round(blockedPath.cutoffHz),earlyTaps:taps.length,alleyEnc:Number(envAlley.enclosure.toFixed(2)),openEnc:Number(envOpen.enclosure.toFixed(2))});
+  console.log('Sound Engin 1.0 acoustics OK:',{clearHz:Math.round(clearPath.cutoffHz),blockedHz:Math.round(blockedPath.cutoffHz),earlyTaps:taps.length,alleyEnc:Number(envAlley.enclosure.toFixed(2)),openEnc:Number(envOpen.enclosure.toFixed(2))});
 }
-console.log('360Hz sim, weapon specs (incl. MS10 & DF1 OUT full-auto 3-round burst), supply tankers, bullet whiz, focus and occlusion, credits, EVR1, separate regeneration timers, P1 heat, scoring, 16-joint rig, KHDR, Shadow Flame 1.0 Flash/Pro, Sound Engin 1.0, and all three NV2 Deep Tactical matches passed.');
+{
+ // NV2.1 Ally Selector (3V3-only) & Mode Isolation + HumanAimController reaction advantage
+ const mStd=new Match({mode:'3v3',limit:'points',multiplier:2,loadout:'DF1 OUT',allyNv21:0});
+ assert.equal(mStd.allyNv21Slot,0);assert.equal(mStd.spyActor,null);
+ assert(mStd.actors.filter(a=>!a.human).every(a=>a.aiVersion==='NV2'&&!a.isSpy));
+
+ const mNagi=new Match({mode:'3v3',limit:'points',multiplier:2,loadout:'DF1 OUT',allyNv21:1});
+ assert.equal(mNagi.allyNv21Slot,1);assert.equal(mNagi.spyActor,mNagi.actors[1]);
+ assert.equal(mNagi.actors[1].name,'NAGI');assert.equal(mNagi.actors[1].aiVersion,'NV2.1');assert.equal(mNagi.actors[1].isSpy,true);
+ assert.equal(mNagi.actors[2].aiVersion,'NV2');assert.equal(mNagi.actors[2].isSpy,false);
+ assert(mNagi.actors.filter(a=>a.team===1).every(a=>a.aiVersion==='NV2'&&!a.isSpy));
+
+ const mKai=new Match({mode:'3v3',limit:'points',multiplier:2,loadout:'DF1 OUT',allyNv21:2});
+ assert.equal(mKai.allyNv21Slot,2);assert.equal(mKai.spyActor,mKai.actors[2]);
+ assert.equal(mKai.actors[2].name,'KAI');assert.equal(mKai.actors[2].aiVersion,'NV2.1');assert.equal(mKai.actors[2].isSpy,true);
+ assert.equal(mKai.actors[1].aiVersion,'NV2');assert.equal(mKai.actors[1].isSpy,false);
+
+ for (const non3v3 of ['1v1','1v2']) {
+  const mIso=new Match({mode:non3v3,limit:'points',multiplier:2,loadout:'DF1 OUT',allyNv21:1});
+  assert.equal(mIso.allyNv21Slot,0,`${non3v3} must ignore allyNv21`);
+  assert.equal(mIso.spyActor,null,`${non3v3} must not spawn a Spy actor`);
+  assert(mIso.actors.every(a=>!a.isSpy));
+ }
+
+ // HumanAimController: NV2.1 strictly faster visual reaction, acquisition & tracking than NV2
+ const aimNv2=new HumanAimController(random(42),false);
+ const aimNv21=new HumanAimController(random(42),true);
+ assert(aimNv21.reactionDelay<aimNv2.reactionDelay,'NV2.1 must have strictly faster visual reaction delay');
+ assert(aimNv21.acquireMin<aimNv2.acquireMin&&aimNv21.acquireMax<aimNv2.acquireMax,'NV2.1 must have faster target acquisition latency');
+ assert(aimNv21.maxYawRate>aimNv2.maxYawRate&&aimNv21.baseWander<aimNv2.baseWander,'NV2.1 must have crisper tracking & steadier aim');
+
+ // Fair-play Spy Engine visual-sighting check (zero wallhack behind steel container -> sighting only on direct LOS)
+ const mFair=new Match({mode:'3v3',limit:'unlimited',multiplier:2,loadout:'DF1 OUT',allyNv21:1});
+ const spy=mFair.spyActor;
+ const spyBrain=mFair.nv.brains.get(spy.id);
+ Object.assign(spy,{x:-7.8,y:0,z:13,yaw:0,pitch:0,vx:0,vz:0});
+ for (const e of mFair.actors.filter(a=>a.team===1)) Object.assign(e,{x:-7.8,y:0,z:2,yaw:Math.PI,vx:0,vz:0});
+ assert(obstruction(eyeOf(spy),targetPoint(mFair.actors[3]))<=1,'Test geometry must be occluded by steel container');
+ for (let i=0;i<24;i++) mFair.step(h,{});
+ assert.equal(spyBrain.spy.sightings.size,0,'Spy Engine must NOT record occluded enemies (zero wallhack)');
+ Object.assign(spy,{x:2,y:0,z:85,yaw:0,pitch:0,vx:0,vz:0});
+ Object.assign(mFair.actors[3],{x:2,y:0,z:73,yaw:Math.PI,vx:0,vz:0});
+ assert(obstruction(eyeOf(spy),targetPoint(mFair.actors[3]))>1,'Direct LOS test geometry must be unobstructed');
+ for (let i=0;i<24;i++) mFair.step(h,{});
+ assert(spyBrain.spy.sightings.size>=1,'Spy Engine must record enemy immediately upon direct visual LOS');
+
+ // Full 3V3 NV2.1 NAGI simulation + KAI Spy operational check
+ for (let i=0;i<360*250&&!mNagi.ended;i++) mNagi.step(h,{});
+ const nagiMetrics=mNagi.nv.metrics;
+ const nagiStatus=mNagi.nv.getSpyStatus();
+ assert(nagiStatus&&nagiStatus.active&&nagiStatus.name==='NAGI'&&typeof nagiStatus.label==='string','getSpyStatus() must expose live NV2.1 Spy HUD state');
+ assert(nagiMetrics.spySightings>5&&nagiMetrics.spyPredictions>5&&nagiMetrics.spyFlanks>5&&nagiMetrics.spyDodges>10,'NV2.1 NAGI Spy Engine must visually sight, predict, flank, and dodge');
+ assert(nagiMetrics.spyBackstabs>0,'NV2.1 NAGI Spy Engine must achieve rear/flank ambush hits');
+ assert(nagiMetrics.nv21Shots>20&&nagiMetrics.nv21Hits>0,'NV2.1 NAGI must actively engage and score hits');
+ const nagiHitRate=nagiMetrics.nv21Hits/nagiMetrics.nv21Shots;
+ assert(nagiHitRate>0.10&&nagiHitRate<0.75,`NV2.1 NAGI hit rate must remain human-realistic (got ${(nagiHitRate*100).toFixed(1)}%)`);
+
+ for (let i=0;i<360*180&&!mKai.ended;i++) mKai.step(h,{});
+ const kaiMetrics=mKai.nv.metrics;
+ assert(kaiMetrics.spySightings>5&&kaiMetrics.spyPredictions>5&&kaiMetrics.spyFlanks>5&&kaiMetrics.spyDodges>10,'NV2.1 KAI Spy Engine must visually sight, predict, flank, and dodge');
+ assert(kaiMetrics.nv21Shots>15&&kaiMetrics.nv21Hits>0,'NV2.1 KAI must actively engage and score hits');
+ console.log('NV2.1 Spy Engine OK:',{
+  nagi:{ended:mNagi.ended,scores:mNagi.scores,time:Math.round(mNagi.time)+'s',hitRate:(nagiHitRate*100).toFixed(1)+'%',sightings:nagiMetrics.spySightings,predictions:nagiMetrics.spyPredictions,flanks:nagiMetrics.spyFlanks,backstabs:nagiMetrics.spyBackstabs,dodges:nagiMetrics.spyDodges},
+  kai:{scores:mKai.scores,time:Math.round(mKai.time)+'s',sightings:kaiMetrics.spySightings,predictions:kaiMetrics.spyPredictions,flanks:kaiMetrics.spyFlanks,backstabs:kaiMetrics.spyBackstabs,dodges:kaiMetrics.spyDodges}
+ });
+}
+{
+ // High-detail 16-joint sculpted humanoid geometry verification (standard & NV2.1 spy, high & low detail)
+ const stdHi=character(0,'SRA','standard','high');
+ const stdLo=character(0,'SRA','standard','low');
+ const spyHi=character(0,'SRA','spy','high');
+ const spyLo=character(0,'SRA','spy','low');
+ assert(stdHi.count>stdLo.count*1.25,`High-detail sculpted mesh (${stdHi.count} verts) must be richer than low-detail (${stdLo.count} verts)`);
+ assert(spyHi.count>spyLo.count*1.25,'Spy high-detail sculpted mesh must be richer than low-detail');
+ for (const [label,mesh] of [['stdHi',stdHi],['stdLo',stdLo],['spyHi',spyHi],['spyLo',spyLo]]) {
+  const bones=new Set();
+  let minY=Infinity,maxY=-Infinity,emissiveVerts=0;
+  for (let i=0;i<mesh.data.length;i+=STRIDE) {
+   const x=mesh.data[i],y=mesh.data[i+1],z=mesh.data[i+2];
+   const nx=mesh.data[i+3],ny=mesh.data[i+4],nz=mesh.data[i+5];
+   const kb=mesh.data[i+12];
+   assert(Number.isFinite(x)&&Number.isFinite(y)&&Number.isFinite(z)&&Number.isFinite(nx)&&Number.isFinite(ny)&&Number.isFinite(nz),`${label} vertex ${i/STRIDE} must have finite pos & normal`);
+   if (y<minY) minY=y;
+   if (y>maxY) maxY=y;
+   const bone=Math.floor((kb+0.5)/10);
+   const kind=Math.round(kb-bone*10);
+   bones.add(bone);
+   if (kind===3) emissiveVerts++;
+  }
+  for (let b=0;b<16;b++) assert(bones.has(b),`${label} must populate all 16 articulated bones (missing bone ${b})`);
+  assert(minY>=-0.01&&minY<=0.015,`${label} boot sole must rest on ground plane (minY=${minY.toFixed(4)})`);
+  assert(maxY>1.75&&maxY<2.15,`${label} humanoid height must be realistic (maxY=${maxY.toFixed(3)})`);
+  assert(emissiveVerts>0,`${label} must include emissive visor/accent geometry`);
+ }
+ assert(spyHi.count!==stdHi.count,'NV2.1 Spy variant must feature distinct sculpted NVG/stealth geometry');
+ assert(ARTICULATED_RIG_GLSL.includes('isPatella'),'rig.js must include bisector floating patella knee-cap motion');
+ console.log('Sculpted 16-joint meshes OK:',{stdHiVerts:stdHi.count,stdLoVerts:stdLo.count,spyHiVerts:spyHi.count,spyLoVerts:spyLo.count});
+}
+console.log('360Hz sim, weapon specs (incl. MS10 & DF1 OUT full-auto 3-round burst), supply tankers, bullet whiz, focus and occlusion, credits, EVR1, separate regeneration timers, P1 heat, scoring, 16-joint sculpted rig, KHDR, Shadow Flame 1.0 Flash/Pro, Sound Engin 1.0, Human-Realistic Aiming, NV2.1 Spy Engine, and all matches passed.');
 

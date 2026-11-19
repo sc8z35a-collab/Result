@@ -131,7 +131,10 @@ export class Renderer {
     this.devices = {};
     for (const g of Object.keys(weapons)) {
       this.devices[g] = gpuMesh(gl, viewModel(g));
-      if (npcWeapons.includes(g)) for (const team of [0, 1]) this.actors[team + g] = gpuMesh(gl, character(team, g));
+      if (npcWeapons.includes(g)) for (const team of [0, 1]) {
+        this.actors[team + g] = gpuMesh(gl, character(team, g, 'standard', 'high'));
+        this.actors['spy_' + team + g] = gpuMesh(gl, character(team, g, 'spy', 'high'));
+      }
     }
     this.effects = gpuMesh(gl, null, true);
     this.fpFlash = gpuMesh(gl, null, true);
@@ -368,7 +371,7 @@ export class Renderer {
         if (p.uAnim) gl.uniform4f(p.uAnim, a.fwdVel || 0, a.sideVel || 0, a.airBlend || 0, a.landCompress || 0);
         if (p.uAnim2) gl.uniform4f(p.uAnim2, a.pitch || 0, time + a.id * 1.13, a.sprintAmt || 0, a.reloadFrac || 0);
         gl.uniform2f(p.uHitFX, a.hitFlash || 0, a.shieldFlash || 0);
-        this.draw(this.actors[a.team + a.gun]);
+        this.draw(this.actors[(a.isSpy ? 'spy_' : '') + a.team + a.gun] || this.actors[a.team + a.gun]);
       }
     }
 

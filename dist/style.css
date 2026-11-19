@@ -718,4 +718,135 @@ body.touch #dfHud {
   #touchDF { bottom: calc(max(22px, calc(env(safe-area-inset-bottom) + 14px)) + 168px); }
 }
 
+/* ==========================================================================
+   NV2.1 Spy Engine 3V3 Ally Selector, Badges & Live Tactical HUD Pill
+   ========================================================================== */
+.ally-ai-wrap {
+  padding: 11px 13px 12px;
+  border-radius: 7px;
+  background: linear-gradient(135deg, #102a2e9e, #15252988);
+  border: 1px solid #59dfca42;
+  border-left: 3px solid #5ee8d0;
+}
+.ally-ai-wrap[hidden] { display: none; }
+.badge-nv21 {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font: 800 10px/1.25 var(--mono);
+  letter-spacing: .12em;
+  color: #82ffe8;
+  background: linear-gradient(180deg, #164947, #0d2f30);
+  border: 1px solid #63eed688;
+  box-shadow: 0 0 10px #52e5cc33;
+  vertical-align: 1px;
+}
+.spy-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.spy-grid button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  text-align: left;
+  min-height: 54px;
+  padding: 9px 11px;
+  white-space: normal;
+  gap: 3px;
+}
+.spy-grid button b {
+  font-size: 13px;
+  letter-spacing: .03em;
+  color: #eef7f3;
+}
+.spy-grid button span {
+  font-size: 10.5px;
+  font-weight: 500;
+  color: #a9c5be;
+  line-height: 1.25;
+}
+.spy-grid button[aria-pressed=true][data-value="1"],
+.spy-grid button[aria-pressed=true][data-value="2"] {
+  border-color: #62efd6;
+  background: linear-gradient(180deg, #43dbc133, #17403e4d);
+  box-shadow: inset 0 -3px #62efd6, 0 0 16px #4ae2c730;
+}
+.spy-grid button[aria-pressed=true][data-value="1"] b,
+.spy-grid button[aria-pressed=true][data-value="2"] b {
+  color: #96ffee;
+}
+.spy-note {
+  margin-top: 8px;
+  color: #a6ded3;
+  font-size: 11.5px;
+}
+.spy-status {
+  position: absolute;
+  top: calc(max(14px, env(safe-area-inset-top)) + 58px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: #0d2125cc;
+  border: 1px solid #59e4cc66;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 4px 16px #04101370, 0 0 12px #4ee0c824;
+  font-size: 11px;
+  letter-spacing: .04em;
+  color: #c7f7ee;
+  pointer-events: none;
+  z-index: 4;
+  white-space: nowrap;
+}
+.spy-status[hidden] { display: none; }
+.spy-status .spy-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #5ff2d6;
+  box-shadow: 0 0 8px #5ff2d6;
+}
+.spy-status b {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: .08em;
+  color: #8bffee;
+}
+.spy-status.is-strike {
+  border-color: #f4cb6eaa;
+  box-shadow: 0 4px 18px #04101380, 0 0 16px #f4cb6e44;
+}
+.spy-status.is-strike .spy-dot {
+  background: #ffd778;
+  box-shadow: 0 0 10px #ffd778;
+}
+.spy-status.is-dodge {
+  border-color: #79f7ffbb;
+  box-shadow: 0 4px 18px #04101380, 0 0 16px #79f7ff48;
+}
+.tag-nv21 {
+  display: inline-block;
+  margin-left: 5px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font: 800 9.5px/1.3 var(--mono);
+  letter-spacing: .08em;
+  color: #82ffe8;
+  background: #103a3b;
+  border: 1px solid #5be5cc70;
+  vertical-align: 1px;
+}
+@media (max-width: 600px) {
+  .spy-grid { grid-template-columns: 1fr; }
+  .spy-grid button { min-height: 46px; flex-direction: row; align-items: center; justify-content: space-between; }
+}
+
+
 

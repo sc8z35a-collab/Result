@@ -254,10 +254,13 @@ void rigApplyCharacter(inout vec3 p, inout vec3 n, int boneId, vec2 gait, vec3 p
       p = hipP + rigEuler(d, pelRot);
       n = normalize(rigEuler(rigEuler(n, la.hip), pelRot));
     } else if(part == 1){
-      // Shin + Knee Pad (Knee -> Ankle)
-      vec3 d = rigRotX(p - bKnee, la.knee);
+      // Shin + Bisector Floating Patella Knee-Pad (Knee -> Ankle)
+      vec3 loc = p - bKnee;
+      float isPatella = smoothstep(0.068, 0.048, abs(loc.y)) * smoothstep(-0.048, -0.080, loc.z);
+      float kAng = mix(la.knee, la.knee * 0.52, isPatella);
+      vec3 d = rigRotX(loc, kAng);
       p = kneeP + rigEuler(rigEuler(d, la.hip), pelRot);
-      n = normalize(rigEuler(rigEuler(rigRotX(n, la.knee), la.hip), pelRot));
+      n = normalize(rigEuler(rigEuler(rigRotX(n, kAng), la.hip), pelRot));
     } else {
       // Foot + Articulated Forefoot Toe Hinge (bends naturally at ball of foot z = -0.055 during push-off & crouch!)
       vec3 loc = p - bAnk;

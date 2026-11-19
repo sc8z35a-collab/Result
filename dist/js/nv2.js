@@ -23,6 +23,15 @@ import {NV13Pro, getTacticalGraph, canSeeNode, WEAPON_BAND, cellOf, CELLS, lowCo
 import {clamp, mix, angleDiff, random} from './geometry.js';
 import {walkable, obstruction, rayBox, moveActor, floorAt} from './yard.js';
 import {eyeOf, targetPoint, postureStep, vertical} from './posture.js';
+import {
+  HumanAimController,
+  SpyAgentState,
+  SPY_STATE_LABELS,
+  recordVisualSighting,
+  planSpyTactics,
+  computeSpyDodge,
+  rearAdvantage
+} from './nv21-spy.js';
 
 const dist2 = (ax, az, bx, bz) => Math.hypot(ax - bx, az - bz);
 const sigmoid = x => 1 / (1 + Math.exp(-clamp(x, -12, 12)));
@@ -709,6 +718,7 @@ export class NV2 extends NV13Pro {
   constructor(match) {
     super(match);
     this.version = 'NV2';
+    this.hasNv21 = false;
     this.neural = new NV2NeuralCore(202607);
     this.nv2Teams = [new NV2TeamState(0), new NV2TeamState(1)];
     this.metrics = {
@@ -722,7 +732,16 @@ export class NV2 extends NV13Pro {
       executePushes: 0,
       jigglePeeks: 0,
       jumpPeeks: 0,
-      counterStrafes: 0
+      counterStrafes: 0,
+      npcShots: 0,
+      npcHits: 0,
+      nv21Shots: 0,
+      nv21Hits: 0,
+      spySightings: 0,
+      spyPredictions: 0,
+      spyFlanks: 0,
+      spyBackstabs: 0,
+      spyDodges: 0
     };
   }
 
@@ -730,6 +749,9 @@ export class NV2 extends NV13Pro {
     super.attach(actor);
     const b = this.brains.get(actor.id);
     if (b) {
+      const isNv21 = actor.aiVersion === 'NV2.1' || !!actor.isSpy;
+      if (isNv21) this.hasNv21 = true;
+      b.isNv21 = isNv21;
       b.visibleEnemies = [];
       b.dodgeVec = [0, 0];
       b.dodgeUntil = -1;
@@ -742,7 +764,30 @@ export class NV2 extends NV13Pro {
       b.lastMacroPi = null;
       b.stepReward = 0;
       b.lastFocusDist = 40;
+      b.humanAim = new HumanAimController(b.rng, isNv21);
+      b.spy = isNv21 ? new SpyAgentState() : null;
     }
+  }
+
+  getSpyStatus() {
+    const spyActor = this.match.spyActor;
+    if (!spyActor) return null;
+    const b = this.brains.get(spyActor.id);
+    if (!b?.spy) return null;
+    const t = this.match.time;
+    const dodging = t < b.dodgeUntil && b.spy.dodgeUrgency > 0.5;
+    const mark = b.spy.markId >= 0 ? this.match.actors[b.spy.markId] : null;
+    return {
+      active: true,
+      alive: spyActor.alive,
+      name: spyActor.name,
+      mode: b.spy.mode,
+      label: dodging ? '弾除け回避' : (SPY_STATE_LABELS[b.spy.mode] || '視認偵察'),
+      dodging,
+      markName: mark?.alive ? mark.name : '',
+      intent: b.spy.prediction?.intent || '',
+      sightings: b.spy.sightings.size
+    };
   }
 
   buildToken(teamIdx, eventChannel, actor = null, target = null) {
@@ -867,7 +912,21 @@ export class NV2 extends NV13Pro {
     }
   }
 
-  // Event Hooks: feed rich causal tokens + online RL reward signals into NV2NeuralCore!
+  // Event Hooks: feed rich causal tokens + online RL reward signals + HumanAim recoil/flinch + SpyEngine!
+  onShotFired(actor) {
+    if (!actor || actor.human) return;
+    this.metrics.npcShots++;
+    if (actor.isSpy) this.metrics.nv21Shots++;
+    const b = this.brains.get(actor.id);
+    if (b?.humanAim) b.humanAim.onShotFired(actor.gun, (b.burstCount || 0) >= 1);
+  }
+
+  onBulletWhiz(actor, shot, dist) {
+    if (!actor || actor.human || dist > 2.25) return;
+    const b = this.brains.get(actor.id);
+    if (b?.humanAim) b.humanAim.onWhizShock();
+  }
+
   onHit(victim, attacker, dir, power) {
     super.onHit(victim, attacker, dir, power);
     const t = this.match.time;
@@ -876,12 +935,22 @@ export class NV2 extends NV13Pro {
 
     // Attacker team observes hit dealt / shield break -> positive reward + EXECUTE window!
     if (attacker && attacker.team !== victim.team) {
+      if (!attacker.human) {
+        this.metrics.npcHits++;
+        if (attacker.isSpy) this.metrics.nv21Hits++;
+      }
       const stA = this.nv2Teams[attacker.team];
       const ch = shieldBroken ? 4 : 2;
       stA.pushToken(this.buildToken(attacker.team, ch, attacker, victim));
       stA.lastReward += shieldBroken ? 0.55 : 0.16;
       const bA = this.brains.get(attacker.id);
-      if (bA) bA.stepReward += shieldBroken ? 0.65 : 0.22;
+      if (bA) {
+        bA.stepReward += shieldBroken ? 0.65 : 0.22;
+        if (bA.spy && rearAdvantage(attacker.x, attacker.z, victim.x, victim.z, victim.yaw) > 0.0) {
+          this.metrics.spyBackstabs++;
+          bA.spy.lastBackstabAt = t;
+        }
+      }
 
       if (shieldBroken || lowHp) {
         stA.executeTargetId = victim.id;
@@ -889,23 +958,38 @@ export class NV2 extends NV13Pro {
       }
     }
 
-    // Victim team observes hit taken -> negative reward + survival token
+    // Victim team observes hit taken -> negative reward + survival token + human aim flinch!
     const stV = this.nv2Teams[victim.team];
     stV.pushToken(this.buildToken(victim.team, 3, victim, attacker));
     stV.lastReward -= shieldBroken ? 0.45 : 0.14;
     const bV = this.brains.get(victim.id);
-    if (bV) bV.stepReward -= shieldBroken ? 0.55 : 0.18;
+    if (bV) {
+      bV.stepReward -= shieldBroken ? 0.55 : 0.18;
+      if (bV.humanAim) bV.humanAim.onHitShock(power);
+    }
   }
 
   onKill(killer, victim) {
     super.onKill(killer, victim);
+    const t = this.match.time;
     if (killer) {
       const stK = this.nv2Teams[killer.team];
       stK.pushToken(this.buildToken(killer.team, 4, killer, victim));
       stK.lastReward += 1.45;
       const bK = this.brains.get(killer.id);
-      if (bK) bK.stepReward += 1.65;
+      if (bK) {
+        bK.stepReward += 1.65;
+        // After an NV2.1 Spy assassination, slip back into shadow if injured or another enemy is nearby
+        if (bK.spy && (killer.hp < 84 || killer.mag < Math.max(4, this.match.weapon(killer).capacity * 0.35))) {
+          bK.spy.vanishUntil = Math.max(bK.spy.vanishUntil, t + 2.1);
+          bK.planAt = t + 0.05;
+        }
+      }
       if (stK.executeTargetId === victim.id) stK.executeTargetId = -1;
+    }
+    // Clear eliminated enemy from any spy's visual dossier
+    for (const [, br] of this.brains) {
+      if (br.spy) br.spy.clearSighting(victim.id);
     }
     const stV = this.nv2Teams[victim.team];
     stV.lastReward -= 1.25;
@@ -1124,9 +1208,9 @@ export class NV2 extends NV13Pro {
   dodgeIncomingShots(a, b) {
     const t = this.match.time;
     const shots = this.match.shots;
-    if (!shots.length) return;
+    if (!shots.length || t < (b.dodgeCooldownAt || 0)) return;
     const ax = a.x, ay = a.y + 1.02, az = a.z;
-    let bestImp = 0.26;
+    let bestImp = 0.24;
     let dodgeX = 0, dodgeZ = 0, duckHigh = false;
 
     for (let i = 0; i < shots.length; i++) {
@@ -1134,53 +1218,83 @@ export class NV2 extends NV13Pro {
       if (s.team === a.team) continue;
       const rx = ax - s.p[0], ry = ay - s.p[1], rz = az - s.p[2];
       const d2 = rx * rx + ry * ry + rz * rz;
-      if (d2 > 900 || d2 < 0.25) continue; // >30m or already passed
+      if (d2 > 900 || d2 < 2.2) continue; // >30m or too close for human reaction
       const along = rx * s.dir[0] + ry * s.dir[1] + rz * s.dir[2];
       if (along <= 0) continue; // flying away
       const tImp = along / Math.max(80, s.speed);
-      if (tImp > bestImp) continue;
+      // Standard NV2 needs realistic human reaction window (cannot Matrix-dodge point-blank bullets!)
+      if (tImp > bestImp || tImp < 0.085) continue;
 
       // Closest point of approach to actor center
       const cx = s.p[0] + s.dir[0] * along - ax;
       const cy = s.p[1] + s.dir[1] * along - ay;
       const cz = s.p[2] + s.dir[2] * along - az;
       const missH = Math.hypot(cx, cz);
-      if (missH < 0.82 && Math.abs(cy) < 0.92) {
+      if (missH < 0.72 && Math.abs(cy) < 0.88) {
         bestImp = tImp;
-        // Step strictly AWAY from bullet line in horizontal plane!
         const px = -s.dir[2], pz = s.dir[0];
         const sideDot = cx * px + cz * pz;
         const sign = sideDot >= 0 ? -1 : 1;
         dodgeX = px * sign;
         dodgeZ = pz * sign;
-        // High-trajectory shot -> sudden crouch-duck drops torso below bullet!
         if (s.p[1] + s.dir[1] * along > a.y + 1.18 && a.onGround) duckHigh = true;
       }
     }
 
-    if (bestImp < 0.26) {
+    if (bestImp < 0.24) {
       const len = Math.hypot(dodgeX, dodgeZ) || 1;
       b.dodgeVec[0] = dodgeX / len;
       b.dodgeVec[1] = dodgeZ / len;
       if (t >= b.dodgeUntil) this.metrics.projDodges++;
-      b.dodgeUntil = t + 0.24;
+      b.dodgeUntil = t + 0.18;
+      b.dodgeCooldownAt = t + 0.72;
       if (duckHigh && t > b.crouchFeintUntil) {
-        b.crouchFeintUntil = t + 0.30;
+        b.crouchFeintUntil = t + 0.26;
       }
     }
   }
 
-  // Override perceive to feed Transformer SIGHT tokens & 2nd-order velocity/accel tracking
+  // Override perceive to feed Transformer SIGHT tokens, 2nd-order tracking, & NV2.1 Visual Sighting Dossier
   perceive(a, b) {
     const hadTarget = b.seen;
     super.perceive(a, b);
+    const t = this.match.time;
     const st = this.nv2Teams[a.team];
     if (!b.visibleEnemies) b.visibleEnemies = [];
     b.visibleEnemies.length = 0;
+
+    // NV2.1 agile peripheral visual scan (strictly direct LOS via obstruction() > 1 — ZERO wallhack!)
+    if (b.spy) {
+      const eye = eyeOf(a);
+      for (const e of this.match.actors) {
+        if (!e.alive || e.team === a.team || b.contacts.get(e.id)?.seen) continue;
+        const dx = e.x - a.x, dz = e.z - a.z, d = Math.hypot(dx, dz);
+        const aimYaw = Math.atan2(dx, -dz);
+        const fovDiff = Math.abs(angleDiff(a.yaw, aimYaw));
+        if ((d < 16 || (d < 86 && fovDiff < 1.72)) && obstruction(eye, targetPoint(e)) > 1) {
+          b.contacts.set(e.id, {
+            x: e.x, y: e.y, z: e.z, vx: e.vx || 0, vz: e.vz || 0,
+            t, seen: true, gun: e.gun, hp: e.hp + e.shield
+          });
+          if (!b.seen) {
+            b.target = e;
+            b.targetId = e.id;
+            b.seen = {x: e.x, y: e.y, z: e.z, vx: e.vx || 0, vz: e.vz || 0};
+            b.lastPos = [e.x, e.z];
+            b.lastSeenTargetPos = [e.x, e.y + 1.15, e.z];
+            b.lastSeenTargetAt = t;
+            b.seenAt = t;
+            if (b.exposedSince < 0) b.exposedSince = t;
+          }
+        }
+      }
+    }
+
     for (const e of this.match.actors) {
       if (e.alive && e.team !== a.team && b.contacts.get(e.id)?.seen) {
         b.visibleEnemies.push(e);
         this.recordEnemyObservation(a.team, e);
+        if (b.spy) recordVisualSighting(b.spy, a, e, t, this.metrics);
       }
     }
     if (b.seen && b.target && !hadTarget) {
@@ -1188,13 +1302,24 @@ export class NV2 extends NV13Pro {
     }
   }
 
-  // Override pickGoal to inject NV2 Execute Collapse, Neural Macro Policy Bias,
+  // Override pickGoal to inject NV2.1 Spy Engine stealth backstab routing, NV2 Execute Collapse,
   // Ultra-Tight <0.27s Jiggle-Peeking vs DF1 OUT, and Jump-Peek Corner Scouting!
   pickGoal(a, b) {
     const t = this.match.time;
     const cog = this.teams[a.team];
     const st = this.nv2Teams[a.team];
     const ord = cog.roles.get(a.id);
+
+    // 0. NV2.1 Spy Engine: visual-sighting prediction -> FOV-occluded stealth rear flank -> strike -> vanish!
+    if (b.spy) {
+      this.astarUsedThisTick = -8;
+      // Only pause spy loop if critically out of reserve ammo right next to a ready supply tanker
+      const urgentTanker = a.stock < 24 && (this.match.tankers || []).some(tk => tk.cooldown <= 0 && dist2(a.x, a.z, tk.x, tk.z) < 16);
+      if (!urgentTanker && planSpyTactics(this, a, b, b.spy)) {
+        b.prevState = b.state;
+        return;
+      }
+    }
 
     // 1. Coordinated EXECUTE COLLAPSE on shield-broken / low-HP / reloading target!
     const execTarget = st.executeTargetId >= 0 && t < st.executeUntil ? this.match.actors[st.executeTargetId] : null;
@@ -1252,7 +1377,7 @@ export class NV2 extends NV13Pro {
 
   // ============================================================================
   // 360Hz Main Tick Loop (Time-Normalized Fields, 4Hz Strategy Lookahead,
-  // Online Transformer Backprop, 3D Projectile Dodge & 2nd-Order Lead Aiming)
+  // Online Transformer Backprop, NV2.1 Spy Dodge & Human Neuromotor Aiming)
   // ============================================================================
   tick(dt) {
     const t = this.match.time;
@@ -1305,24 +1430,25 @@ export class NV2 extends NV13Pro {
       if (!a.alive || a.human) continue;
       const b = this.brains.get(a.id);
       const cog = this.teams[a.team];
-      const st = this.nv2Teams[a.team];
+      const isSpy = !!b.spy;
 
       if (t - b.damageClock > 1.45) b.recentDamage = Math.max(0, b.recentDamage - dt * 20);
 
-      // Active 360Hz 3D incoming-projectile trajectory dodge + threat detection
+      // Active 360Hz 3D incoming-projectile trajectory dodge (upgraded multi-bullet + aim-cone solver for NV2.1!)
       this.detectIncoming(a, b);
-      this.dodgeIncomingShots(a, b);
+      if (isSpy) computeSpyDodge(this, a, b, b.spy);
+      else this.dodgeIncomingShots(a, b);
 
       if (t >= b.sightAt) {
         this.perceive(a, b);
-        // Tighter 360Hz perception refresh cadence
-        b.sightAt = t + (b.seen ? 0.055 : 0.115);
+        // NV2.1 reacts significantly faster visually than NV2
+        b.sightAt = t + (isSpy ? (b.seen ? 0.028 : 0.062) : (b.seen ? 0.060 : 0.125));
       }
       if (t >= b.planAt) this.pickGoal(a, b);
 
       if (t >= b.motionAt) {
         b.pose = this.choosePose(a, b);
-        b.motionAt = t + 0.065 + b.rng() * 0.03;
+        b.motionAt = t + (isSpy ? (0.038 + b.rng() * 0.018) : (0.070 + b.rng() * 0.032));
       }
       const p = b.pose || {crouch: false, lean: 0, ads: false};
       const wantCrouch = (p.crouch || t < b.crouchFeintUntil) && a.onGround;
@@ -1341,8 +1467,9 @@ export class NV2 extends NV13Pro {
       }
       postureStep(a, dt, wantCrouch, p.lean, p.ads);
       const sprinting = b.state === '戦術退避' || b.state === '連携側面展開' || b.state === 'リロード狩り'
-        || b.state === '補給確保' || b.state === '前進展開' || b.state === '一斉突入';
-      a.paceFactor = b.vault ? 1.16 : sprinting ? 1.22 : 1 - a.crouch * 0.35 - a.aimPose * 0.08;
+        || b.state === '補給確保' || b.state === '前進展開' || b.state === '一斉突入'
+        || b.state === '潜入裏どり中' || b.state === '裏どり急襲' || b.state === '離脱・再潜伏' || b.state === '視認偵察';
+      a.paceFactor = b.vault ? 1.16 : sprinting ? (isSpy ? 1.26 : 1.22) : 1 - a.crouch * 0.35 - a.aimPose * 0.08;
       const wasAir = !a.onGround;
       const preVy = a.vy;
       vertical(a, dt, floorAt);
@@ -1357,18 +1484,20 @@ export class NV2 extends NV13Pro {
 
       // Active 3D Projectile Dodge Override (highest micro-movement priority!)
       const dodgingShot = t < b.dodgeUntil;
+      const spyInfiltrating = isSpy && (b.spy.mode === 'SPY_INFILTRATE' || b.spy.mode === 'SPY_VANISH');
       if (dodgingShot) {
-        dx = dx * 0.25 + b.dodgeVec[0] * 0.85;
-        dz = dz * 0.25 + b.dodgeVec[1] * 0.85;
-      } else if (b.seen && b.target && b.state !== '戦術退避' && b.state !== '態勢立て直し' && b.state !== '予測待ち伏せ') {
-        // Non-linear unpredictable combat strafing + short reversal jitter
+        const wD = isSpy ? 0.90 : 0.85;
+        dx = dx * (1 - wD) + b.dodgeVec[0] * wD;
+        dz = dz * (1 - wD) + b.dodgeVec[1] * wD;
+      } else if (b.seen && b.target && !spyInfiltrating && b.state !== '戦術退避' && b.state !== '態勢立て直し' && b.state !== '予測待ち伏せ') {
+        // Non-linear unpredictable combat strafing + faster reversal cadence for NV2.1
         if (t >= b.strafeAt) {
           b.strafe = b.rng() < 0.5 ? -1 : 1;
-          b.strafeAt = t + 0.28 + b.rng() * 0.42;
+          b.strafeAt = t + (isSpy ? (0.19 + b.rng() * 0.26) : (0.30 + b.rng() * 0.44));
         }
         const toX = b.target.x - a.x, toZ = b.target.z - a.z, td = Math.hypot(toX, toZ) || 1;
         const sx = -toZ / td * b.strafe, sz = toX / td * b.strafe;
-        const w = L ? 0.48 : 0.90;
+        const w = L ? (isSpy ? 0.54 : 0.48) : 0.90;
         dx = dx * (1 - w) + sx * w;
         dz = dz * (1 - w) + sz * w;
       } else if (t - b.underFireAt < 0.45 && b.threatDir) {
@@ -1392,97 +1521,86 @@ export class NV2 extends NV13Pro {
       const norm = Math.hypot(dx, dz);
       if (norm > 0.01) { dx /= norm; dz /= norm; }
 
-      // Counter-Strafe Micro-Stop: crisp 55ms deceleration right before high-precision shot!
+      // Counter-Strafe Micro-Stop: crisp deceleration right before high-precision shot!
       const counterStrafing = t < b.counterStrafeUntil && !dodgingShot;
       let speed = (b.state === '態勢立て直し' || b.state === '予測待ち伏せ' ? (L > 0.5 ? 2.6 : 0) : 4.64) * a.paceFactor;
-      if (dodgingShot) speed *= 1.18;
+      if (dodgingShot) speed *= isSpy ? 1.28 : 1.18;
       if (counterStrafing) speed *= 0.22;
 
-      const e = 1 - Math.exp(-(counterStrafing ? 26 : dodgingShot ? 19 : 12.8) * dt);
+      const e = 1 - Math.exp(-(counterStrafing ? 26 : dodgingShot ? (isSpy ? 24 : 19) : (isSpy ? 14.8 : 12.8)) * dt);
       a.vx += (dx * speed - a.vx) * e;
       a.vz += (dz * speed - a.vz) * e;
       const ox = a.x, oz = a.z;
       moveActor(a, a.vx * dt, a.vz * dt);
       a.stride += Math.hypot(a.x - ox, a.z - oz);
 
-      // 2nd-Order Velocity + Acceleration Ballistic Lead Aiming + Corner Pre-Aiming + Suppressive Fire!
-      let wantYaw = norm > 0.05 ? Math.atan2(dx, -dz) : a.yaw;
-      let wantPitch = 0;
-      const eye = eyeOf(a);
+      // Human Neuromotor Aiming (Delayed Visual Buffer + Spring-Damper Wrist + Smooth Wander + Recoil + Flinch)
+      let fallbackYaw = norm > 0.05 ? Math.atan2(dx, -dz) : a.yaw;
       const wpn = this.match.weapon(a);
       const band = WEAPON_BAND[a.gun] || WEAPON_BAND['SW T'];
-      let aimTargetPos = null;
       let suppressMode = false;
 
-      if (b.seen && b.target) {
-        const tp = targetPoint(b.target);
-        const dist = Math.hypot(tp[0] - eye[0], tp[1] - eye[1], tp[2] - eye[2]);
-        const leadT = clamp(dist / Math.max(80, wpn.speed), 0, 0.38);
-        const trk = st.enemyTrack.get(b.target.id);
-        const axEst = trk ? trk.ax : 0;
-        const azEst = trk ? trk.az : 0;
-        aimTargetPos = [
-          tp[0] + (b.target.vx || 0) * leadT + 0.35 * axEst * leadT * leadT,
-          tp[1] + (b.target.vy || 0) * leadT * 0.42,
-          tp[2] + (b.target.vz || 0) * leadT + 0.35 * azEst * leadT * leadT
-        ];
-        const rx = aimTargetPos[0] - eye[0], ry = aimTargetPos[1] - eye[1], rz = aimTargetPos[2] - eye[2];
-        wantYaw = Math.atan2(rx, -rz);
-        wantPitch = clamp(Math.atan2(ry, Math.hypot(rx, rz)), -0.78, 0.78);
-      } else if (b.lastSeenTargetPos && t - b.lastSeenTargetAt > 0.10 && t - b.lastSeenTargetAt < 0.78
-        && (b.role === 'ANCHOR' || cog.playbook === 'PINCER_DOUBLE_FLANK') && a.mag >= wpn.capacity * 0.36 && a.reload <= 0
-        && b.state !== '戦術退避' && b.state !== '態勢立て直し') {
-        aimTargetPos = b.lastSeenTargetPos;
-        const rx = aimTargetPos[0] - eye[0], ry = aimTargetPos[1] - eye[1], rz = aimTargetPos[2] - eye[2];
-        wantYaw = Math.atan2(rx, -rz);
-        wantPitch = clamp(Math.atan2(ry, Math.hypot(rx, rz)), -0.78, 0.78);
-        suppressMode = true;
-      } else if (b.state === '予測待ち伏せ' && t < b.ambushUntil) {
-        wantYaw = b.ambushYaw;
-      } else if (b.lastPos) {
-        // Predictive corner pre-aim toward Bayesian belief peak or predicted flank corridor!
-        wantYaw = Math.atan2(b.lastPos[0] - a.x, -(b.lastPos[1] - a.z));
+      if (!(b.seen && b.target)) {
+        if (!spyInfiltrating && b.lastSeenTargetPos && t - b.lastSeenTargetAt > 0.12 && t - b.lastSeenTargetAt < 0.78
+          && (b.role === 'ANCHOR' || cog.playbook === 'PINCER_DOUBLE_FLANK') && a.mag >= wpn.capacity * 0.36 && a.reload <= 0
+          && b.state !== '戦術退避' && b.state !== '態勢立て直し') {
+          suppressMode = true;
+        } else if (isSpy && b.spy.prediction && dist2(a.x, a.z, b.spy.prediction.predX, b.spy.prediction.predZ) < 28) {
+          // Spy pre-aims toward visually predicted target corner when closing in for backstab
+          fallbackYaw = Math.atan2(b.spy.prediction.predX - a.x, -(b.spy.prediction.predZ - a.z));
+        } else if (b.state === '予測待ち伏せ' && t < b.ambushUntil) {
+          fallbackYaw = b.ambushYaw;
+        } else if (b.lastPos) {
+          fallbackYaw = Math.atan2(b.lastPos[0] - a.x, -(b.lastPos[1] - a.z));
+        }
       }
 
-      const turnRate = (b.seen ? 12.2 : 7.6) * (1 - a.aimPose * 0.06);
-      a.yaw += clamp(angleDiff(wantYaw, a.yaw), -turnRate * dt, turnRate * dt);
-      a.pitch += clamp(wantPitch - a.pitch, -8.2 * dt, 8.2 * dt);
+      const backstabBonus = !!(isSpy && b.seen && b.target
+        && rearAdvantage(a.x, a.z, b.target.x, b.target.z, b.target.yaw) > 0.25);
+
+      const aimRes = b.humanAim.step(a, dt, t, {
+        seenTarget: (b.seen && b.target) ? b.target : null,
+        wpn,
+        fallbackYaw,
+        fallbackPitch: 0,
+        suppressPos: suppressMode ? b.lastSeenTargetPos : null,
+        counterStrafing,
+        dodging: dodgingShot,
+        backstabBonus
+      });
 
       // Tactical Reload Discipline (reload behind cover whenever safe and magazine < 48%)
-      if (a.reload <= 0 && a.stock > 0 && (a.mag === 0 || (!b.seen && a.mag < wpn.capacity * 0.48 && b.state !== 'リロード狩り' && b.state !== '一斉突入'))) {
+      if (a.reload <= 0 && a.stock > 0 && (a.mag === 0 || (!b.seen && a.mag < wpn.capacity * 0.48 && b.state !== 'リロード狩り' && b.state !== '一斉突入' && b.state !== '裏どり急襲'))) {
         this.match.reload(a);
       }
 
-      // Precision Counter-Strafe + Controlled Firing Discipline
-      const canShootSeen = b.seen && b.target && b.peekPhase !== 'bait';
-      if ((canShootSeen || suppressMode) && a.mag > 0 && a.reload <= 0 && a.cooldown <= 0 && !a.burstLeft && t >= b.burstPauseUntil) {
-        const d = aimTargetPos ? Math.hypot(aimTargetPos[0] - eye[0], aimTargetPos[2] - eye[2]) : 25;
-        const align = Math.abs(angleDiff(wantYaw, a.yaw));
-        const tol = (suppressMode ? 0.13 : 0.072 + (d < 14 ? 0.055 : 0)) * (1 + b.spread * 0.36);
+      // Human Firing Discipline (respects Spy stealth trigger discipline & human acquisition delay!)
+      const canShootSeen = b.seen && b.target && b.peekPhase !== 'bait' && !(isSpy && b.spy.holdFire);
+      if ((canShootSeen || suppressMode) && aimRes.readyToFire && a.mag > 0 && a.reload <= 0 && a.cooldown <= 0 && !a.burstLeft && t >= b.burstPauseUntil) {
+        const d = aimRes.dist;
+        const tol = (suppressMode ? 0.14 : (isSpy ? 0.048 : 0.060) + (d < 14 ? 0.034 : 0)) * (1 + b.spread * 0.20);
         const maxEngageD = Math.max(72, band.max * 1.42);
-        if (align < tol && d < maxEngageD) {
-          // Trigger short counter-strafe micro-stop for high-precision long-range shots
-          if (!suppressMode && d > 20 && (a.gun === 'SW T' || a.gun === 'MS10') && Math.hypot(a.vx, a.vz) > 3.2 && t > b.counterStrafeUntil + 0.35) {
+        if (aimRes.alignPerceived < tol && d < maxEngageD) {
+          // Trigger short counter-strafe micro-stop for steadier mid-long range shots
+          if (!suppressMode && d > 20 && (a.gun === 'SW T' || a.gun === 'MS10') && Math.hypot(a.vx, a.vz) > 3.2 && t > b.counterStrafeUntil + 0.38) {
             b.counterStrafeUntil = t + 0.058;
             this.metrics.counterStrafes++;
           }
-          // Razor-tight precision dispersion (extra steady during counter-strafe, crouch, or ADS!)
-          const csMul = counterStrafing ? 0.58 : 1.0;
-          const jitter = (0.0068 + b.spread * 0.0115) * csMul * (1 - a.crouch * 0.34 - a.aimPose * 0.25) * (a.gun === 'MS10' ? 0.78 : 1.0);
           const saveY = a.yaw, saveP = a.pitch;
-          a.yaw += (b.rng() - 0.5) * jitter;
-          a.pitch = clamp(a.pitch + (b.rng() - 0.5) * jitter * 0.6, -1.2, 1.2);
+          const ms = aimRes.microSpread * (counterStrafing ? 0.65 : 1.0);
+          a.yaw += (b.rng() - 0.5) * ms;
+          a.pitch = clamp(a.pitch + (b.rng() - 0.5) * ms * 0.65, -1.2, 1.2);
           if (this.match.trigger(a)) {
             b.burstCount++;
             if (suppressMode) {
               this.metrics.suppress++;
-              b.burstPauseUntil = t + 0.28;
-            } else if (a.gun === 'MS10' && d > 28 && b.burstCount >= 5) {
+              b.burstPauseUntil = t + 0.30;
+            } else if (a.gun === 'MS10' && d > 24 && b.burstCount >= (isSpy ? 5 : 4)) {
               b.burstCount = 0;
-              b.burstPauseUntil = t + 0.14;
-            } else if (b.burstCount >= band.burstMax + 1 && d > 20) {
+              b.burstPauseUntil = t + (isSpy ? 0.14 : 0.19);
+            } else if (b.burstCount >= band.burstMax + 1 && d > 18) {
               b.burstCount = 0;
-              b.burstPauseUntil = t + 0.11;
+              b.burstPauseUntil = t + (isSpy ? 0.11 : 0.16);
             }
           }
           a.yaw = saveY;
