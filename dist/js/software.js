@@ -70,12 +70,19 @@ function shadowImage(data) {
   ctx.fill(path);
   return {data: ctx.getImageData(0, 0, w, h).data, w, h}
 }
-function lut(hdr) {
+function lut(mode) {
   const out = new Uint8Array(1024);
   for (let i = 0; i < 1024; i++) {
     const lin = (i / 255) ** 2.2;
-    const c = lin * .87;
-    const v = hdr ? Math.min(1, (c * (2.51 * c + .03)) / (c * (2.43 * c + .59) + .14)) : Math.min(1, lin * .95);
+    let v;
+    if (mode === 'khdr') {
+      v = Math.min(1, (lin * (2.68 * lin + .022)) / (lin * (2.68 * lin + .62) + .165));
+    } else if (mode === 'hdr') {
+      const c = lin * .87;
+      v = Math.min(1, (c * (2.51 * c + .03)) / (c * (2.43 * c + .59) + .14));
+    } else {
+      v = Math.min(1, lin * .95);
+    }
     out[i] = Math.round(v ** (1 / 2.2) * 255)
   }
   return out
@@ -83,6 +90,7 @@ function lut(hdr) {
 export class SoftwareRenderer {
   constructor(input) {
     this.native = false;
+    this.floatHDR = false;
     this.input = input;
     this.canvas = input;
     this.ctx = input.getContext('2d', {alpha: false});
@@ -94,7 +102,7 @@ export class SoftwareRenderer {
     }
     this.hdrDisplay = {active: false};
     this.bgStamp = '';
-    this.tones = [lut(false), lut(true)]
+    this.tones = {sdr: lut('sdr'), hdr: lut('hdr'), khdr: lut('khdr')}
   }
   async init() {
     const [manifest, img, sky, waves] = await Promise.all([fetch('./assets/materials.json').then(r => r.json()), imageFrom('./assets/materials.webp'), imageFrom('./assets/marine-sky.webp'), imageFrom('./assets/waves.webp')]);
@@ -130,7 +138,7 @@ export class SoftwareRenderer {
   }
   settings(config) {
     this.config = {...config};
-    this.tone = this.tones[+!!config.hdr];
+    this.tone = config.khdr ? this.tones.khdr : config.hdr ? this.tones.hdr : this.tones.sdr;
     this.resize()
   }
   resize() {
@@ -252,7 +260,8 @@ export class SoftwareRenderer {
       fg = fog * 200,
       fb = fog * 197,
       shadow = this.shadow,
-      doShadow = ground && this.config.shadows;
+      sfMode = this.config.shadowMode || (this.config.shadows ? 'pro' : 'off'),
+      doShadow = ground && sfMode !== 'off';
     const A = a[5] * izA,
       B = b[5] * izB,
       C = c[5] * izC,
@@ -279,7 +288,15 @@ export class SoftwareRenderer {
         let sh = 1;
         if (doShadow) {
           const xx = ((WX * dep + 28) * shadow.w / 56) | 0, zz = ((WZ * dep + 102) * shadow.h / 204) | 0;
-          if (xx >= 0 && zz >= 0 && xx < shadow.w && zz < shadow.h)sh = 1 - shadow.data[(zz * shadow.w + xx) * 4 + 3] * (.28 / 255)
+          if (sfMode === 'pro' && xx >= 1 && zz >= 1 && xx < shadow.w - 1 && zz < shadow.h - 1) {
+            const d0 = shadow.data[(zz * shadow.w + xx) * 4 + 3];
+            const d1 = shadow.data[(zz * shadow.w + xx + 1) * 4 + 3];
+            const d2 = shadow.data[((zz + 1) * shadow.w + xx) * 4 + 3];
+            const d3 = shadow.data[((zz - 1) * shadow.w + xx - 1) * 4 + 3];
+            sh = 1 - ((d0 + d1 + d2 + d3) * .25) * (.32 / 255);
+          } else if (xx >= 0 && zz >= 0 && xx < shadow.w && zz < shadow.h) {
+            sh = 1 - shadow.data[(zz * shadow.w + xx) * 4 + 3] * (.28 / 255);
+          }
         }
         Z[ix] = inv;
         px[ix] = pack(rou[Math.min(1023, ((col & 255) * cr * sh + fr) | 0)], rou[Math.min(1023, ((col >> 8 & 255) * cg * sh + fg) | 0)], rou[Math.min(1023, ((col >> 16 & 255) * cb * sh + fb) | 0)])

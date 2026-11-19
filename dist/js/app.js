@@ -1,6 +1,6 @@
 import {PilotEquipment} from './df-hud.js';
 import {eyeOf} from './posture.js';
-import {Renderer, sizes, qualityLevels} from './renderer.js';
+import {Renderer, sizes, qualityLevels, shadowModes} from './renderer.js';
 import {titleCamera} from './harbor.js';
 import {Match, modes, weapons} from './match.js';
 import {forward, add, clamp} from './geometry.js';
@@ -10,11 +10,16 @@ const $ = s => document.getElementById(s),
 // Optically exact further 2/3 view width relative to 52.5° / 28.7° FOV:
 // 2 * atan((2/3) * tan(52.5°/2)) = 36.4°, 2 * atan((2/3) * tan(28.7°/2)) = 19.4°.
 const BASE_FOV = 36.4, ADS_FOV = 19.4;
-const defaults = {resolution: 'HD', graphics: 'high', rate: 120, hdr: true, shadows: true, sensitivity: 1, volume: 55, sound: false};
+const defaults = {resolution: 'HD', graphics: 'high', rate: 120, hdr: true, khdr: true, shadowMode: 'pro', shadows: true, sensitivity: 1, volume: 55, sound: false};
 const graphicsHints = {
-  standard: '軽量描画 · 基本影 · 標準反射',
-  high: '高精細影 · 動的ライト · 標準後処理',
-  extra: 'HDRブルーム · 16×ソフトシャドウ · 動的影 · 高精細水面反射 · FXAA'
+  standard: '軽量描画 · 基本ライト · 標準反射',
+  high: '高精細質感 · 動的ライト · 標準水面反射',
+  extra: 'フルブルーム · 高精細水面反射 · 強化パーティクル · FXAA'
+};
+const shadowHints = {
+  off: '影なし · 最軽量',
+  flash: '超軽量リアル影 · 静的キャッシュ＋動的NPC影 · IGN-Vogel6 · 彩色アンブラ',
+  pro: '最高峰影 · 近距離2.7cmカスケード · 物理PCSS · SSCS接地影 · 光芒シャドウ'
 };
 const recoilProfiles = {
   'SW T': {z: .088, y: .018, pitch: .155, yaw: .028, roll: .075, camPitch: .015, camRoll: .006, shake: .28, spread: 11, heat: .22, fov: .55},
@@ -35,11 +40,19 @@ let settings = {...defaults};
 let rules = {mode: '3v3', limit: 'points', multiplier: 5, loadout: 'SW T'};
 try {
   const c = JSON.parse(localStorage.getItem('result.harbor.v1') || '{}');
-  if (c.settings)Object.assign(settings, c.settings);
+  if (c.settings) {
+    Object.assign(settings, c.settings);
+    if (!('shadowMode' in c.settings) && 'shadows' in c.settings) settings.shadowMode = c.settings.shadows ? 'pro' : 'off';
+    if (!('khdr' in c.settings)) settings.khdr = !!settings.hdr;
+  }
   if (c.rules)Object.assign(rules, c.rules)
 } catch {}
 if (!sizes[settings.resolution])settings.resolution = 'HD';
 if (!(settings.graphics in qualityLevels))settings.graphics = 'high';
+if (!(settings.shadowMode in shadowModes))settings.shadowMode = 'pro';
+settings.shadows = settings.shadowMode !== 'off';
+settings.khdr = !!settings.khdr;
+if (settings.khdr) settings.hdr = true;
 if (![0, 120].includes(settings.rate))settings.rate = 120;
 if (!modes[rules.mode])rules.mode = '3v3';
 if (!weapons[rules.loadout])rules.loadout = 'SW T';
@@ -428,6 +441,9 @@ function lobby() {
 }
 function setGraphics(key, value) {
   settings[key] = value;
+  if (key === 'khdr' && value) settings.hdr = true;
+  if (key === 'hdr' && !value) settings.khdr = false;
+  if (key === 'shadowMode') settings.shadows = value !== 'off';
   save();
   renderer?.settings(settings);
   drawSettings()
@@ -436,12 +452,18 @@ function drawSettings() {
   group('resolution', settings.resolution, k => setGraphics('resolution', k));
   group('graphics', settings.graphics, k => setGraphics('graphics', k));
   group('rate', settings.rate, k => setGraphics('rate', Number(k)));
+  group('shadowMode', settings.shadowMode, k => setGraphics('shadowMode', k));
   const [w, h] = sizes[settings.resolution];
   $('resolutionHint').textContent = `${w.toLocaleString('en-US')} × ${h.toLocaleString('en-US')} px`;
   $('graphicsHint').textContent = !renderer?.native && settings.graphics === 'extra' ? '互換描画 · エフェクト・パーティクル強化' : graphicsHints[settings.graphics];
   $('hdrSwitch').setAttribute('aria-checked', String(settings.hdr));
-  $('shadowSwitch').setAttribute('aria-checked', String(settings.shadows));
-  $('hdrHint').textContent = settings.hdr ? (renderer?.hdrDisplay?.active ? 'HDRディスプレイ出力' : 'HDR照明 · SDR画面にはトーンマッピング') : '標準レンジ';
+  $('khdrSwitch').setAttribute('aria-checked', String(settings.khdr));
+  $('hdrHint').textContent = settings.hdr ? (renderer?.hdrDisplay?.active ? 'HDRディスプレイ出力' : '標準HDR (ACES トーンマッピング)') : '標準レンジ (SDR)';
+  const bitTag = renderer?.floatHDR ? '16bit FP16' : '14-Stop Log-K';
+  $('khdrHint').textContent = settings.khdr
+    ? (renderer?.hdrDisplay?.active ? `KHDR 16×広域HDR出力 · ${bitTag} · K-Filmic · K-Adapt · K-LCE` : `${bitTag} · K-Filmic色相保全 · K-Adapt自動露出 · K-LCE · K-Halo`)
+    : 'オフ · 標準HDR/SDR描画';
+  $('shadowHint').textContent = !renderer?.native && settings.shadowMode !== 'off' ? '互換ソフト影描画' : shadowHints[settings.shadowMode];
   $('sensitivity').value = settings.sensitivity;
   $('sensVal').value = settings.sensitivity.toFixed(1) + '×';
   $('volume').value = settings.volume;
@@ -471,7 +493,7 @@ $('sound').onclick = async() => {
   soundButton()
 };
 $('hdrSwitch').onclick = () => setGraphics('hdr', !settings.hdr);
-$('shadowSwitch').onclick = () => setGraphics('shadows', !settings.shadows);
+$('khdrSwitch').onclick = () => setGraphics('khdr', !settings.khdr);
 $('sensitivity').oninput = e => {
   settings.sensitivity = Number(e.target.value);
   $('sensVal').value = settings.sensitivity.toFixed(1) + '×';

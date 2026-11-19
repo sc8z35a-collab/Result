@@ -5,6 +5,9 @@ import {PilotWallet} from '../dist/js/wallet.js';
 import {ThermalOptic} from '../dist/js/optic.js';
 import {eyeOf,targetPoint} from '../dist/js/posture.js';
 import {obstruction} from '../dist/js/yard.js';
+import {perspective,lookAt,multiply,invert4} from '../dist/js/geometry.js';
+import {shadowModes,SHADOW_FLAME_WORLD_GLSL,sfScreenFS,sfBilateralFS} from '../dist/js/shadowflame.js';
+import {KHDR_TONE_GLSL} from '../dist/js/khdr.js';
 const h=1/120;
 function duel(loadout='DF1 OUT',limit='unlimited',multiplier=2,events=[]) {
   return new Match({mode:'1v1', limit, multiplier,loadout},event=>events.push(event));
@@ -81,5 +84,19 @@ for (const [mode,counts] of Object.entries(modes)) {
   const canvas=createCanvas(256,192),src=createCanvas(640,480),context=src.getContext('2d');context.fillStyle='#303030';context.fillRect(0,0,640,480);const optic=new ThermalOptic(canvas),m=duel();const hot=(x,z1,z2,time)=>{const [p,t]=arrange(m,x,z1,z2);optic.draw({canvas:src,aspect:4/3},m,{pos:eyeOf(p),target:targetPoint(t),fov:42},time);const rgb=canvas.getContext('2d').getImageData(0,0,256,192).data;let n=0;for(let i=0;i<rgb.length;i+=4)if(rgb[i]>180)n++;return n};const seen=hot(2,85,75,1),hidden=hot(-7.8,13,2,2);assert(seen>1000&&hidden===0);console.log('Thermal sensor',canvas.width,canvas.height,'warm pixels',seen,'behind cover',hidden);
  } else console.log('Thermal canvas check skipped in Node (no @napi-rs/canvas); verified in Chromium.');
 }
-console.log('Weapon specs (incl. MS10), supply tankers, bullet whiz, focus and occlusion, credits, EVR1, separate regeneration timers, P1 heat, scoring and all three NV1.3 Pro matches passed.');
+{
+ // Verify invert4 precision (VP * invVP = I) for Shadow Flame 1.0 Pro world-position depth reconstruction
+ const vp=multiply(perspective(44*Math.PI/180,16/9),lookAt([2.5,2.35,73.5],[0.5,1.55,42.0]));
+ const inv=invert4(vp);
+ const prod=multiply(vp,inv);
+ for(let r=0;r<4;r++)for(let c=0;c<4;c++){
+  const expected=r===c?1:0;
+  assert(Math.abs(prod[c*4+r]-expected)<1e-4,`invert4 mismatch at (${r},${c}): ${prod[c*4+r]}`);
+ }
+ assert.deepEqual(shadowModes,{off:0,flash:1,pro:2});
+ assert(SHADOW_FLAME_WORLD_GLSL.includes('sfFlashVisibility')&&SHADOW_FLAME_WORLD_GLSL.includes('sfProPCSS'));
+ assert(sfScreenFS.includes('SF-SSCS')&&sfScreenFS.includes('SF-GTAO-Lite')&&sfBilateralFS.includes('exp(-abs'));
+ assert(KHDR_TONE_GLSL.includes('K_INSET')&&KHDR_TONE_GLSL.includes('kFilmicSDR')&&KHDR_TONE_GLSL.includes('kFilmicExtended'));
+}
+console.log('Weapon specs (incl. MS10), supply tankers, bullet whiz, focus and occlusion, credits, EVR1, separate regeneration timers, P1 heat, scoring, KHDR & Shadow Flame 1.0 Flash/Pro modules, and all three NV1.3 Pro matches passed.');
 

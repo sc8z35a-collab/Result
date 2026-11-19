@@ -7,17 +7,19 @@ export class HDRDisplay {
     this.available = false;
     this.media = matchMedia('(dynamic-range: high)');
     this.pending = null;
-    this.want = false
+    this.want = false;
+    this.khdr = false
   }
-  async choose(on) {
-    this.want = on;
-    if (!on || !this.media.matches || !navigator.gpu) {
+  async choose(on, khdr = false) {
+    this.want = !!(on || khdr);
+    this.khdr = !!khdr;
+    if (!this.want || !this.media.matches || !navigator.gpu) {
       this.active = false;
       this.canvas.hidden = true;
       return
     }
     if (!this.pending)this.pending = this.init().catch (() => {
-      this.available = false
+      this.available = false;
     });
     await this.pending;
     this.active = !!(this.want && this.available);
@@ -30,16 +32,20 @@ export class HDRDisplay {
     if (!ctx)return;
     ctx.configure({device, format: 'rgba16float', toneMapping: {mode: 'extended'}, alphaMode: 'opaque', colorSpace: 'srgb'});
     if (ctx.getConfiguration && ctx.getConfiguration()?.toneMapping?.mode !== 'extended')return;
-    const mod = device.createShaderModule({code: `@group(0) @binding(0) var src:texture_2d<f32>; @vertex fn vs(@builtin(vertex_index) i:u32)->@builtin(position) vec4f {let p=vec2f(f32((i<<1u)&2u),f32(i&2u))*2.-1.;return vec4f(p,0.,1.);} @fragment fn fs(@builtin(position) p:vec4f)->@location(0) vec4f {let v=textureLoad(src,vec2i(p.xy),0).rgb;return vec4f(exp2(v*3.)-1.,1.);}`});
-    const pipeline = await device.createRenderPipelineAsync({
-      layout: 'auto',
-      vertex: {module: mod, entryPoint: 'vs'},
-      fragment: {module: mod, entryPoint: 'fs', targets: [{format: 'rgba16float'}]},
-      primitive: {topology: 'triangle-list'}
-    });
+    const makePipe = scalePow => {
+      const mod = device.createShaderModule({code: `@group(0) @binding(0) var src:texture_2d<f32>; @vertex fn vs(@builtin(vertex_index) i:u32)->@builtin(position) vec4f {let p=vec2f(f32((i<<1u)&2u),f32(i&2u))*2.-1.;return vec4f(p,0.,1.);} @fragment fn fs(@builtin(position) p:vec4f)->@location(0) vec4f {let v=textureLoad(src,vec2i(p.xy),0).rgb;return vec4f(exp2(v*${scalePow})-1.,1.);}`});
+      return device.createRenderPipelineAsync({
+        layout: 'auto',
+        vertex: {module: mod, entryPoint: 'vs'},
+        fragment: {module: mod, entryPoint: 'fs', targets: [{format: 'rgba16float'}]},
+        primitive: {topology: 'triangle-list'}
+      });
+    };
+    const [pipeline, pipelineKHDR] = await Promise.all([makePipe('3.'), makePipe('4.')]);
     this.device = device;
     this.ctx = ctx;
     this.pipeline = pipeline;
+    this.pipelineKHDR = pipelineKHDR;
     this.available = true;
     device.lost.then(() => {
       this.active = this.available = false;
@@ -49,7 +55,8 @@ export class HDRDisplay {
   present(source) {
     if (!this.active)return;
     try {
-      const {device, ctx, pipeline} = this;
+      const {device, ctx} = this;
+      const pipe = this.khdr && this.pipelineKHDR ? this.pipelineKHDR : this.pipeline;
       const w = source.width, h = source.height;
       if (this.w !== w || this.h !== h) {
         this.w = w;
@@ -58,13 +65,14 @@ export class HDRDisplay {
         this.canvas.height = h;
         this.src?.destroy();
         this.src = device.createTexture({size: [w, h], format: 'rgba8unorm', usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT});
-        this.group = device.createBindGroup({layout: pipeline.getBindGroupLayout(0), entries: [{binding: 0, resource: this.src.createView()}]})
+        this.group = device.createBindGroup({layout: this.pipeline.getBindGroupLayout(0), entries: [{binding: 0, resource: this.src.createView()}]});
+        this.groupKHDR = device.createBindGroup({layout: this.pipelineKHDR.getBindGroupLayout(0), entries: [{binding: 0, resource: this.src.createView()}]})
       }
       device.queue.copyExternalImageToTexture({source}, {texture: this.src}, [w, h]);
       const enc = device.createCommandEncoder(),
         p = enc.beginRenderPass({colorAttachments: [{view: ctx.getCurrentTexture().createView(), clearValue: {r: 0, g: 0, b: 0, a: 1}, loadOp: 'clear', storeOp: 'store'}]});
-      p.setPipeline(pipeline);
-      p.setBindGroup(0, this.group);
+      p.setPipeline(pipe);
+      p.setBindGroup(0, pipe === this.pipelineKHDR ? this.groupKHDR : this.group);
       p.draw(3);
       p.end();
       device.queue.submit([enc.finish()])

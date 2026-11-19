@@ -1,3 +1,6 @@
+import {SHADOW_FLAME_WORLD_GLSL} from './shadowflame.js';
+import {KHDR_TONE_GLSL} from './khdr.js';
+
 export const shared = `
 precision highp float;
 precision highp int;
@@ -5,11 +8,28 @@ precision highp sampler2DArray;
 const vec3 SUN=normalize(vec3(-.66,.28,-.70));
 const float PI=3.14159265359;
 uniform int uOutput;
+uniform int uKHDR;
 uniform vec3 uEye;
 uniform sampler2D uSky;
-vec3 sky(vec3 d){float a=atan(d.x,-d.z);vec2 uv=vec2(a/(2.*PI)+.5,asin(clamp(d.y,0.,1.))/(PI*.5));vec3 col=pow(texture(uSky,uv).rgb,vec3(2.2));float mu=max(0.,dot(d,SUN));float disc=smoothstep(.99988,.999973,mu);return col*.99+vec3(1.,.77,.42)*(disc*10.+.60*pow(mu,450.)+.088*pow(mu,26.));}
+${KHDR_TONE_GLSL}
+vec3 sky(vec3 d){float a=atan(d.x,-d.z);vec2 uv=vec2(a/(2.*PI)+.5,asin(clamp(d.y,0.,1.))/(PI*.5));vec3 col=pow(texture(uSky,uv).rgb,vec3(2.2));float mu=max(0.,dot(d,SUN));float disc=smoothstep(.99988,.999973,mu);float sunGain=uKHDR==1?13.5:10.;return col*.99+vec3(1.,.77,.42)*(disc*sunGain+.64*pow(mu,420.)+.095*pow(mu,24.));}
 vec3 aces(vec3 x){return clamp((x*(2.51*x+.03))/(x*(2.43*x+.59)+.14),0.,1.);}
-vec3 displayColor(vec3 c){c=max(c,vec3(0.));if(uOutput==4)return clamp(log2(1.+c)/3.6,0.,1.);if(uOutput==3)return c/(1.+c);if(uOutput==2){vec3 extended=aces(c*.83)+max(c-vec3(1.),0.)*.46;return clamp(log2(1.+extended)/3.,0.,1.);}if(uOutput==1)return pow(aces(c*.87),vec3(1./2.2));return pow(clamp(c*.95,0.,1.),vec3(1./2.2));}
+vec3 displayColor(vec3 c){
+  c=max(c,vec3(0.));
+  if(uOutput==5)return c;
+  if(uOutput==4)return kEncodeLogK(c);
+  if(uOutput==3)return c/(1.+c);
+  if(uOutput==2){
+    if(uKHDR==1)return kFilmicExtended(c);
+    vec3 extended=aces(c*.83)+max(c-vec3(1.),0.)*.46;
+    return clamp(log2(1.+extended)/3.,0.,1.);
+  }
+  if(uOutput==1){
+    if(uKHDR==1)return kFilmicSDR(c);
+    return pow(aces(c*.87),vec3(1./2.2));
+  }
+  return pow(clamp(c*.95,0.,1.),vec3(1./2.2));
+}
 float fog(float d){return 1.-exp(-pow(d*.00265,1.38));}
 `;
 
@@ -22,7 +42,7 @@ layout(location=2) in vec2 aUV;
 layout(location=3) in float aLayer;
 layout(location=4) in vec3 aColor;
 layout(location=5) in float aKind;
-uniform mat4 uVP,uModel,uLight;
+uniform mat4 uVP,uModel;
 uniform int uMode;
 uniform vec2 uGait;
 uniform vec3 uPose;
@@ -30,7 +50,6 @@ uniform vec3 uHit;
 uniform vec2 uRecoil;
 out vec3 wPos,wNormal,wColor,lPos;
 out vec2 uv;
-out vec4 lightPos;
 flat out float layer;
 flat out float kind;
 void main(){
@@ -114,24 +133,20 @@ void main(){
   uv=aUV;
   layer=aLayer;
   kind=aKind;
-  lightPos=uLight*world;
   gl_Position=uVP*world;
 }`;
 
 export const worldFS = `#version 300 es
 ${shared}
-precision highp sampler2DShadow;
+${SHADOW_FLAME_WORLD_GLSL}
 in vec3 wPos,wNormal,wColor,lPos;
 in vec2 uv;
-in vec4 lightPos;
 flat in float layer;
 flat in float kind;
 uniform sampler2DArray uMats;
-uniform sampler2DShadow uShadow;
-uniform bool uShadows;
 uniform int uMode;
 uniform int uQuality;
-uniform vec4 uActors[6];
+uniform vec4 uActors[6]; // xyz=pos, w=0 if dead else 1.0 + crouch
 uniform vec2 uHitFX;
 uniform float uGunHeat;
 uniform float uTime;
@@ -139,34 +154,6 @@ uniform vec4 uLights[6];
 uniform vec3 uLightCol[6];
 out vec4 frag;
 
-const vec2 POISSON16[16]=vec2[16](
-  vec2(-.9420,-.3990),vec2(.9455,-.7689),vec2(-.0941,-.9293),vec2(.3449,.2938),
-  vec2(-.9158,.4577),vec2(-.8154,-.8791),vec2(-.3827,.2767),vec2(.9748,.7564),
-  vec2(.4432,-.9751),vec2(.5374,-.4737),vec2(-.2649,-.4189),vec2(.7919,.1909),
-  vec2(-.2418,.9970),vec2(-.8140,.9143),vec2(.1998,.7864),vec2(.1438,-.1410)
-);
-
-float visibility(vec3 n){
-  if(!uShadows||uMode==2)return 1.;
-  vec3 p=lightPos.xyz/lightPos.w*.5+.5;
-  if(any(lessThan(p,vec3(0.)))||any(greaterThan(p,vec3(1.))))return 1.;
-  p.z-=.00022+.00038*(1.-max(0.,dot(n,SUN)));
-  vec2 texel=1./vec2(textureSize(uShadow,0));
-  if(uQuality>=2){
-    float sum=0.;
-    vec2 rad=texel*1.85;
-    for(int i=0;i<16;i++)sum+=texture(uShadow,p+vec3(POISSON16[i]*rad,0.));
-    return sum/16.;
-  }
-  if(uQuality==1){
-    float sum=0.;
-    vec2 rad=texel*1.35;
-    for(int i=0;i<8;i++)sum+=texture(uShadow,p+vec3(POISSON16[i*2]*rad,0.));
-    return sum/8.;
-  }
-  vec2 t=1.1*texel;
-  return .25*(texture(uShadow,p+vec3(t*vec2(-.9,-.4),0))+texture(uShadow,p+vec3(t*vec2(.4,-.9),0))+texture(uShadow,p+vec3(t*vec2(.9,.4),0))+texture(uShadow,p+vec3(t*vec2(-.4,.9),0)));
-}
 float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
 float noise(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);return mix(mix(hash(i),hash(i+vec2(1,0)),f.x),mix(hash(i+vec2(0,1)),hash(i+1.),f.x),f.y);}
 
@@ -180,8 +167,9 @@ void main(){
   float detail=dot(texel.rgb,vec3(.27,.52,.21));
   float metal=float(kind>.5&&kind<1.5);
   float ground=float(kind>1.5&&kind<2.5);
+  int sfMode=int(uSfParams.x+.5);
 
-  // High & Extra: procedural micro-bump normal perturbation on world surfaces (smooth machined finish on close-up viewmodel)
+  // High & Extra: procedural micro-bump normal perturbation on world surfaces
   if(uQuality>=1 && uMode!=2 && kind<2.5 && d>1.2 && d<95.){
     vec3 dp1=dFdx(wPos),dp2=dFdy(wPos);
     float dh1=dFdx(detail),dh2=dFdy(detail);
@@ -193,45 +181,81 @@ void main(){
     }
   }
 
-  float vis=visibility(N);
+  // Shadow Flame 1.0 (Off / Flash / Pro) evaluation
+  vec2 sf=sfEvaluate(wPos,N,uMode);
+  float vis=sf.x;
+  float penSoft=sf.y;
+
+  // SF-ContactMicro: crouch-aware analytical ground-contact shadow under every live actor
   float contact=1.;
-  if(ground>.5&&uShadows){
+  if(ground>.5&&sfMode>=1){
+    vec2 sunXZ=normalize(SUN.xz);
     for(int i=0;i<6;i++){
       vec4 a=uActors[i];
       if(a.w<.5)continue;
+      float crouchF=clamp(a.w-1.,0.,1.);
+      float maxLen=mix(2.65,1.65,crouchF);
       vec2 rel=wPos.xz-a.xz;
-      float along=clamp(dot(rel,-normalize(SUN.xz)),0.,2.75);
-      float radius=length(rel+normalize(SUN.xz)*along);
-      contact=min(contact,mix(1.,uQuality>=2?.46:.53,(1.-smoothstep(.14,.54,radius))*(1.-smoothstep(2.0,2.83,along))));
+      float along=clamp(dot(rel,-sunXZ),0.,maxLen);
+      float radius=length(rel+sunXZ*along);
+      float core=1.-smoothstep(.12,.48+along*.08,radius);
+      float tail=1.-smoothstep(maxLen*.68,maxLen,along);
+      float footAO=1.-smoothstep(.10,.46,length(rel));
+      float strength=sfMode>=2?.44:.48;
+      contact=min(contact,mix(1.,strength,max(core*tail,footAO*.85)));
     }
     vis*=contact;
   }
 
   float nl=dot(N,SUN);
   float hemi=N.y*.5+.5;
-  vec3 ambient=mix(vec3(.25,.27,.25),vec3(.66,.79,.87),hemi);
+  vec3 ambient=mix(vec3(.24,.27,.26),vec3(.65,.79,.88),hemi);
   float edge=0.;
-  if(uMode!=2&&wPos.y>=0.&&kind<1.5)edge=(1.-smoothstep(.0,.7,wPos.y))*(1.-max(0.,N.y))*(uQuality>=2?.36:.28);
-  vec3 light=ambient*(1.-edge)+max(nl,0.)*vis*vec3(1.63,1.30,.88);
+  if(uMode!=2&&wPos.y>=0.&&kind<1.5){
+    float edgeStr=sfMode>=2?.42:sfMode==1?.36:uQuality>=2?.36:.28;
+    edge=(1.-smoothstep(.0,.72,wPos.y))*(1.-max(0.,N.y))*edgeStr;
+  }
+
+  // SF-ChromaticUmbra: physical Rayleigh sky-cool umbra + warm golden penumbra scatter
+  float umbraDepth=sfMode>=2?mix(.62,1.,vis):sfMode==1?mix(.72,1.,vis):1.;
+  vec3 umbraTint=sfMode>=1?mix(vec3(.76,.89,1.12),vec3(1.),vis):vec3(1.);
+  vec3 sunCol=uKHDR==1?vec3(2.05,1.56,.96):vec3(1.66,1.32,.88);
+  vec3 direct=max(nl,0.)*vis*sunCol;
+  if(sfMode>=1){
+    float penBand=4.*vis*(1.-vis);
+    direct+=vec3(1.12,.76,.40)*penBand*max(nl,0.)*(.10+.09*penSoft);
+  }
+  // Shadow Flame 1.0 Pro: 1-bounce warm sunlit asphalt indirect bounce into shadowed container walls
+  vec3 bounceGI=vec3(0.);
+  if(sfMode>=2 && uMode!=2 && kind<1.5){
+    float sideMask=1.-abs(N.y);
+    float lowMask=1.-smoothstep(0.,3.6,max(0.,wPos.y));
+    bounceGI=vec3(.24,.20,.15)*(1.-vis)*sideMask*lowMask*.38;
+  }
+
+  vec3 light=ambient*umbraDepth*umbraTint*(1.-edge)+direct+bounceGI;
   vec3 c=base*light;
 
   vec3 H=normalize(V+SUN);
-  float spec=pow(max(dot(N,H),0.),mix(26.,uQuality>=2?78.:59.,metal));
-  c+=vec3(1.,.88,.66)*spec*vis*(.045+(uQuality>=2?.28:.20)*metal)*(.4+.6*detail);
+  float specPow=mix(26.,uQuality>=2?84.:62.,metal);
+  float spec=pow(max(dot(N,H),0.),specPow);
+  float specGain=uKHDR==1?1.18:1.;
+  c+=vec3(1.,.88,.66)*spec*vis*(.045+(uQuality>=2?.28:.20)*metal)*(.4+.6*detail)*specGain;
 
-  // High & Extra: sky environment fresnel reflection on metals and wet asphalt
-  if(uQuality>=1 && kind<2.5){
+  // High & Extra (and KHDR): sky environment fresnel reflection on metals
+  if((uQuality>=1 || uKHDR==1) && kind<2.5){
     float fres=pow(1.-max(dot(N,V),0.),4.2);
     vec3 R=reflect(-V,N);
     R.y=max(.02,R.y);
     if(metal>.5){
-      c+=sky(R)*fres*(uQuality>=2?.34:.17)*(.45+.55*detail);
+      float envMul=uQuality>=2?.36:uKHDR==1?.24:.17;
+      c+=sky(R)*fres*envMul*(.45+.55*detail)*mix(.62,1.,vis);
     }
   }
 
-  // Dynamic point lights (muzzle flashes, flying shots, explosions, supply tankers)
+  // Dynamic point lights + Shadow Flame DynamicFlame occlusion & warm wrap
   if(kind<2.5){
-    int maxL=uQuality>=2?6:uQuality==1?4:2;
+    int maxL=(uQuality>=2 || sfMode>=2)?6:uQuality==1?4:2;
     for(int i=0;i<6;i++){
       if(i>=maxL)break;
       vec4 lp=uLights[i];
@@ -241,18 +265,34 @@ void main(){
       float att=lp.w/(1.+ld2*.14);
       if(att<.004)continue;
       vec3 L=toL*inversesqrt(max(ld2,1e-5));
-      float diff=max(dot(N,L),0.)*.85+.15;
+      float flameOcc=1.;
+      if(sfMode>=2 && ground>.5){
+        // Dynamic flame micro-shadow cast away from glowing explosions / supply tankers by nearby actors
+        for(int j=0;j<6;j++){
+          vec4 a=uActors[j];
+          if(a.w<.5)continue;
+          vec2 toA=a.xz-lp.xz;
+          vec2 toP=wPos.xz-lp.xz;
+          float proj=dot(toP,toA)/max(dot(toA,toA),.01);
+          if(proj>1.02 && proj<3.5){
+            vec2 perp=toP-toA*proj;
+            float r=length(perp);
+            flameOcc=min(flameOcc,mix(1.,.48,(1.-smoothstep(.16,.55*proj,r))*(1.-smoothstep(2.0,3.5,proj))));
+          }
+        }
+      }
+      float diff=sfMode>=2?(max(dot(N,L),0.)*.80+.20):(max(dot(N,L),0.)*.85+.15);
       vec3 LH=normalize(V+L);
       float lspec=pow(max(dot(N,LH),0.),mix(18.,54.,metal))*(.12+.38*metal);
-      c+=(base*diff+lspec)*uLightCol[i]*att;
+      c+=(base*diff+lspec)*uLightCol[i]*att*flameOcc*(uKHDR==1?1.15:1.);
     }
   }
 
   if(ground>.5){
     float wet=smoothstep(.46,.77,noise(wPos.xz*vec2(.34,.23))*.62+noise(wPos.xz*.92)*.38);
     float fres=pow(1.-max(V.y,0.),4.);
-    vec3 wetReflect=uQuality>=2?sky(reflect(-V,normalize(vec3(0.,1.,0.)+N*.12)))*.52:vec3(.30,.38,.39)*.62;
-    c=mix(c,c*.70+wetReflect*fres,wet*(uQuality>=2?.82:.69));
+    vec3 wetReflect=(uQuality>=2||uKHDR==1)?sky(reflect(-V,normalize(vec3(0.,1.,0.)+N*.12)))*(uKHDR==1?.58:.52):vec3(.30,.38,.39)*.62;
+    c=mix(c,c*.70+wetReflect*fres*mix(.58,1.,vis),wet*(uQuality>=2?.82:.69));
     c*=.97+.06*noise(wPos.xz*.08);
   }
 
@@ -271,19 +311,20 @@ void main(){
   }
 
   if(kind>2.5&&kind<3.5){
-    float boost=uQuality>=2?2.85:uQuality==1?2.15:1.8;
+    float boost=(uQuality>=2?2.85:uQuality==1?2.15:1.8)*(uKHDR==1?1.24:1.);
     c=base*(boost+.35*detail);
   }
   if(kind>4.5)c=mix(c,base*1.2,.6);
 
   if(uMode!=2){
-    float sunScatter=pow(max(dot(-V,SUN),0.),uQuality>=2?3.2:4.0);
-    vec3 fcol=mix(vec3(.58,.68,.70),vec3(.92,.76,.54),sunScatter);
+    float sunScatter=pow(max(dot(-V,SUN),0.),(uQuality>=2||uKHDR==1)?3.0:4.0);
+    vec3 fcol=mix(vec3(.58,.68,.70),vec3(.95,.77,.52),sunScatter);
     float fg=fog(d);
     c=mix(c,fcol,fg);
-    if(uQuality>=2)c+=vec3(1.,.78,.46)*sunScatter*fg*.24;
+    if(uQuality>=2 || uKHDR==1)c+=vec3(1.,.78,.46)*sunScatter*fg*(uKHDR==1?.28:.24);
   }
-  frag=vec4(displayColor(c),1.);
+  // Alpha channel carries world mask (1.0=world/actor, 0.0=first-person viewmodel) for Shadow Flame Pro screen-space pass!
+  frag=vec4(displayColor(c),uMode==2?0.:1.);
 }`;
 
 export const skyVS = `#version 300 es
@@ -312,9 +353,9 @@ void main(){
   vec3 c;
   if(ray.y>-.0008){
     c=sky(ray);
-    if(uQuality>=2){
+    if(uQuality>=2 || uKHDR==1){
       float mu=max(0.,dot(ray,SUN));
-      c+=vec3(1.,.72,.38)*(.12*pow(mu,12.)+.35*pow(mu,90.));
+      c+=vec3(1.,.72,.38)*(.12*pow(mu,12.)+.38*pow(mu,90.))*(uKHDR==1?1.22:1.);
     }
   } else {
     float dist=(-1.68-uEye.y)/ray.y;
@@ -346,29 +387,18 @@ void main(){
     }
     vec3 sea=mix(vec3(.025,.093,.097),vec3(.068,.181,.182),.5+.5*a.y);
     c=mix(sea,reflected,fr);
-    if(uQuality>=2){
+    if(uQuality>=2 || uKHDR==1){
       float crest=smoothstep(.62,.95,a.y*.55+b.x*.45+cc.y*.35)*farFade;
       c=mix(c,vec3(.78,.86,.86),crest*.18);
     }
     vec3 H=normalize(SUN-ray);
     float shine=pow(max(dot(N,H),0.),mix(220.,uQuality>=2?1150.:950.,farFade));
-    c+=vec3(2.2,1.55,.82)*shine*farFade*(uQuality>=2?1.25:1.);
+    c+=vec3(2.2,1.55,.82)*shine*farFade*(uKHDR==1?1.45:uQuality>=2?1.25:1.);
     c=mix(c,vec3(.57,.65,.64),smoothstep(135.,1400.,dist)*.91);
   }
   frag=vec4(displayColor(c),1.);
 }`;
 
-export const shadowVS = `#version 300 es
-layout(location=0) in vec3 aPos;
-uniform mat4 uVP;
-uniform mat4 uModel;
-void main(){gl_Position=uVP*uModel*vec4(aPos,1.);}`;
-
-export const shadowFS = `#version 300 es
-precision mediump float;
-void main(){}`;
-
-// Extra Graphics Post-Processing Shaders (HDR Bloom + FXAA + Chromatic Aberration + Cinematic Grade)
 export const postVS = `#version 300 es
 precision highp float;
 out vec2 vUV;
@@ -376,96 +406,4 @@ void main(){
   vec2 p=vec2((gl_VertexID<<1)&2,gl_VertexID&2);
   vUV=p;
   gl_Position=vec4(p*2.-1.,0.,1.);
-}`;
-
-export const bloomExtractFS = `#version 300 es
-precision highp float;
-in vec2 vUV;
-uniform sampler2D uScene;
-out vec4 frag;
-vec3 dec(vec3 v){return exp2(v*3.6)-1.;}
-void main(){
-  vec2 t=1./vec2(textureSize(uScene,0));
-  vec3 c=.25*(dec(texture(uScene,vUV+vec2(-t.x,-t.y)).rgb)+dec(texture(uScene,vUV+vec2(t.x,-t.y)).rgb)+dec(texture(uScene,vUV+vec2(-t.x,t.y)).rgb)+dec(texture(uScene,vUV+vec2(t.x,t.y)).rgb));
-  float lum=dot(c,vec3(.2126,.7152,.0722));
-  float soft=smoothstep(.88,1.95,lum);
-  vec3 outC=c*soft*.82;
-  frag=vec4(clamp(log2(1.+max(outC,0.))/3.6,0.,1.),1.);
-}`;
-
-export const blurFS = `#version 300 es
-precision highp float;
-in vec2 vUV;
-uniform sampler2D uTex;
-uniform vec2 uDir;
-out vec4 frag;
-vec3 dec(vec3 v){return exp2(v*3.6)-1.;}
-void main(){
-  const float w[5]=float[5](.227027,.1945946,.1216216,.054054,.016216);
-  vec3 acc=dec(texture(uTex,vUV).rgb)*w[0];
-  for(int i=1;i<5;i++){
-    vec2 off=uDir*float(i)*1.35;
-    acc+=dec(texture(uTex,vUV+off).rgb)*w[i];
-    acc+=dec(texture(uTex,vUV-off).rgb)*w[i];
-  }
-  frag=vec4(clamp(log2(1.+max(acc,0.))/3.6,0.,1.),1.);
-}`;
-
-export const compositeFS = `#version 300 es
-precision highp float;
-in vec2 vUV;
-uniform sampler2D uScene,uBloomA,uBloomB;
-uniform int uOutput;
-uniform float uShake;
-uniform float uHurt;
-uniform float uTime;
-out vec4 frag;
-vec3 dec(vec3 v){return exp2(v*3.6)-1.;}
-vec3 aces(vec3 x){return clamp((x*(2.51*x+.03))/(x*(2.43*x+.59)+.14),0.,1.);}
-vec3 toneOut(vec3 c){
-  c=max(c,vec3(0.));
-  if(uOutput==2){vec3 extended=aces(c*.85)+max(c-vec3(1.),0.)*.52;return clamp(log2(1.+extended)/3.,0.,1.);}
-  if(uOutput==1)return pow(aces(c*.90),vec3(1./2.2));
-  return pow(clamp(c*.97,0.,1.),vec3(1./2.2));
-}
-float luma(vec3 c){return dot(c,vec3(.299,.587,.114));}
-void main(){
-  vec2 px=1./vec2(textureSize(uScene,0));
-  vec2 fromC=vUV-.5;
-  float r2=dot(fromC,fromC);
-  // Subtle cinematic lens chromatic aberration amplified dynamically on shot/hit
-  float ca=(.0012+uShake*.0038+uHurt*.0055)*r2;
-  vec2 dir=fromC*ca;
-  vec3 cM=dec(texture(uScene,vUV).rgb);
-  // Lightweight FXAA-style edge smoothing in log space
-  vec3 nW=texture(uScene,vUV+vec2(-px.x,-px.y)).rgb;
-  vec3 nE=texture(uScene,vUV+vec2(px.x,-px.y)).rgb;
-  vec3 sW=texture(uScene,vUV+vec2(-px.x,px.y)).rgb;
-  vec3 sE=texture(uScene,vUV+vec2(px.x,px.y)).rgb;
-  float lNW=luma(nW),lNE=luma(nE),lSW=luma(sW),lSE=luma(sE),lM=luma(texture(uScene,vUV).rgb);
-  float lMin=min(lM,min(min(lNW,lNE),min(lSW,lSE)));
-  float lMax=max(lM,max(max(lNW,lNE),max(lSW,lSE)));
-  vec3 base=cM;
-  if(lMax-lMin>.042){
-    vec2 d=vec2(-((lNW+lNE)-(lSW+lSE)),(lNW+lSW)-(lNE+lSE));
-    float dReduce=max((lNW+lNE+lSW+lSE)*.03125,.0078125);
-    float rcp=1./(min(abs(d.x),abs(d.y))+dReduce);
-    d=clamp(d*rcp,vec2(-4.),vec2(4.))*px;
-    vec3 a=.5*(dec(texture(uScene,vUV+d*(1./3.-.5)).rgb)+dec(texture(uScene,vUV+d*(2./3.-.5)).rgb));
-    vec3 b=a*.5+.25*(dec(texture(uScene,vUV+d*-.5).rgb)+dec(texture(uScene,vUV+d*.5).rgb));
-    float lb=luma(clamp(log2(1.+b)/3.6,0.,1.));
-    base=(lb<lMin||lb>lMax)?a:b;
-  }
-  if(ca>.00018){
-    base.r=mix(base.r,dec(texture(uScene,vUV+dir).rgb).r,.75);
-    base.b=mix(base.b,dec(texture(uScene,vUV-dir).rgb).b,.75);
-  }
-  vec3 bloom=dec(texture(uBloomA,vUV).rgb)*.42+dec(texture(uBloomB,vUV).rgb)*.38;
-  vec3 c=base+bloom;
-  // Crisp cinematic contrast & subtle edge vignette
-  float vig=1.-r2*.42;
-  c*=vig;
-  // Micro film grain to prevent sky/fog banding
-  float grain=(fract(sin(dot(gl_FragCoord.xy+uTime*17.,vec2(12.9898,78.233)))*43758.5453)-.5)*.012;
-  frag=vec4(clamp(toneOut(c)+grain,0.,1.),1.);
 }`;
