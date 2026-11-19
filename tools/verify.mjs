@@ -4,11 +4,17 @@ import {Match,modes,weapons} from '../dist/js/match.js';
 import {PilotWallet} from '../dist/js/wallet.js';
 import {ThermalOptic} from '../dist/js/optic.js';
 import {eyeOf,targetPoint} from '../dist/js/posture.js';
-import {obstruction} from '../dist/js/yard.js';
+import {obstruction,surfaceAt,raycastMaterial} from '../dist/js/yard.js';
 import {perspective,lookAt,multiply,invert4} from '../dist/js/geometry.js';
 import {shadowModes,SHADOW_FLAME_WORLD_GLSL,sfScreenFS,sfBilateralFS} from '../dist/js/shadowflame.js';
 import {KHDR_TONE_GLSL} from '../dist/js/khdr.js';
 import {BONE,ARTICULATED_RIG_GLSL} from '../dist/js/rig.js';
+import {
+  PortAudio,SoundEngin,SOUND_ENGIN_VERSION,SPEED_OF_SOUND,AUDIO_MODES,
+  computePropagationDelay,computeAirAbsorption,computeDopplerShift,
+  computeAcousticPath,traceEarlyReflections,estimateEnclosure,
+  synthesizeWaveShaperCurve,createGunImpulseSamples,generateHarborIR
+} from '../dist/js/audio.js';
 const h=1/360;
 function duel(loadout='DF1 OUT',limit='unlimited',multiplier=2,events=[]) {
   return new Match({mode:'1v1', limit, multiplier,loadout},event=>events.push(event));
@@ -109,5 +115,71 @@ for (const [mode,counts] of Object.entries(modes)) {
  assert.equal(Object.keys(BONE).length,16,'Articulated humanoid rig must have 16 bones');
  assert(ARTICULATED_RIG_GLSL.includes('rigApplyCharacter')&&ARTICULATED_RIG_GLSL.includes('rigSolveElbow')&&ARTICULATED_RIG_GLSL.includes('rigLegKinematics'));
 }
-console.log('360Hz sim, weapon specs (incl. MS10 & DF1 OUT full-auto 3-round burst), supply tankers, bullet whiz, focus and occlusion, credits, EVR1, separate regeneration timers, P1 heat, scoring, 16-joint rig, KHDR & Shadow Flame 1.0 Flash/Pro modules, and all three NV2 Deep Tactical matches passed.');
+{
+ // Sound Engin 1.0: deterministic physical acoustics, 3D raytraced occlusion/reflections, Doppler, & Velvet-Noise IR verification
+ assert.equal(SOUND_ENGIN_VERSION,'Sound Engin 1.0');
+ assert.equal(PortAudio,SoundEngin,'PortAudio alias must map cleanly to SoundEngin');
+ assert.deepEqual(AUDIO_MODES,{hrtf:'hrtf',stereo:'stereo'});
+ // 1. Speed-of-sound propagation delay & supersonic MS10 crack-before-blast physics
+ const d50=computePropagationDelay(50);
+ assert(Math.abs(d50-50/SPEED_OF_SOUND)<1e-6,'Propagation delay must equal d / 343 m/s');
+ assert(50/weapons.MS10.speed<d50,'MS10 supersonic round (648 m/s) must arrive before its muzzle blast');
+ // 2. ISO 9613-1 maritime air absorption monotonic frequency & gain rolloff
+ const aClose=computeAirAbsorption(2),aMid=computeAirAbsorption(45),aFar=computeAirAbsorption(130);
+ assert(aClose.cutoffHz>aMid.cutoffHz&&aMid.cutoffHz>aFar.cutoffHz,'Air absorption LPF cutoff must decrease monotonically with distance');
+ assert(aClose.airGain>aMid.airGain&&aMid.airGain>aFar.airGain,'Air attenuation must decrease monotonically with distance');
+ // 3. Ballistic Doppler physics (supersonic MS10 vs subsonic SRA)
+ const dopMS10=computeDopplerShift(weapons.MS10.speed,2.0);
+ const dopSRA=computeDopplerShift(weapons.SRA.speed,2.0);
+ assert(dopMS10.isSupersonic&&dopMS10.mach>1.85&&dopMS10.approachRatio>1&&dopMS10.recedeRatio<1,'MS10 Doppler must be supersonic with approach > 1 > recede');
+ assert(!dopSRA.isSupersonic&&dopSRA.mach<1&&dopSRA.approachRatio>1&&dopSRA.recedeRatio<1,'SRA Doppler must be subsonic with approach > 1 > recede');
+ // 4. Acoustic materials & real 3D occlusion/diffraction raytracing against Harbor Range containers
+ assert.equal(surfaceAt(0,0,0),'concrete','Wharf ground must classify as concrete');
+ assert.equal(surfaceAt(-12,78,5.24),'steel','Container roof must classify as steel');
+ assert.equal(surfaceAt(-16,68,2.2),'wood','Wooden crates must classify as wood');
+ const matHit=raycastMaterial([-7.8,1.4,13],[-7.8,1.4,2]);
+ assert(matHit&&matHit.mat==='steel','Ray into shipping container must report steel material');
+ const clearPath=computeAcousticPath([2,1.5,85],[2,1.5,75]);
+ const blockedPath=computeAcousticPath([-7.8,1.4,13],[-7.8,1.4,2]);
+ assert(!clearPath.occluded&&clearPath.occlusion===0,'Clear LOS path must not be occluded');
+ assert(blockedPath.occluded&&blockedPath.blockerMat==='steel'&&blockedPath.occlusion>0.2&&blockedPath.cutoffHz<clearPath.cutoffHz&&blockedPath.directGain<clearPath.directGain,'Steel container must occlude, filter, and attenuate direct sound');
+ // 5. Geometric early reflection raycaster & enclosure estimator
+ const taps=traceEarlyReflections([2,1.6,76],[0,1.6,82],6);
+ assert(taps.length>=2&&taps.every(t=>t.delay>0.006&&t.gain>0&&Number.isFinite(t.cutoffHz)),'Harbor cargo yard must produce multiple physical early-reflection slapback taps');
+ const envAlley=estimateEnclosure([13.6,1.6,71]);
+ const envOpen=estimateEnclosure([-23.0,1.6,2]);
+ assert(envAlley.enclosure>envOpen.enclosure,'Container canyon enclosure must exceed open west pier enclosure');
+ // 6. Friedlander blast, N-wave crack, WaveShaper saturation curve, & Dual-Zone Velvet-Noise IRs
+ const curve=synthesizeWaveShaperCurve(2.4,512);
+ assert(curve.length===512&&curve.every(v=>Number.isFinite(v)&&v>=-1&&v<=1),'WaveShaper curve must be finite in [-1, 1]');
+ for(const kind of ['blast','crack']){
+  const buf=createGunImpulseSamples(48000,kind);
+  let rms=0;for(const v of buf){assert(Number.isFinite(v)&&Math.abs(v)<=1);rms+=v*v;}
+  assert(Math.sqrt(rms/buf.length)>0.02,`Gun impulse '${kind}' must have audible non-zero energy`);
+ }
+ for(const style of ['open','alley']){
+  const ir=generateHarborIR(48000,style==='open'?1.6:1.0,style);
+  assert(ir.rt60Low>ir.rt60High,'Physical harbor reverb must damp high frequencies faster than low frequencies');
+  let eL=0,eR=0,dotLR=0,eEarly=0,eLate=0;
+  const split=Math.floor(ir.left.length*0.25);
+  for(let i=0;i<ir.left.length;i++){
+   const l=ir.left[i],r=ir.right[i];
+   assert(Number.isFinite(l)&&Number.isFinite(r)&&Math.abs(l)<=1&&Math.abs(r)<=1);
+   eL+=l*l;eR+=r*r;dotLR+=l*r;
+   if(i<split)eEarly+=l*l+r*r; else eLate+=l*l+r*r;
+  }
+  const corr=Math.abs(dotLR/(Math.sqrt(eL*eR)||1));
+  assert(eL>0.5&&eR>0.5&&corr<0.55&&eEarly>eLate*0.25,`Harbor IR '${style}' must be energetic, stereo-decorrelated (corr=${corr.toFixed(3)}), and decaying`);
+ }
+ // 7. SoundEngin Node-safe lifecycle & casing bounce event verification
+ const eng=new SoundEngin();
+ eng.setMode('stereo');eng.setMode('hrtf');eng.set(0.6);eng.resetMatch();
+ assert.equal(eng.getDiagnostics().engine,'Sound Engin 1.0');
+ const ev=[],m=duel('MS10','unlimited',2,ev);
+ assert(m.trigger(m.player));
+ for(let i=0;i<360;i++)m.step(h,{});
+ assert(ev.some(e=>e.type==='casing'),'Ejected shell casings must emit physical bounce events');
+ console.log('Sound Engin 1.0 acoustics OK:',{clearHz:Math.round(clearPath.cutoffHz),blockedHz:Math.round(blockedPath.cutoffHz),earlyTaps:taps.length,alleyEnc:Number(envAlley.enclosure.toFixed(2)),openEnc:Number(envOpen.enclosure.toFixed(2))});
+}
+console.log('360Hz sim, weapon specs (incl. MS10 & DF1 OUT full-auto 3-round burst), supply tankers, bullet whiz, focus and occlusion, credits, EVR1, separate regeneration timers, P1 heat, scoring, 16-joint rig, KHDR, Shadow Flame 1.0 Flash/Pro, Sound Engin 1.0, and all three NV2 Deep Tactical matches passed.');
 

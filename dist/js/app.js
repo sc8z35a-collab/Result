@@ -4,13 +4,13 @@ import {Renderer, sizes, qualityLevels, shadowModes} from './renderer.js';
 import {titleCamera} from './harbor.js';
 import {Match, modes, weapons} from './match.js';
 import {forward, add, clamp} from './geometry.js';
-import {PortAudio} from './audio.js';
+import {SoundEngin, AUDIO_MODES, SOUND_ENGIN_VERSION} from './audio.js';
 const $ = s => document.getElementById(s),
   views = {title: 'titleView', lobby: 'lobby', settings: 'settings', game: 'hud', pause: 'pause', results: 'results'};
 // Optically exact further 2/3 view width relative to 36.4° / 19.4° FOV:
 // 2 * atan((2/3) * tan(36.4°/2)) = 24.7°, 2 * atan((2/3) * tan(19.4°/2)) = 13.0°.
 const BASE_FOV = 24.7, ADS_FOV = 13.0;
-const defaults = {resolution: 'HD', graphics: 'high', rate: 360, rateV2: true, hdr: true, khdr: true, shadowMode: 'pro', shadows: true, sensitivity: 1, volume: 55, sound: false};
+const defaults = {resolution: 'HD', graphics: 'high', rate: 360, rateV2: true, hdr: true, khdr: true, shadowMode: 'pro', shadows: true, audioMode: 'hrtf', sensitivity: 1, volume: 55, sound: false};
 const graphicsHints = {
   standard: '軽量描画 · 基本ライト · 標準反射',
   high: '高精細質感 · 動的ライト · 標準水面反射',
@@ -20,6 +20,10 @@ const shadowHints = {
   off: '影なし · 最軽量',
   flash: '超軽量リアル影 · 静的キャッシュ＋動的NPC影 · IGN-Vogel6 · 彩色アンブラ',
   pro: '最高峰影 · 近距離2.7cmカスケード · 物理PCSS · SSCS接地影 · 光芒シャドウ'
+};
+const audioHints = {
+  hrtf: '3D HRTF立体音響 · 実測遮蔽/反響 · 音速伝播 · コンボリューション残響 · 物理銃声',
+  stereo: '軽量ステレオ3D · 音速伝播 · 距離吸収 · 物理銃声 · 低負荷'
 };
 // Crisp minimal mechanical weapon pulse with ZERO camera shake or FOV punch.
 const recoilProfiles = {
@@ -53,6 +57,7 @@ try {
 if (!sizes[settings.resolution])settings.resolution = 'HD';
 if (!(settings.graphics in qualityLevels))settings.graphics = 'high';
 if (!(settings.shadowMode in shadowModes))settings.shadowMode = 'pro';
+if (!(settings.audioMode in AUDIO_MODES))settings.audioMode = 'hrtf';
 settings.shadows = settings.shadowMode !== 'off';
 settings.khdr = !!settings.khdr;
 if (settings.khdr) settings.hdr = true;
@@ -104,7 +109,7 @@ let screen = 'title',
   holdFireKey = false,
   holdFireTouch = false;
 const gpPrev = new Uint8Array(18);
-const keys = new Set(), audio = new PortAudio();
+const keys = new Set(), audio = new SoundEngin();
 let feed = [];
 const fixed = 1 / 360;
 
@@ -394,6 +399,7 @@ function show(s) {
   if (s === 'settings')drawSettings();
   if (s === 'title') {
     match = null;
+    audio.resetMatch();
     tourTime = 0;
     resetView = true;
     soundButton()
@@ -410,7 +416,8 @@ function soundButton() {
   const on = settings.sound && audio.on && settings.volume > 0;
   $('sound').querySelector('use').setAttribute('href', on ? '#i-audio' : '#i-muted');
   $('sound').querySelector('span').textContent = on ? 'SOUND ON' : 'SOUND OFF';
-  $('sound').setAttribute('aria-label', on ? 'サウンドをオフにする' : 'サウンドをオンにする')
+  $('sound').setAttribute('aria-label', on ? 'サウンドをオフにする' : 'サウンドをオンにする');
+  $('app').dataset.audioState = audio.ctx?.state || (audio.on ? 'ready' : 'off')
 }
 function lobby() {
   group('modes', rules.mode, k => {
@@ -454,6 +461,12 @@ function drawSettings() {
   group('graphics', settings.graphics, k => setGraphics('graphics', k));
   group('rate', settings.rate, k => setGraphics('rate', Number(k)));
   group('shadowMode', settings.shadowMode, k => setGraphics('shadowMode', k));
+  group('audioMode', settings.audioMode, k => {
+    settings.audioMode = k;
+    audio.setMode(k);
+    save();
+    drawSettings()
+  });
   const [w, h] = sizes[settings.resolution];
   $('resolutionHint').textContent = `${w.toLocaleString('en-US')} × ${h.toLocaleString('en-US')} px`;
   $('graphicsHint').textContent = !renderer?.native && settings.graphics === 'extra' ? '互換描画 · エフェクト・パーティクル強化' : graphicsHints[settings.graphics];
@@ -465,6 +478,7 @@ function drawSettings() {
     ? (renderer?.hdrDisplay?.active ? `KHDR 16×広域HDR出力 · ${bitTag} · K-Filmic · K-Adapt · K-LCE` : `${bitTag} · K-Filmic色相保全 · K-Adapt自動露出 · K-LCE · K-Halo`)
     : 'オフ · 標準HDR/SDR描画';
   $('shadowHint').textContent = !renderer?.native && settings.shadowMode !== 'off' ? '互換ソフト影描画' : shadowHints[settings.shadowMode];
+  $('audioHint').textContent = audioHints[settings.audioMode];
   $('sensitivity').value = settings.sensitivity;
   $('sensVal').value = settings.sensitivity.toFixed(1) + '×';
   $('volume').value = settings.volume;
@@ -488,6 +502,7 @@ $('pauseSettings').onclick = () => {
 $('sound').onclick = async() => {
   settings.sound = !(settings.sound && audio.on && settings.volume);
   if (settings.sound && !settings.volume)settings.volume = 55;
+  audio.setMode(settings.audioMode);
   audio.set(settings.volume / 100);
   await audio.enable(settings.sound);
   save();
@@ -503,6 +518,7 @@ $('sensitivity').oninput = e => {
 $('volume').oninput = e => {
   settings.volume = Number(e.target.value);
   settings.sound = settings.volume > 0;
+  audio.setMode(settings.audioMode);
   audio.set(settings.volume / 100);
   audio.enable(settings.sound);
   $('volumeVal').value = settings.volume + '%';
@@ -541,10 +557,12 @@ function startMatch() {
   gameKick = hurt = 0;
   noticeUntil = 0;
   resetMotion();
+  audio.resetMatch();
   match = new Match(rules, event);
   equipment.prepare(match.player);
   show('game');
   pointer();
+  audio.setMode(settings.audioMode);
   if (settings.sound)audio.enable(true);
   audio.set(settings.volume / 100);
   $('startHint').hidden = false;
@@ -964,6 +982,7 @@ function frame(ms) {
     cam = titleCamera(tourTime);
     $('cinema-veil').style.opacity = cam.fade
   }
+  audio.update(dt, match, cam);
   const cinematic = !match && !renderer.native && settings.shadows && settings.hdr;
   $('app').classList.toggle('cinematic', cinematic);
   if (cinematic)$('cinema-veil').style.opacity = 0; else renderer.render(cam, timeNow, match, {
@@ -989,11 +1008,16 @@ function frame(ms) {
     resetView = false;
     $('loading').hidden = true
   }
-  $('app').dataset.renderer = renderer.native ? 'webgl2' : 'software';
+  const appEl = $('app');
+  appEl.dataset.renderer = renderer.native ? 'webgl2' : 'software';
+  appEl.dataset.audioEngine = SOUND_ENGIN_VERSION;
+  appEl.dataset.audioMode = settings.audioMode;
+  appEl.dataset.audioState = audio.ctx?.state || (audio.on ? 'ready' : 'off');
 }
 async function init() {
   controls();
   soundButton();
+  audio.setMode(settings.audioMode);
   audio.set(settings.volume / 100);
   $('start').disabled = true;
   try {

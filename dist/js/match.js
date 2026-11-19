@@ -1,5 +1,5 @@
 import {clamp, forward, dot, sub, add, scale, random, cross, unit} from './geometry.js';
-import {teams, tankers, walkable, moveActor, floorAt, obstruction} from './yard.js';
+import {teams, tankers, walkable, moveActor, floorAt, obstruction, raycastMaterial} from './yard.js';
 import {NV2} from './nv2.js';
 import {eyeOf, torso, bodyCenter, postureStep} from './posture.js';
 import {DF, initialDF, assist, scheduleDF, directionDF, spendP1, updateDF} from './df1.js';
@@ -230,7 +230,7 @@ export class Match {
     });
     if (this.casings.length > 42)this.casings.shift();
     this.nv.sound(a);
-    this.event('fire', {actor: a, source, gun: a.gun, p: muzzle, dir})
+    this.event('fire', {actor: a, source, gun: a.gun, p: muzzle, dir, speed: w.speed, burstIndex: a.shotCount})
   }
   damage(v, owner, power, dir = null) {
     if (this.ended || !v.alive || owner.team === v.team)return null;
@@ -425,6 +425,10 @@ export class Match {
             pan,
             panEnd,
             point: closest,
+            dir: s.dir,
+            origin: s.origin,
+            p0: a,
+            p1: b,
             enemy: s.team !== pl.team
           })
         }
@@ -453,7 +457,9 @@ export class Match {
           seed: ++this.seq
         })
       } else {
-        const metal = p[1] >= .08;
+        const hitInfo = raycastMaterial(a, b);
+        const mat = hitInfo?.mat || (p[1] >= .08 ? 'steel' : 'concrete');
+        const metal = mat === 'steel';
         const dur = s.gun === 'MS10' ? .34 : .26;
         this.effects.push({
           kind: 'wall',
@@ -468,7 +474,7 @@ export class Match {
           target: false,
           seed: ++this.seq
         });
-        this.event('impact', {point: p, dir: s.dir, gun: s.gun, metal, actor: s.owner})
+        this.event('impact', {point: p, dir: s.dir, normal: hitInfo?.normal || [0, 1, 0], gun: s.gun, metal, mat, actor: s.owner})
       }
       return false
     }
@@ -498,11 +504,16 @@ export class Match {
       c.p[2] += c.v[2] * dt;
       c.rot += c.spin * dt;
       if (c.p[1] <= .03) {
+        const impactVy = Math.abs(c.v[1]);
         c.p[1] = .03;
-        c.v[1] = Math.abs(c.v[1]) * .38;
+        c.v[1] = impactVy * .38;
         c.v[0] *= .68;
         c.v[2] *= .68;
         c.spin *= .65;
+        if ((c.bounces || 0) < 2 && impactVy > .55) {
+          this.event('casing', {point: [...c.p], gun: c.gun, speed: impactVy, bounce: c.bounces || 0});
+          c.bounces = (c.bounces || 0) + 1
+        }
         c.bounced = true
       }
       this.casings[cw++] = c

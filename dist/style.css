@@ -401,6 +401,24 @@ button:active { transform: scale(.97); }
   color: #ffe8ba;
   box-shadow: inset 0 -3px #ff9d47, 0 0 18px #ff8c3a44;
 }
+.badge-sound {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font: 700 10px/1.2 var(--mono);
+  letter-spacing: .06em;
+  vertical-align: middle;
+  color: #dffef7;
+  background: linear-gradient(90deg, #164854, #223e4f);
+  border: 1px solid #66e6e078;
+}
+#audioMode button[data-value="hrtf"][aria-pressed="true"] {
+  border-color: #7aeef2;
+  background: linear-gradient(135deg, #3ac9d438, #edc16620);
+  color: #e2ffff;
+  box-shadow: inset 0 -3px #7aeef2, 0 0 16px #58dce840;
+}
 .range-val { gap: 12px; }
 .range-val input {
   width: clamp(132px, 24vw, 185px);

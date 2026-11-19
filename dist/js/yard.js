@@ -72,14 +72,14 @@ export const tankers = [
 ];
 export const teams = [[[1, 84], [-16, 85], [6, 70], [-18, 56], [19, 61], [-2, 89]], [[0, -84], [18, -85], [-17, -73], [18, -61], [-3, -77], [4, -91]]];
 export const obstacles = [];
-function obstacle(x, z, w, d, y0, y1) {
-  obstacles.push({x0: x - w / 2, x1: x + w / 2, z0: z - d / 2, z1: z + d / 2, y0, y1})
+function obstacle(x, z, w, d, y0, y1, mat = 'steel') {
+  obstacles.push({x0: x - w / 2, x1: x + w / 2, z0: z - d / 2, z1: z + d / 2, y0, y1, mat})
 }
-for (const [x, z, w, d, y] of cargo)obstacle(x, z, w, d, y, y + 2.62);
-for (const [, x, z, w, h, d] of props)obstacle(x, z, w, d, 0, h);
-for (const t of tankers)obstacle(t.x, t.z, t.w, t.d, 0, t.h);
-for (const c of craneSites)for (const dx of [-4.4, 4.4])for (const dz of [-8, 8])obstacle(c.x + dx * c.scale, c.z + dz * c.scale, 1.6 * c.scale, 2.9 * c.scale, 0, 8 * c.scale);
-for (let z = -94; z <= 96; z += 19)obstacle(-23.7, z, .9, 1.2, 0, .86);
+for (const [x, z, w, d, y] of cargo)obstacle(x, z, w, d, y, y + 2.62, 'steel');
+for (const [kind, x, z, w, h, d] of props)obstacle(x, z, w, d, 0, h, kind === 'barrier' ? 'concrete' : kind === 'lift' ? 'steel' : 'wood');
+for (const t of tankers)obstacle(t.x, t.z, t.w, t.d, 0, t.h, 'steel');
+for (const c of craneSites)for (const dx of [-4.4, 4.4])for (const dz of [-8, 8])obstacle(c.x + dx * c.scale, c.z + dz * c.scale, 1.6 * c.scale, 2.9 * c.scale, 0, 8 * c.scale, 'steel');
+for (let z = -94; z <= 96; z += 19)obstacle(-23.7, z, .9, 1.2, 0, .86, 'concrete');
 // A uniform index keeps visibility, swept shots and navigation queries local.
 const CELL = 8, grid = new Map();
 const cellKey = (x, z) => (x + 50) * 512 + z + 128;
@@ -115,6 +115,20 @@ export function floorAt(x, z, oldY) {
   }
   return h
 }
+export function surfaceAt(x, z, y) {
+  if (y <= .08)return 'concrete';
+  let best = 'steel', bestDiff = Infinity;
+  for (const i of nearby(x - .34, z - .34, x + .34, z + .34)) {
+    const o = obstacles[i];
+    if (x < o.x0 - .28 || x > o.x1 + .28 || z < o.z0 - .28 || z > o.z1 + .28)continue;
+    const diff = Math.abs(o.y1 - y);
+    if (diff < .28 && diff < bestDiff) {
+      bestDiff = diff;
+      best = o.mat || 'steel'
+    }
+  }
+  return best
+}
 export function rayBox(a, b, o) {
   let enter = 0, exit = 1;
   for (const [k, lo, hi] of [[0, o.x0, o.x1], [1, o.y0, o.y1], [2, o.z0, o.z1]]) {
@@ -130,6 +144,37 @@ export function rayBox(a, b, o) {
     if (enter > exit)return Infinity
   }
   return enter
+}
+export function raycastMaterial(a, b) {
+  let nearest = Infinity, hitObj = null;
+  for (const i of nearby(Math.min(a[0], b[0]), Math.min(a[2], b[2]), Math.max(a[0], b[0]), Math.max(a[2], b[2]))) {
+    const o = obstacles[i];
+    const t = rayBox(a, b, o);
+    if (t < nearest) {
+      nearest = t;
+      hitObj = o
+    }
+  }
+  let groundHit = false;
+  if (b[1] < 0 && a[1] >= 0) {
+    const tg = a[1] / (a[1] - b[1]);
+    if (tg < nearest) {
+      nearest = tg;
+      hitObj = null;
+      groundHit = true
+    }
+  }
+  if (!(nearest <= 1))return null;
+  const point = [a[0] + (b[0] - a[0]) * nearest, a[1] + (b[1] - a[1]) * nearest, a[2] + (b[2] - a[2]) * nearest];
+  if (groundHit || !hitObj)return {t: nearest, point, normal: [0, 1, 0], mat: 'concrete'};
+  const eps = 1e-3;
+  let normal = [0, 1, 0];
+  if (Math.abs(point[0] - hitObj.x0) < eps)normal = [-1, 0, 0];
+  else if (Math.abs(point[0] - hitObj.x1) < eps)normal = [1, 0, 0];
+  else if (Math.abs(point[2] - hitObj.z0) < eps)normal = [0, 0, -1];
+  else if (Math.abs(point[2] - hitObj.z1) < eps)normal = [0, 0, 1];
+  else if (Math.abs(point[1] - hitObj.y0) < eps)normal = [0, -1, 0];
+  return {t: nearest, point, normal, mat: hitObj.mat || 'steel'}
 }
 export function obstruction(a, b) {
   let nearest = Infinity;
