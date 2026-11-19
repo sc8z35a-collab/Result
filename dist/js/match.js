@@ -3,13 +3,15 @@ import {teams, tankers, walkable, moveActor, floorAt, obstruction, raycastMateri
 import {NV2} from './nv2.js';
 import {eyeOf, torso, bodyCenter, postureStep} from './posture.js';
 import {DF, initialDF, assist, scheduleDF, bulletGuidanceDF, steerGuidedShot, spendP1, updateDF} from './df1.js';
+import {RD, initialRD40, updateRD40, bulletGuidanceRD40} from './rd40.js';
 const baseSpeed = 360, baseInterval = .24;
 export const weapons = {
   'SW T': {capacity: 10, damage: 9, rate: 100, velocity: 100, speed: baseSpeed, interval: baseInterval, burst: 1, reload: 1.4},
   SRA: {capacity: 30, damage: 6, rate: 120, velocity: 80, speed: baseSpeed * .8, interval: baseInterval / 1.2, burst: 1, reload: 1.65},
   D1: {capacity: 40, damage: 5, rate: 100, velocity: 60, speed: baseSpeed * .6, interval: baseInterval, burst: 2, reload: 1.85},
   MS10: {capacity: 24, damage: 9, rate: 130, velocity: 180, speed: baseSpeed * 1.8, interval: baseInterval / 1.3, burst: 1, reload: 1.55, auto: true},
-  [DF]: {capacity: 95, damage: 2.8, rate: 300, velocity: 65, speed: baseSpeed * .65, interval: baseInterval / 3, burst: 3, reload: 1.85, auto: true, playerOnly: true}
+  [DF]: {capacity: 95, damage: 2.8, rate: 300, velocity: 65, speed: baseSpeed * .65, interval: baseInterval / 3, burst: 3, reload: 1.85, auto: true, playerOnly: true},
+  [RD]: {capacity: 130, damage: 3, rate: 170, velocity: 140, speed: baseSpeed * 1.4, interval: baseInterval / 1.7, burst: 1, pellets: 2, reload: 1.95, auto: true, playerOnly: true}
 };
 export const modes = {'3v3': [3, 3], '1v2': [1, 2], '1v1': [1, 1]};
 const names = [['YOU', 'NAGI', 'KAI'], ['RIN', 'SORA', 'AO']];
@@ -148,7 +150,8 @@ export class Match {
       sprintAmt: 0,
       reloadFrac: 0,
       queue: [],
-      df: a.gun === DF ? {...initialDF(), pattern: a.df?.pattern || 'central', scope: a.df?.scope || 'plastic'} : null
+      df: a.gun === DF ? {...initialDF(), pattern: a.df?.pattern || 'central', scope: a.df?.scope || 'plastic'} : null,
+      rd: a.gun === RD ? initialRD40() : null
     });
     if (!a.human)this.nv.attach(a);
     if (!initial)this.event('spawn', {actor: a})
@@ -176,76 +179,85 @@ export class Match {
   }
   fire(a, source = 'main') {
     const w = this.weapon(a);
+    const salvo = w.pellets && source === 'main' ? Math.min(w.pellets, a.mag) : 1;
     if (source === 'p1') {
       if (!spendP1(a, this.time))return
     } else {
-      if (!a.mag)return;
-      a.mag--
+      if (!a.mag || salvo <= 0)return;
+      a.mag -= salvo
     }
     a.cooldown = w.interval;
-    a.flash = a.gun === 'MS10' ? .115 : .095;
+    a.flash = a.gun === 'MS10' ? .115 : a.gun === RD ? .105 : .095;
     a.recoil = 1;
     a.recoilSide = (this.rng() - .5) * 2;
     a.shotCount = (a.shotCount || 0) + 1;
-    const guidedInfo = a.df ? bulletGuidanceDF(this, a) : null;
-    const dir = guidedInfo ? guidedInfo.dir : forward(a.yaw, a.pitch), p = eyeOf(a);
-    const right = unit(cross(dir, [0, 1, 0]));
-    const up = cross(right, dir);
-    const barrelLen = a.gun === 'MS10' ? .92 : a.gun === 'D1' ? .78 : a.gun === 'SW T' ? .60 : .74;
-    const muzzle = add(p, add(scale(dir, barrelLen), add(scale(right, a.human ? .14 : .11), scale(up, a.human ? -.12 : -.18))));
-    this.shots.push({
-      id: ++this.seq,
-      owner: a,
-      team: a.team,
-      gun: a.gun,
-      source,
-      dir,
-      p,
-      old: p,
-      origin: [...muzzle],
-      trail: [[...muzzle]],
-      trailClock: 0,
-      guided: !!guidedInfo?.guided,
-      homingTargetId: guidedInfo ? guidedInfo.targetId : -1,
-      homingBudget: guidedInfo ? guidedInfo.homingBudget : 0,
-      homingRate: guidedInfo ? guidedInfo.homingRate : 0,
-      homingTurned: 0,
-      damage: w.damage,
-      speed: w.speed,
-      life: 1.35,
-      age: 0,
-      whizzed: false
-    });
-    // Spawn muzzle flash & drifting smoke puff in world space.
-    this.effects.push({
-      kind: 'muzzle',
-      p: muzzle,
-      dir: [...dir],
-      gun: a.gun,
-      team: a.team,
-      source,
-      actor: a.id,
-      human: a.human,
-      life: a.gun === 'MS10' ? .15 : .12,
-      max: a.gun === 'MS10' ? .15 : .12,
-      seed: this.seq
-    });
-    // Eject spinning brass / thermal cartridge casing from right ejection port.
-    const port = add(p, add(scale(dir, .36), add(scale(right, a.human ? .22 : .18), scale(up, a.human ? -.13 : -.18))));
-    const spreadR = 1.6 + this.rng() * 1.3, spreadU = 1.1 + this.rng() * .95, spreadF = -.35 + (this.rng() - .5) * .6;
-    this.casings.push({
-      p: port,
-      v: add(add(scale(right, spreadR), scale(up, spreadU)), scale(dir, spreadF)),
-      rot: this.rng() * 6.28,
-      spin: (this.rng() > .5 ? 1 : -1) * (14 + this.rng() * 16),
-      gun: a.gun,
-      life: .95,
-      bounced: false
-    });
-    if (this.casings.length > 42)this.casings.shift();
+    const p = eyeOf(a);
+    const barrelLen = a.gun === 'MS10' ? .92 : a.gun === RD ? .88 : a.gun === 'D1' ? .78 : a.gun === 'SW T' ? .60 : .74;
+    let firstDir = null, firstMuzzle = null;
+    for (let k = 0; k < salvo; k++) {
+      const barrelSide = salvo === 2 ? (k === 0 ? -1 : 1) : 0;
+      const guidedInfo = a.df ? bulletGuidanceDF(this, a) : a.rd ? bulletGuidanceRD40(this, a, barrelSide) : null;
+      const dir = guidedInfo ? guidedInfo.dir : forward(a.yaw, a.pitch);
+      const right = unit(cross(dir, [0, 1, 0]));
+      const up = cross(right, dir);
+      const sideOff = (a.human ? .14 : .11) + barrelSide * .048;
+      const muzzle = add(p, add(scale(dir, barrelLen), add(scale(right, sideOff), scale(up, a.human ? -.12 : -.18))));
+      if (!firstDir) { firstDir = dir; firstMuzzle = muzzle; }
+      this.shots.push({
+        id: ++this.seq,
+        owner: a,
+        team: a.team,
+        gun: a.gun,
+        source,
+        dir,
+        p,
+        old: p,
+        origin: [...muzzle],
+        trail: [[...muzzle]],
+        trailClock: 0,
+        guided: !!guidedInfo?.guided,
+        homingTargetId: guidedInfo ? guidedInfo.targetId : -1,
+        homingBudget: guidedInfo ? guidedInfo.homingBudget : 0,
+        homingRate: guidedInfo ? guidedInfo.homingRate : 0,
+        homingCos: guidedInfo?.homingCos || 0,
+        homingTurned: 0,
+        damage: w.damage,
+        speed: w.speed,
+        life: 1.35,
+        age: 0,
+        whizzed: false
+      });
+      // Spawn muzzle flash & drifting smoke puff in world space.
+      this.effects.push({
+        kind: 'muzzle',
+        p: muzzle,
+        dir: [...dir],
+        gun: a.gun,
+        team: a.team,
+        source,
+        actor: a.id,
+        human: a.human,
+        life: a.gun === 'MS10' ? .15 : .12,
+        max: a.gun === 'MS10' ? .15 : .12,
+        seed: this.seq
+      });
+      // Eject spinning brass / thermal cartridge casing from right ejection port.
+      const port = add(p, add(scale(dir, .36), add(scale(right, (a.human ? .22 : .18) + barrelSide * .02), scale(up, a.human ? -.13 : -.18))));
+      const spreadR = 1.6 + this.rng() * 1.3, spreadU = 1.1 + this.rng() * .95, spreadF = -.35 + (this.rng() - .5) * .6;
+      this.casings.push({
+        p: port,
+        v: add(add(scale(right, spreadR), scale(up, spreadU)), scale(dir, spreadF)),
+        rot: this.rng() * 6.28,
+        spin: (this.rng() > .5 ? 1 : -1) * (14 + this.rng() * 16),
+        gun: a.gun,
+        life: .95,
+        bounced: false
+      });
+      if (this.casings.length > 42)this.casings.shift();
+    }
     this.nv.sound(a);
     this.nv.onShotFired?.(a, source);
-    this.event('fire', {actor: a, source, gun: a.gun, p: muzzle, dir, speed: w.speed, burstIndex: a.shotCount})
+    this.event('fire', {actor: a, source, gun: a.gun, p: firstMuzzle, dir: firstDir, speed: w.speed, pellets: salvo, burstIndex: a.shotCount})
   }
   damage(v, owner, power, dir = null) {
     if (this.ended || !v.alive || owner.team === v.team)return null;
@@ -385,6 +397,7 @@ export class Match {
       }
     } else a.ammoClock = 0;
     if (a.df)updateDF(this, a, dt);
+    if (a.rd)updateRD40(this, a, dt);
     if (a.burstLeft) {
       a.nextBurst -= dt;
       if (a.nextBurst <= 1e-7) {

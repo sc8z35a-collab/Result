@@ -1256,12 +1256,12 @@ export class SoundEngin {
     if (vol > 0.22) this._duckAmbience(vol * (isPlayer ? 0.92 : 0.65), start);
 
     // LAYER 1: Friedlander shockwave pressure transient (physical blast impulse)
-    const blastRate = gun === 'MS10' ? 1.48 * j : gun === 'DF1 OUT' ? (e.source === 'p1' ? 1.32 : 1.18) * j : gun === 'SRA' ? 1.12 * j : gun === 'D1' ? 0.94 * j : 0.88 * j;
+    const blastRate = gun === 'MS10' ? 1.48 * j : gun === 'RD40' ? 1.34 * j : gun === 'DF1 OUT' ? (e.source === 'p1' ? 1.32 : 1.18) * j : gun === 'SRA' ? 1.12 * j : gun === 'D1' ? 0.94 * j : 0.88 * j;
     this._playBuffer({
       buffer: this.blastBuf,
       rate: blastRate,
       dur: 0.135,
-      gain: (gun === 'SW T' ? 0.36 : gun === 'MS10' ? 0.33 : 0.28) * vol,
+      gain: (gun === 'SW T' ? 0.36 : gun === 'MS10' ? 0.33 : gun === 'RD40' ? 0.31 : 0.28) * vol,
       lpf,
       pos,
       pan: muzzlePan,
@@ -1296,6 +1296,33 @@ export class SoundEngin {
       // High-voltage capacitor shimmer (crisp 1st-person mechanical feedback)
       if (isPlayer) {
         this._playTone({f0: 3650 * j, f1: 5150 * j, dur: 0.055, gain: 0.042, type: 'sine', pan: boltPan, bus: this.foleyBus, start: start + 0.022});
+      }
+    } else if (gun === 'RD40') {
+      // Twin-linked Mach 1.47 supersonic dual-barrel full-auto carbine (staggered 7ms twin-barrel micro-double-crack!)
+      const twinOffset = (e.pellets || 2) >= 2 ? 0.007 : 0;
+      for (const dtB of twinOffset ? [0, twinOffset] : [0]) {
+        const bPan = isPlayer ? (dtB ? 0.16 : -0.02) : muzzlePan;
+        this._playBuffer({
+          buffer: this.crackBuf,
+          rate: (dtB ? 1.18 : 1.12) * j,
+          dur: 0.044,
+          gain: (dtB ? 0.22 : 0.28) * vol * (1 - distNorm * 0.42),
+          filterType: 'bandpass',
+          f0: (dtB ? 4950 : 4400) * j,
+          f1: 1180 * j,
+          q: 1.35,
+          lpf,
+          pos,
+          pan: bPan,
+          bus: this.weaponsBus,
+          reverbSend: revSend * 0.68,
+          start: start + dtB
+        });
+      }
+      this._playTone({f0: 1320 * j, f1: 240 * j, dur: 0.058, gain: 0.14 * vol, type: 'sawtooth', lpf, pos, pan: muzzlePan, bus: this.weaponsBus, start});
+      this._playTone({f0: 162 * j, f1: 52, dur: 0.105, gain: 0.19 * vol, type: 'sine', lpf, pos, pan: 0, bus: this.weaponsBus, start});
+      if (isPlayer) {
+        this._playTone({f0: 2780 * j, f1: 3520 * j, dur: 0.036, gain: 0.034, type: 'triangle', pan: boltPan, bus: this.foleyBus, start: start + 0.014});
       }
     } else if (gun === 'DF1 OUT') {
       const p1 = e.source === 'p1';
@@ -1388,8 +1415,8 @@ export class SoundEngin {
     // LAYER 3: Mechanical bolt carrier / action clack & buffer spring (close-range detail)
     if (isPlayer || d < 18) {
       const mGain = isPlayer ? 0.072 : 0.036 * (1 - d / 18);
-      const boltDelay = gun === 'MS10' ? 0.014 : gun === 'DF1 OUT' ? 0.015 : 0.020;
-      const boltF = gun === 'MS10' ? 2850 : gun === 'DF1 OUT' ? 2350 : 1650;
+      const boltDelay = gun === 'MS10' ? 0.014 : gun === 'RD40' ? 0.013 : gun === 'DF1 OUT' ? 0.015 : 0.020;
+      const boltF = gun === 'MS10' ? 2850 : gun === 'RD40' ? 2600 : gun === 'DF1 OUT' ? 2350 : 1650;
       this._playTone({f0: boltF * j, f1: boltF * 0.62 * j, dur: 0.028, gain: mGain, type: 'triangle', pos, pan: boltPan, bus: this.foleyBus, start: start + boltDelay});
       this._playBuffer({
         buffer: this.whiteNoiseBuf,
@@ -1906,13 +1933,13 @@ export class SoundEngin {
     const gun = actor?.gun || 'SW T';
 
     // Stage 5: Charging handle / bolt release dual rack-clack!
-    const fRack = gun === 'MS10' ? 1850 : gun === 'DF1 OUT' ? 1480 : 960;
+    const fRack = gun === 'MS10' ? 1850 : gun === 'RD40' ? 1680 : gun === 'DF1 OUT' ? 1480 : 960;
     this._playTone({f0: fRack * 0.65, f1: fRack * 1.15, dur: 0.055, attack: 0.002, gain: 0.095 * vol, type: 'triangle', lpf, pos: p, pan, bus: this.foleyBus, start});
     this._playBuffer({buffer: this.whiteNoiseBuf, loop: true, dur: 0.052, gain: 0.08 * vol, filterType: 'bandpass', f0: 3800, f1: 1600, q: 2.8, lpf, pos: p, pan, bus: this.foleyBus, start: start + 0.01});
     this._playTone({f0: fRack * 1.2, f1: fRack * 0.78, dur: 0.068, attack: 0.002, gain: 0.115 * vol, type: 'triangle', lpf, pos: p, pan, bus: this.foleyBus, start: start + 0.062});
-    if (gun === 'MS10' && isPlayer) {
-      // Rail capacitor armed chime
-      this._playTone({f0: 2200, f1: 3300, dur: 0.095, gain: 0.052, type: 'sine', pan: 0.12, bus: this.foleyBus, start: start + 0.07});
+    if ((gun === 'MS10' || gun === 'RD40') && isPlayer) {
+      // Rail capacitor / D01 SENSOR armed chime
+      this._playTone({f0: gun === 'RD40' ? 1980 : 2200, f1: gun === 'RD40' ? 2960 : 3300, dur: 0.095, gain: 0.048, type: 'sine', pan: 0.12, bus: this.foleyBus, start: start + 0.07});
     }
   }
 

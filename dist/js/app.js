@@ -31,7 +31,8 @@ const recoilProfiles = {
   SRA: {z: .022, y: .004, pitch: .032, yaw: .006, roll: .015, camPitch: 0, camRoll: 0, shake: 0, spread: 2.8, heat: .13, fov: 0},
   D1: {z: .020, y: .0035, pitch: .028, yaw: .0055, roll: .013, camPitch: 0, camRoll: 0, shake: 0, spread: 2.5, heat: .11, fov: 0},
   MS10: {z: .025, y: .004, pitch: .030, yaw: .007, roll: .016, camPitch: 0, camRoll: 0, shake: 0, spread: 2.4, heat: .15, fov: 0},
-  'DF1 OUT': {z: .022, y: .0035, pitch: .028, yaw: .005, roll: .014, camPitch: 0, camRoll: 0, shake: 0, spread: 2.2, heat: .15, fov: 0}
+  'DF1 OUT': {z: .022, y: .0035, pitch: .028, yaw: .005, roll: .014, camPitch: 0, camRoll: 0, shake: 0, spread: 2.2, heat: .15, fov: 0},
+  RD40: {z: .023, y: .0035, pitch: .026, yaw: .005, roll: .013, camPitch: 0, camRoll: 0, shake: 0, spread: 2.1, heat: .12, fov: 0}
 };
 // Ultra-small precision micro-recoil with rapid smooth recovery (laser-controllable).
 const aimRecoil = {
@@ -39,7 +40,8 @@ const aimRecoil = {
   SRA: {pitch: .0024, yaw: .0007, recoverRate: 16.0, recoverRatio: .92, climb: .010},
   D1: {pitch: .0018, yaw: .0006, recoverRate: 16.5, recoverRatio: .94, climb: .008},
   MS10: {pitch: .0026, yaw: .0009, recoverRate: 15.5, recoverRatio: .92, climb: .010},
-  'DF1 OUT': {pitch: .0016, yaw: .0005, recoverRate: 17.5, recoverRatio: .95, climb: .006}
+  'DF1 OUT': {pitch: .0016, yaw: .0005, recoverRate: 17.5, recoverRatio: .95, climb: .006},
+  RD40: {pitch: .0015, yaw: .00045, recoverRate: 18.0, recoverRatio: .95, climb: .005}
 };
 let settings = {...defaults};
 let rules = {mode: '3v3', limit: 'points', multiplier: 5, loadout: 'SW T', allyNv21: 0};
@@ -457,9 +459,11 @@ function lobby() {
   const [a, b] = modes[rules.mode], v = rules.multiplier;
   $('targets').textContent = rules.limit === 'unlimited' ? '時間・得点ともに無制限' : `味方 ${a*v} 点先取　/　敵 ${b*v} 点先取　·　時間無制限`;
   const w = weapons[rules.loadout];
-  const modeLabel = w.auto && w.burst > 1 ? `フルオート ${w.burst}発連射` : w.auto ? 'フルオート連射' : w.burst > 1 ? w.burst + '発バースト' : '単発';
-  const tags = [`弾倉 ${w.capacity} 発`, `威力 ${w.damage}`, modeLabel, `連射比 ${w.rate}`, `弾速比 ${w.velocity}`];
+  const modeLabel = w.auto && w.pellets > 1 ? `フルオート ${w.pellets}発同時` : w.auto && w.burst > 1 ? `フルオート ${w.burst}発連射` : w.auto ? 'フルオート連射' : w.burst > 1 ? w.burst + '発バースト' : '単発';
+  const dmgLabel = w.pellets > 1 ? `威力 ${w.damage} × ${w.pellets}` : `威力 ${w.damage}`;
+  const tags = [`弾倉 ${w.capacity} 発`, dmgLabel, modeLabel, `連射比 ${w.rate}`, `弾速比 ${w.velocity}`];
   if (rules.loadout === 'MS10')tags.push('全武器最速弾速');
+  if (w.playerOnly)tags.push('プレイヤー専用');
   $('weaponStats').innerHTML = tags.map(s => `<span>${s}</span>`).join('');
   $('start').disabled = !ready || starting;
   equipment.lobby(rules.loadout)
@@ -695,6 +699,7 @@ function hud() {
   $('respawn').hidden = a.alive;
   $('reticle').hidden = !a.alive;
   $('reticle').classList.toggle('is-ms10', a.gun === 'MS10');
+  $('reticle').classList.toggle('is-rd40', a.gun === 'RD40');
   $('spawnCounter').textContent = Math.max(0, a.respawn).toFixed(1) + ' s';
   if (match.time > 9)$('startHint').hidden = true;
   if (noticeUntil < match.time)$('combatNotice').textContent = '';

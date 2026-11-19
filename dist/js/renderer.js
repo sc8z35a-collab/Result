@@ -243,7 +243,7 @@ export class Renderer {
     if (pl?.alive && pl.flash > .005) {
       const f = clamp(pl.flash / .11, 0, 1);
       const mp = add(eye, add(scale(fwd, .85), add(scale(right, .14), scale(up, -.12))));
-      const col = pl.gun === 'MS10' ? [.48, 1.45, 1.8] : pl.gun === 'DF1 OUT' ? [.48, 1.45, 1.25] : [1.8, 1.2, .52];
+      const col = pl.gun === 'MS10' ? [.48, 1.45, 1.8] : pl.gun === 'RD40' ? [1.95, .74, .58] : pl.gun === 'DF1 OUT' ? [.48, 1.45, 1.25] : [1.8, 1.2, .52];
       list.push({p: mp, i: f * 3.8, c: col, pri: 100});
     }
     for (const e of match.effects) {
@@ -257,15 +257,15 @@ export class Renderer {
       else if (e.kind === 'muzzle' && !e.human) list.push({p: e.p, i: frac * 3.4, c: e.gun === 'MS10' ? [.42, 1.5, 1.95] : e.source === 'p1' ? [1.45, .65, 1.95] : [1.85, 1.15, .44], pri: 70 - d});
       else if (e.kind === 'shield') list.push({p: e.p, i: frac * 3.4, c: [.42, 1.7, 1.95], pri: 68 - d});
       else if (e.kind === 'hit' || e.kind === 'wall') {
-        const ic = e.source === 'p1' ? [1.45, .65, 1.95] : e.gun === 'MS10' ? [.46, 1.6, 1.95] : e.kind === 'hit' ? [1.85, 1.15, .45] : [1.65, 1.05, .45];
+        const ic = e.source === 'p1' ? [1.45, .65, 1.95] : e.gun === 'MS10' ? [.46, 1.6, 1.95] : e.gun === 'RD40' ? [1.95, .72, .52] : e.kind === 'hit' ? [1.85, 1.15, .45] : [1.65, 1.05, .45];
         list.push({p: e.p, i: frac * (e.kind === 'hit' ? 3.1 : 2.5), c: ic, pri: (e.kind === 'hit' ? 62 : 52) - d});
       }
     }
     for (const s of match.shots) {
       const d = Math.hypot(s.p[0] - eye[0], s.p[2] - eye[2]);
       if (d > 42) continue;
-      const c = s.source === 'p1' ? [1.45, .68, 2.05] : s.gun === 'MS10' ? [.38, 1.65, 2.1] : s.guided ? [.38, 1.85, 1.65] : s.team ? [1.65, .86, .38] : [.58, 1.55, 1.28];
-      list.push({p: s.p, i: s.gun === 'MS10' ? 2.9 : (s.source === 'p1' || s.guided) ? 2.2 : 1.6, c, pri: 58 - d});
+      const c = s.source === 'p1' ? [1.45, .68, 2.05] : s.gun === 'MS10' ? [.38, 1.65, 2.1] : s.gun === 'RD40' ? [1.95, .64, .58] : s.guided ? [.38, 1.85, 1.65] : s.team ? [1.65, .86, .38] : [.58, 1.55, 1.28];
+      list.push({p: s.p, i: s.gun === 'MS10' ? 2.9 : (s.gun === 'RD40' || s.source === 'p1' || s.guided) ? 2.2 : 1.6, c, pri: 58 - d});
     }
     if (match.tankers) {
       for (const tk of match.tankers) {

@@ -85,6 +85,8 @@ export class PilotEquipment {
   }
   lobby(loadout) {
     $('dfSetup').hidden = loadout !== 'DF1 OUT';
+    const rdEl = $('rdSetup');
+    if (rdEl) rdEl.hidden = loadout !== 'RD40';
     this.accountView()
   }
   prepare(a) {
@@ -97,28 +99,56 @@ export class PilotEquipment {
   draw(renderer, match, cam, t, play, lite = false) {
     const a = match?.player,
       d = a?.df,
+      rd = a?.rd,
       on = !!(play && d && a.alive),
+      rdOn = !!(play && rd && a.alive),
       ads = !!(on && d.ads),
       thermal = ads && d.scope === 'thermal' && this.wallet.state.evr;
     $('dfHud').hidden = !on;
+    const rdHud = $('rdHud');
+    if (rdHud) rdHud.hidden = !rdOn;
     $('touchDF').hidden = !on;
     $('optics').hidden = !ads;
     $('optics').classList.toggle('thermal-on', thermal);
     $('thermal').hidden = !thermal;
-    $('lockDot').hidden = true;
-    if (!on)return;
-    $('reticle').hidden = ads;
-    if (thermal && (!lite || this.lastThermal === undefined || t - this.lastThermal >= .05 || t < this.lastThermal)) {
-      this.lastThermal = t;
-      this.thermal.draw(renderer, match, cam, t);
+    const lock = $('lockDot');
+    const lockTag = $('lockTag');
+    lock.hidden = true;
+    lock.classList.remove('is-rd40', 'is-d01');
+    if (lockTag) lockTag.hidden = true;
+
+    let lockTargetId = -1, isRdLock = false, isD01 = false;
+    if (on) {
+      $('reticle').hidden = ads;
+      if (thermal && (!lite || this.lastThermal === undefined || t - this.lastThermal >= .05 || t < this.lastThermal)) {
+        this.lastThermal = t;
+        this.thermal.draw(renderer, match, cam, t);
+      }
+      $('focusText').textContent = d.locked ? 'ARV1.1  •  弾道誘導 1.76× LOCK' : d.focus ? 'ARV1.1  ·  焦点 ' + Math.round(d.focus * 100) + '%' : 'ARV1.1  ·  待機';
+      $('dfMode').textContent = (d.pattern === 'central' ? '中央集中' : '散弾') + '  /  ' + (d.scope === 'thermal' ? 'EVR1' : 'プラスチック');
+      $('p1Text').textContent = `P1 ${d.p1} / 20　${d.cooling>0?'冷却 '+d.cooling.toFixed(1)+' s':d.boost?'BOOST':'待機'}　${Math.round(d.heat)}%`;
+      $('heatBar').style.width = d.heat + '%';
+      $('dfKeys').textContent = 'Q 範囲 · X ブースト · 右クリック 照準 · V レンズ';
+      if (d.locked && !thermal) lockTargetId = d.focusId;
+    } else if (rdOn && rdHud) {
+      const pct = Math.round(rd.focus * 100);
+      $('rdFocusText').textContent = rd.locked
+        ? (rd.d01Active ? 'ARV1.2  •  D01 壁裏LOCK' : 'ARV1.2  •  LOCK (1.4×広域)')
+        : rd.focus > 0 ? `ARV1.2  ·  焦点 ${pct}%` : 'ARV1.2  ·  待機 (1.4×広域)';
+      $('rdSensorText').textContent = rd.d01Active
+        ? `D01 SENSOR  ·  壁裏追従 ${rd.d01Timer.toFixed(1)}s`
+        : rd.locked ? 'D01 SENSOR  ·  追従待機 (4.0s)' : 'D01 SENSOR  ·  常時スキャン';
+      rdHud.classList.toggle('is-d01', !!rd.d01Active);
+      const barPct = rd.d01Active ? (rd.d01Timer / (rd.d01Max || 4)) * 100 : rd.locked ? 100 : rd.focus * 100;
+      $('d01Bar').style.width = Math.max(0, Math.min(100, barPct)).toFixed(1) + '%';
+      if (rd.locked) {
+        lockTargetId = rd.focusId;
+        isRdLock = true;
+        isD01 = !!rd.d01Active;
+      }
     }
-    $('focusText').textContent = d.locked ? 'ARV1.1  •  弾道誘導 1.76× LOCK' : d.focus ? 'ARV1.1  ·  焦点 ' + Math.round(d.focus * 100) + '%' : 'ARV1.1  ·  待機';
-    $('dfMode').textContent = (d.pattern === 'central' ? '中央集中' : '散弾') + '  /  ' + (d.scope === 'thermal' ? 'EVR1' : 'プラスチック');
-    $('p1Text').textContent = `P1 ${d.p1} / 20　${d.cooling>0?'冷却 '+d.cooling.toFixed(1)+' s':d.boost?'BOOST':'待機'}　${Math.round(d.heat)}%`;
-    $('heatBar').style.width = d.heat + '%';
-    $('dfKeys').textContent = 'Q 範囲 · X ブースト · 右クリック 照準 · V レンズ';
-    if (!d.locked || thermal)return;
-    const e = match.actors[d.focusId];
+    if (lockTargetId < 0)return;
+    const e = match.actors[lockTargetId];
     if (!e?.alive)return;
     const f = unit(sub(cam.target, cam.pos)),
       r = unit(cross(f, [0, 1, 0])),
@@ -127,9 +157,16 @@ export class PilotEquipment {
       z = dot(rel, f);
     if (z < .01)return;
     const tan = Math.tan(cam.fov * Math.PI / 360);
-    const lock = $('lockDot');
+    const sx = Math.max(4, Math.min(96, 50 + 50 * dot(rel, r) / (z * tan * renderer.aspect)));
+    const sy = Math.max(6, Math.min(94, 50 - 50 * dot(rel, u) / (z * tan)));
     lock.hidden = false;
-    lock.style.left = (50 + 50 * dot(rel, r) / (z * tan * renderer.aspect)) + '%';
-    lock.style.top = (50 - 50 * dot(rel, u) / (z * tan)) + '%'
+    lock.classList.toggle('is-rd40', isRdLock && !isD01);
+    lock.classList.toggle('is-d01', isD01);
+    lock.style.left = sx + '%';
+    lock.style.top = sy + '%';
+    if (lockTag && isD01) {
+      lockTag.hidden = false;
+      lockTag.textContent = 'D01 ' + rd.d01Timer.toFixed(1) + 's';
+    }
   }
 }

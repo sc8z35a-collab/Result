@@ -173,8 +173,8 @@ export function steerGuidedShot(match, s, dt) {
   if (dist < .22)return;
   const desired = [toT[0] / dist, toT[1] / dist, toT[2] / dist];
   const cosA = clamp(dot(s.dir, desired), -1, 1);
-  // Enforce forward ARV1.1 lock cone (~15.8°) while homing
-  if (cosA < 0.962)return;
+  // Enforce forward lock cone (ARV1.1 ~15.8°, RD40 ARV1.2 expanded ~22.3°) while homing
+  if (cosA < (s.homingCos || 0.962))return;
   const ang = Math.acos(cosA);
   if (ang < 1e-5)return;
   const step = Math.min(ang, s.homingRate * dt, s.homingBudget);
