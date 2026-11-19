@@ -1,6 +1,6 @@
 import {clamp, forward, dot, sub, add, scale, random, cross, unit} from './geometry.js';
 import {teams, tankers, walkable, moveActor, floorAt, obstruction} from './yard.js';
-import {NV12} from './nv12.js';
+import {NV13Pro} from './nv13pro.js';
 import {eyeOf, torso, bodyCenter, postureStep} from './posture.js';
 import {DF, initialDF, assist, scheduleDF, directionDF, spendP1, updateDF} from './df1.js';
 const baseSpeed = 360, baseInterval = .24;
@@ -64,7 +64,7 @@ export class Match {
     const counts = modes[config.mode] || modes['3v3'];
     this.goals = counts.map(n => config.limit === 'unlimited' ? Infinity : n * clamp(Math.round(config.multiplier) || 5, 1, 99));
     this.receiptId = globalThis.crypto?.randomUUID?.() || Date.now().toString(36) + Math.random().toString(36).slice(2);
-    this.nv = new NV12(this);
+    this.nv = new NV13Pro(this);
     for (let team = 0; team < 2; team++)for (let slot = 0; slot < counts[team]; slot++) {
       const human = team === 0 && slot === 0;
       const gun = human ? config.loadout : npcWeapons[(slot + team + 1) % npcWeapons.length];
@@ -144,6 +144,7 @@ export class Match {
   reload(a) {
     if (!a.alive || this.ended || a.reload > 0 || a.burstLeft || a.mag >= this.weapon(a).capacity || a.stock <= 0)return false;
     a.reload = this.weapon(a).reload;
+    this.nv.onReload?.(a);
     this.event('reload', {actor: a});
     return true
   }
@@ -249,6 +250,7 @@ export class Match {
     owner.kills++;
     owner.earned += 10;
     this.nv.learn(owner, true);
+    this.nv.onKill?.(owner, v);
     this.scores[owner.team]++;
     this.event('point', {actor: owner, victim: v, receipt: this.receiptId + '/' + owner.id + '/' + owner.kills});
     if (this.scores[owner.team] >= this.goals[owner.team]) {
@@ -284,6 +286,7 @@ export class Match {
             seed: ++this.seq
           });
           this.event('tanker', {actor: a, tanker: tk});
+          this.nv.onTanker?.(a, tk);
           break
         }
       }

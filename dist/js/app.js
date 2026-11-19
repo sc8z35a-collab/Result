@@ -7,9 +7,9 @@ import {forward, add, clamp} from './geometry.js';
 import {PortAudio} from './audio.js';
 const $ = s => document.getElementById(s),
   views = {title: 'titleView', lobby: 'lobby', settings: 'settings', game: 'hud', pause: 'pause', results: 'results'};
-// Optically exact 2/3 view width relative to the original 73° / 42° FOV:
-// 2 * atan((2/3) * tan(73°/2)) = 52.5°, 2 * atan((2/3) * tan(42°/2)) = 28.7°.
-const BASE_FOV = 52.5, ADS_FOV = 28.7;
+// Optically exact further 2/3 view width relative to 52.5° / 28.7° FOV:
+// 2 * atan((2/3) * tan(52.5°/2)) = 36.4°, 2 * atan((2/3) * tan(28.7°/2)) = 19.4°.
+const BASE_FOV = 36.4, ADS_FOV = 19.4;
 const defaults = {resolution: 'HD', graphics: 'high', rate: 120, hdr: true, shadows: true, sensitivity: 1, volume: 55, sound: false};
 const graphicsHints = {
   standard: '軽量描画 · 基本影 · 標準反射',
@@ -22,6 +22,14 @@ const recoilProfiles = {
   D1: {z: .056, y: .011, pitch: .094, yaw: .020, roll: .048, camPitch: .008, camRoll: .0035, shake: .17, spread: 7.5, heat: .13, fov: .36},
   MS10: {z: .074, y: .012, pitch: .098, yaw: .030, roll: .062, camPitch: .0095, camRoll: .0045, shake: .22, spread: 7.2, heat: .17, fov: .62},
   'DF1 OUT': {z: .080, y: .015, pitch: .124, yaw: .025, roll: .066, camPitch: .012, camRoll: .005, shake: .25, spread: 9.2, heat: .19, fov: .48}
+};
+// True per-shot camera/aim recoil kick (vertical climb + horizontal kick + controllable partial recovery).
+const aimRecoil = {
+  'SW T': {pitch: .034, yaw: .0070, recoverRate: 7.2, recoverRatio: .65, climb: .08},
+  SRA: {pitch: .021, yaw: .0065, recoverRate: 8.0, recoverRatio: .70, climb: .06},
+  D1: {pitch: .0155, yaw: .0055, recoverRate: 8.6, recoverRatio: .72, climb: .05},
+  MS10: {pitch: .0225, yaw: .0085, recoverRate: 7.8, recoverRatio: .64, climb: .07},
+  'DF1 OUT': {pitch: .0125, yaw: .0042, recoverRate: 9.0, recoverRatio: .76, climb: .04}
 };
 let settings = {...defaults};
 let rules = {mode: '3v3', limit: 'points', multiplier: 5, loadout: 'SW T'};
@@ -62,6 +70,13 @@ let screen = 'title',
   simJump = false,
   stickX = 0,
   stickZ = 0,
+  stickSprint = false,
+  touchCrouch = false,
+  gpMoveX = 0,
+  gpMoveZ = 0,
+  gpSprint = false,
+  gpCrouch = false,
+  holdFirePad = false,
   lockPending = false,
   lookTouch = null,
   moveTouch = null,
@@ -70,6 +85,7 @@ let screen = 'title',
   holdFireMouse = false,
   holdFireKey = false,
   holdFireTouch = false;
+const gpPrev = new Uint8Array(18);
 const keys = new Set(), audio = new PortAudio();
 let feed = [];
 const fixed = 1 / 120;
@@ -93,8 +109,19 @@ const gunMotion = {
   wasOnGround: true,
   shotSide: 1
 };
+// True aim recoil tracker (supports crouch damping, continuous climb, manual pull-down cancel, & auto-recovery).
+const recoilState = {pitch: 0, yaw: 0, holdUntil: 0, shotsInBurst: 0, lastShotAt: -10};
 const hitState = {age: 1, dur: .28, kind: 'hit', rot: 45, bannerAge: 1, bannerDur: 0};
 const dmgArc = {alpha: 0, dir: [0, 0, -1]};
+
+function setTouchCrouch(on) {
+  touchCrouch = !!on;
+  const btn = $('touchCrouch');
+  if (btn) {
+    btn.setAttribute('aria-pressed', String(touchCrouch));
+    btn.classList.toggle('is-active', touchCrouch)
+  }
+}
 
 function resetMotion() {
   Object.assign(gunMotion, {
@@ -102,8 +129,11 @@ function resetMotion() {
     swayX: 0, swayY: 0, land: 0, vland: 0, blowback: 0, heat: 0, spread: 0,
     camPitch: 0, vcamPitch: 0, camRoll: 0, vcamRoll: 0, shake: 0, fovPunch: 0, wasOnGround: true
   });
+  Object.assign(recoilState, {pitch: 0, yaw: 0, holdUntil: 0, shotsInBurst: 0, lastShotAt: -10});
   Object.assign(hitState, {age: 1, dur: .28, kind: 'hit', rot: 45, bannerAge: 1, bannerDur: 0});
   Object.assign(dmgArc, {alpha: 0, dir: [0, 0, -1]});
+  setTouchCrouch(false);
+  gpCrouch = false;
   $('hitmark').style.opacity = 0;
   $('hitBanner').style.opacity = 0;
   $('damageArc').style.opacity = 0;
@@ -113,6 +143,7 @@ function resetMotion() {
 
 function kickWeapon(gun) {
   const r = recoilProfiles[gun] || recoilProfiles['SW T'];
+  const ar = aimRecoil[gun] || aimRecoil['SW T'];
   gunMotion.shotSide = Math.random() < .35 ? gunMotion.shotSide : -gunMotion.shotSide;
   const side = gunMotion.shotSide * (.65 + Math.random() * .55);
   const j = .9 + Math.random() * .2;
@@ -129,7 +160,25 @@ function kickWeapon(gun) {
   gunMotion.vcamRoll += r.camRoll * 12.0 * side;
   gunMotion.shake = Math.min(1, gunMotion.shake + r.shake);
   gunMotion.fovPunch = Math.min(1.4, gunMotion.fovPunch + r.fov);
-  gameKick = 1
+  gameKick = 1;
+
+  // Apply genuine camera/aim recoil kick to player pitch & yaw!
+  const a = match?.player;
+  if (a?.alive) {
+    if (timeNow - recoilState.lastShotAt < .42) recoilState.shotsInBurst = Math.min(12, recoilState.shotsInBurst + 1);
+    else recoilState.shotsInBurst = 0;
+    recoilState.lastShotAt = timeNow;
+    const crouchMul = 1 - (a.crouch || 0) * .32;
+    const adsMul = a.df?.ads ? .74 : 1;
+    const heatMul = 1 + recoilState.shotsInBurst * ar.climb;
+    const dp = ar.pitch * crouchMul * adsMul * heatMul * j;
+    const dy = ar.yaw * crouchMul * adsMul * (1 + recoilState.shotsInBurst * .04) * side;
+    a.pitch = clamp(a.pitch + dp, -1.31, 1.31);
+    a.yaw += dy;
+    recoilState.pitch = Math.min(.42, recoilState.pitch + dp * ar.recoverRatio);
+    recoilState.yaw = clamp(recoilState.yaw + dy * .55, -.14, .14);
+    recoilState.holdUntil = timeNow + .115;
+  }
 }
 
 function stepSpring(x, v, k, c, dt) {
@@ -167,6 +216,21 @@ function stepMotion(dt, a) {
   gunMotion.fovPunch *= Math.exp(-15 * dt);
 
   if (a?.alive) {
+    // Smooth partial aim recoil recovery after firing pauses (never fights manual pull-down!).
+    if (timeNow > recoilState.holdUntil) {
+      const rate = aimRecoil[a.gun]?.recoverRate || 7.5;
+      const f = 1 - Math.exp(-rate * dt);
+      if (recoilState.pitch > 1e-4) {
+        const dp = recoilState.pitch * f;
+        a.pitch = clamp(a.pitch - dp, -1.31, 1.31);
+        recoilState.pitch -= dp;
+      } else recoilState.pitch = 0;
+      if (Math.abs(recoilState.yaw) > 1e-4) {
+        const dy = recoilState.yaw * f;
+        a.yaw -= dy;
+        recoilState.yaw -= dy;
+      } else recoilState.yaw = 0;
+    }
     if (!gunMotion.wasOnGround && a.onGround) {
       gunMotion.vland += .42;
       gunMotion.shake = Math.min(1, gunMotion.shake + .12)
@@ -176,6 +240,7 @@ function stepMotion(dt, a) {
     const moveSpread = (a.onGround ? Math.min(4.2, speed * .62) : 6.5) * (1 - a.crouch * .45);
     gunMotion.spread = moveSpread + (gunMotion.spread - moveSpread) * Math.exp(-12 * dt)
   } else {
+    recoilState.pitch = recoilState.yaw = recoilState.shotsInBurst = 0;
     gunMotion.spread *= Math.exp(-12 * dt);
     gunMotion.wasOnGround = true
   }
@@ -285,8 +350,8 @@ function group(id, value, change) {
 const touch = matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0;
 document.body.classList.toggle('touch', touch);
 function controls() {
-  const rows = touch ? [['移動', '左スティック'], ['視点', '右側をスワイプ'], ['発射 / 再装填', '射撃(長押し連射) / R'], ['ジャンプ', '↑']] : [['移動 / ダッシュ', 'WASD / Shift'], ['視点', 'マウス / 矢印キー'], ['発射 / 再装填', '左クリック(長押し連射)・F / R'], ['ジャンプ / しゃがむ', 'Space / Ctrl'], ['一時停止', 'Esc / P']];
-  if (match?.player.df)rows.push(...(touch ? [['DF1 OUT', '画面右の専用ボタン']] : [['中央集中 / 散弾', 'Q'], ['P1 ブースト', 'X'], ['照準 / レンズ切替', '右クリック・C / V'], ['EVR1 購入', 'B']]));
+  const rows = touch ? [['移動 / ダッシュ', '左スティック（強く前傾でダッシュ）'], ['視点', '右側をスワイプ / 右スティック'], ['発射 / 再装填', '射撃(長押し連射)・R2 / R・X'], ['ジャンプ / しゃがみ', '↑・A / しゃがみ・B']] : [['移動 / ダッシュ', 'WASD / Shift · 左スティック強前傾'], ['視点', 'マウス / 矢印キー / 右スティック'], ['発射 / 再装填', '左クリック(長押し連射)・F・R2 / R'], ['ジャンプ / しゃがむ', 'Space・A / Ctrl・B'], ['一時停止', 'Esc / P / Start']];
+  if (match?.player.df)rows.push(...(touch ? [['DF1 OUT', '画面右の専用ボタン / L2・Y・LB・RB']] : [['中央集中 / 散弾', 'Q / Y'], ['P1 ブースト', 'X / LB'], ['照準 / レンズ切替', '右クリック・C・L2 / V・RB'], ['EVR1 購入', 'B']]));
   $('controls').innerHTML = rows.map(([a, b]) => `<span>${a}</span><b>${b}</b>`).join('')
 }
 function show(s) {
@@ -295,9 +360,13 @@ function show(s) {
   for (const [k, id] of Object.entries(views))$(id).hidden = k !== s;
   keys.clear();
   simJump = false;
-  holdFireMouse = holdFireKey = holdFireTouch = false;
-  stickX = stickZ = 0;
+  holdFireMouse = holdFireKey = holdFireTouch = holdFirePad = false;
+  stickX = stickZ = gpMoveX = gpMoveZ = 0;
+  stickSprint = gpSprint = false;
+  setTouchCrouch(false);
+  gpCrouch = false;
   moveTouch = lookTouch = dragID = null;
+  $('pad').classList.remove('is-sprint');
   $('pad').firstElementChild.style.transform = '';
   accum = 0;
   if (s !== 'game' && document.pointerLockElement)document.exitPointerLock();
@@ -456,7 +525,7 @@ function startMatch() {
   if (settings.sound)audio.enable(true);
   audio.set(settings.volume / 100);
   $('startHint').hidden = false;
-  $('startHint').textContent = touch ? '左で移動 · 右をスワイプ · 補給タンカー接近で +100発 / 精製1.5×' : 'WASD 移動　·　左クリック 発射　·　R 再装填　·　補給タンカーで +100発 / 精製1.5×';
+  $('startHint').textContent = touch ? '左スティック強前傾でダッシュ · 右スワイプで視点 · 補給タンカーで +100発 / 精製1.5×' : 'WASD 移動 / Shift・コントローラー強前傾 ダッシュ · 補給タンカーで +100発 / 精製1.5×';
   $('combatNotice').textContent = '';
   $('feed').replaceChildren();
   starting = false;
@@ -484,6 +553,11 @@ function event(e) {
   if (!p)return;
   audio.event(e, p);
   if (e.type === 'fire' && e.actor === p)kickWeapon(e.gun || p.gun);
+  if (e.type === 'spawn' && e.actor === p) {
+    recoilState.pitch = recoilState.yaw = recoilState.shotsInBurst = 0;
+    setTouchCrouch(false);
+    gpCrouch = false;
+  }
   if (e.type === 'hit') {
     if (e.actor === p)triggerHitUI(e);
     if (e.victim === p)triggerDamageUI(e, p)
@@ -553,9 +627,15 @@ function resultUI() {
 }
 function turn(dx, dy) {
   if (screen !== 'game' || !match?.player.alive)return;
-  const a = match.player, fovScale = a.df?.ads ? .58 : .82, k = .00215 * settings.sensitivity * fovScale;
-  a.yaw += dx * k;
-  a.pitch = clamp(a.pitch - dy * k, -1.31, 1.31);
+  const a = match.player, fovScale = a.df?.ads ? .39 : .57, k = .00215 * settings.sensitivity * fovScale;
+  const dYaw = dx * k, dPitch = -dy * k;
+  a.yaw += dYaw;
+  a.pitch = clamp(a.pitch + dPitch, -1.31, 1.31);
+  // Manual recoil compensation cancels stored auto-recovery so crosshair never yanks below target.
+  if (dPitch < 0 && recoilState.pitch > 0) recoilState.pitch = Math.max(0, recoilState.pitch + dPitch);
+  if (dYaw * recoilState.yaw < 0) {
+    recoilState.yaw = Math.abs(dYaw) >= Math.abs(recoilState.yaw) ? 0 : recoilState.yaw + dYaw;
+  }
   gunMotion.swayX = clamp(gunMotion.swayX - dx * .00024, -.042, .042);
   gunMotion.swayY = clamp(gunMotion.swayY + dy * .00020, -.032, .032)
 }
@@ -584,7 +664,7 @@ document.addEventListener('keydown', e => {
 });
 document.addEventListener('keyup', e => {
   keys.delete(e.code);
-  if (e.code === 'KeyF')holdFireKey = false
+  if (e.code === 'KeyF')holdFireKey = false;
 });
 let wasLocked = false;
 document.addEventListener('pointerlockchange', () => {
@@ -603,12 +683,12 @@ window.addEventListener('mouseup', e => {
   if (e.button === 0)holdFireMouse = false
 });
 window.addEventListener('blur', () => {
-  holdFireMouse = holdFireKey = holdFireTouch = false;
+  holdFireMouse = holdFireKey = holdFireTouch = holdFirePad = false;
   doPause()
 });
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
-    holdFireMouse = holdFireKey = holdFireTouch = false;
+    holdFireMouse = holdFireKey = holdFireTouch = holdFirePad = false;
     doPause()
   }
   lastTime = null;
@@ -655,12 +735,18 @@ scene.addEventListener('pointercancel', releaseLook);
 const pad = $('pad');
 function stick(e) {
   const r = pad.getBoundingClientRect(),
-    x = (e.clientX - (r.left + r.width / 2)) / (r.width * .4),
-    z = (e.clientY - (r.top + r.height / 2)) / (r.height * .4),
-    l = Math.max(1, Math.hypot(x, z));
+    x = (e.clientX - (r.left + r.width / 2)) / (r.width * .38),
+    z = (e.clientY - (r.top + r.height / 2)) / (r.height * .38),
+    mag = Math.hypot(x, z),
+    l = Math.max(1, mag);
   stickX = x / l;
   stickZ = -z / l;
-  pad.firstElementChild.style.transform = `translate(${stickX*25}px,${-stickZ*25}px)`
+  // Strong forward tilt on virtual joystick automatically engages dash (sprint)!
+  stickSprint = mag >= .84 && stickZ >= .48;
+  if (stickSprint && touchCrouch) setTouchCrouch(false);
+  pad.classList.toggle('is-sprint', stickSprint);
+  const travel = Math.min(36, r.width * .28);
+  pad.firstElementChild.style.transform = `translate(${stickX * travel}px,${-stickZ * travel}px)`
 }
 pad.onpointerdown = e => {
   if (moveTouch !== null)return;
@@ -675,6 +761,8 @@ pad.onpointerup = pad.onpointercancel = e => {
   if (moveTouch === e.pointerId) {
     moveTouch = null;
     stickX = stickZ = 0;
+    stickSprint = false;
+    pad.classList.remove('is-sprint');
     pad.firstElementChild.style.transform = ''
   }
 };
@@ -684,14 +772,88 @@ $('touchFire').onpointerdown = e => {
   fire()
 };
 $('touchFire').onpointerup = $('touchFire').onpointercancel = $('touchFire').onpointerleave = () => {
-  holdFireTouch = false
+  holdFireTouch = false;
 };
 for (const [id, action] of [['touchReload', () => match?.reload(match.player)], ['touchJump', () => {
   simJump = true
+}], ['touchCrouch', () => {
+  setTouchCrouch(!touchCrouch);
 }]])$(id).onpointerdown = e => {
   e.preventDefault();
   action()
 };
+
+// Hardware Gamepad API support (Xbox / PlayStation / Mobile Controllers): strong left-stick forward tilt auto-dashes!
+function pollGamepad(dt) {
+  const pads = navigator.getGamepads?.();
+  if (!pads) {
+    gpMoveX = gpMoveZ = 0;
+    gpSprint = holdFirePad = false;
+    return
+  }
+  let gp = null;
+  for (let i = 0; i < pads.length; i++) {
+    if (pads[i]?.connected) { gp = pads[i]; break; }
+  }
+  if (!gp) {
+    gpMoveX = gpMoveZ = 0;
+    gpSprint = holdFirePad = false;
+    return
+  }
+  const btn = i => {
+    const b = gp.buttons[i];
+    return !!(b && (b.pressed || b.value > .35));
+  };
+  const edge = i => {
+    const now = btn(i), fired = now && !gpPrev[i];
+    gpPrev[i] = now ? 1 : 0;
+    return fired;
+  };
+  if (edge(9)) {
+    if (screen === 'game') doPause();
+    else if (screen === 'pause') { show('game'); pointer(); }
+    return;
+  }
+  if (screen !== 'game' || !match) {
+    gpMoveX = gpMoveZ = 0;
+    gpSprint = holdFirePad = false;
+    for (let i = 0; i < 16; i++) gpPrev[i] = btn(i) ? 1 : 0;
+    return;
+  }
+  // Left stick: movement + strong forward tilt auto-dash
+  const lx = gp.axes[0] || 0, ly = gp.axes[1] || 0, lm = Math.hypot(lx, ly);
+  if (lm > .15) {
+    const s = Math.min(1, (lm - .15) / .85) / lm;
+    gpMoveX = lx * s;
+    gpMoveZ = -ly * s;
+  } else {
+    gpMoveX = gpMoveZ = 0;
+  }
+  const l3 = btn(10);
+  gpSprint = (lm >= .84 && gpMoveZ >= .48) || l3;
+  if (gpSprint && gpCrouch) gpCrouch = false;
+
+  // Right stick: smooth camera aiming with radial deadzone & precision response curve
+  const rx = gp.axes[2] || 0, ry = gp.axes[3] || 0, rm = Math.hypot(rx, ry);
+  if (rm > .14) {
+    const scaled = Math.pow(Math.min(1, (rm - .14) / .86), 1.65) / rm;
+    turn(rx * scaled * 920 * dt, ry * scaled * 700 * dt);
+  }
+
+  // Triggers & face buttons
+  const r2 = btn(7);
+  if (r2 && !gpPrev[7]) fire();
+  gpPrev[7] = r2 ? 1 : 0;
+  holdFirePad = r2;
+  if (edge(6)) equipment.action('ads');
+  if (edge(0)) simJump = true;
+  if (edge(1)) gpCrouch = !gpCrouch;
+  if (edge(2)) match.reload(match.player);
+  if (edge(3)) equipment.action('pattern');
+  if (edge(4)) equipment.action('boost');
+  if (edge(5)) equipment.action('scope');
+}
+
 function frame(ms) {
   requestAnimationFrame(frame);
   if (document.hidden || !ready)return;
@@ -704,30 +866,34 @@ function frame(ms) {
   const dt = lastTime === null ? 0 : Math.min(.25, (ms - lastTime) / 1000);
   lastTime = ms;
   timeNow += dt;
+  pollGamepad(dt);
   let cam;
   if (screen === 'game' && match) {
     accum += dt;
     while (accum + 1e-9 >= fixed && screen === 'game') {
-      const fovScale = match.player.df?.ads ? .58 : .82;
+      const fovScale = match.player.df?.ads ? .39 : .57;
       const yaw = (Number(keys.has('ArrowRight')) - Number(keys.has('ArrowLeft'))) * 1.75 * fixed * settings.sensitivity * fovScale,
         pitch = (Number(keys.has('ArrowUp')) - Number(keys.has('ArrowDown'))) * 1.25 * fixed * settings.sensitivity * fovScale;
       if (match.player.alive) {
         match.player.yaw += yaw;
         match.player.pitch = clamp(match.player.pitch + pitch, -1.31, 1.31);
+        if (pitch < 0 && recoilState.pitch > 0) recoilState.pitch = Math.max(0, recoilState.pitch + pitch);
         if (yaw || pitch) {
           gunMotion.swayX = clamp(gunMotion.swayX - yaw * .18, -.042, .042);
           gunMotion.swayY = clamp(gunMotion.swayY - pitch * .15, -.032, .032)
         }
-        if ((holdFireMouse || holdFireKey || holdFireTouch) && weapons[match.player.gun]?.auto) {
+        if ((holdFireMouse || holdFireKey || holdFireTouch || holdFirePad) && weapons[match.player.gun]?.auto) {
           match.trigger(match.player)
         }
       }
+      const sprintNow = keys.has('ShiftLeft') || keys.has('ShiftRight') || stickSprint || gpSprint;
+      const crouchNow = !sprintNow && (keys.has('ControlLeft') || keys.has('ControlRight') || touchCrouch || gpCrouch);
       match.step(fixed, {
-        side: stickX + Number(keys.has('KeyD')) - Number(keys.has('KeyA')),
-        forward: stickZ + Number(keys.has('KeyW')) - Number(keys.has('KeyS')),
-        sprint: keys.has('ShiftLeft') || keys.has('ShiftRight'),
+        side: clamp(stickX + gpMoveX + Number(keys.has('KeyD')) - Number(keys.has('KeyA')), -1, 1),
+        forward: clamp(stickZ + gpMoveZ + Number(keys.has('KeyW')) - Number(keys.has('KeyS')), -1, 1),
+        sprint: sprintNow,
         jump: simJump,
-        crouch: keys.has('ControlLeft') || keys.has('ControlRight')
+        crouch: crouchNow
       });
       simJump = false;
       accum -= fixed

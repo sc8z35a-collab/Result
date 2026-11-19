@@ -37,26 +37,58 @@ void main(){
   vec3 p=aPos,n=aNormal;
   lPos=p;
   if(uMode==1){
-    float leg=(1.-smoothstep(.45,.91,p.y))*sign(p.x),g=sin(uGait.x)*uGait.y;
+    float c=clamp(uPose.x,0.,1.);
+    float oy=lPos.y,oz=lPos.z;
+    float leg=(1.-smoothstep(.45,.91,oy))*sign(p.x),g=sin(uGait.x)*uGait.y*mix(1.,.48,c);
     p.z+=leg*g*.23;
     p.y+=abs(leg)*max(0.,g*sign(p.x))*.066;
     p.z+=smoothstep(.22,.33,abs(p.x))*g*.027;
-    p.y+=abs(cos(uGait.x))*.022*uGait.y;
-    float upper=smoothstep(.38,1.42,p.y);
+    p.y+=abs(cos(uGait.x))*.022*uGait.y*mix(1.,.45,c);
+    float upper=smoothstep(.38,1.42,oy);
     p.x+=uPose.y*upper;
-    p.z-=uPose.x*.095*smoothstep(.0,.48,p.y)*(1.-smoothstep(.52,1.12,p.y));
-    p.y*=1.-.34*uPose.x;
-    p.y+=uPose.z*.14*smoothstep(.16,.40,-p.z);
+    // Anatomical tactical combat crouch: keep head/torso/arms/weapon at 100% true scale while bending knees & folding legs.
+    if(c>.001){
+      float s=p.x>=0.?1.:-1.;
+      float ankleZ=c*(s>0.?.16:-.11);
+      float kneeY=c*(s>0.?-.27:-.15);
+      float kneeZ=c*(s>0.?-.05:-.24);
+      float hipY=-.44*c;
+      float hipZ=.11*c;
+      if(oy<=.19){
+        p.x+=s*.042*c;
+        p.z+=ankleZ;
+      } else if(oy<=.55){
+        float t=(oy-.19)/.36;
+        p.x+=s*.042*c;
+        p.y+=mix(0.,kneeY,t);
+        p.z+=mix(ankleZ,kneeZ,t);
+      } else if(oy<=.91){
+        float t=(oy-.55)/.36;
+        p.x+=s*.042*c*(1.-t);
+        p.y+=mix(kneeY,hipY,t);
+        p.z+=mix(kneeZ,hipZ,t);
+      } else {
+        vec2 rel=vec2(p.y-.91,p.z-.015);
+        float ang=.13*c;
+        float ca=cos(ang),sa=sin(ang);
+        p.y=.91+hipY+rel.x*ca+rel.y*sa;
+        p.z=.015+hipZ-rel.x*sa+rel.y*ca;
+        vec2 nrot=vec2(n.y*ca+n.z*sa,-n.y*sa+n.z*ca);
+        n.y=nrot.x;
+        n.z=nrot.y;
+      }
+    }
+    p.y+=uPose.z*.14*smoothstep(.16,.40,-oz);
     p.z-=uPose.z*.045*upper;
     // 3D NPC firing recoil on upper body & weapon arms
-    float armMask=smoothstep(.95,1.45,p.y)*smoothstep(-.05,-.32,p.z);
+    float armMask=smoothstep(.95,1.45,oy)*smoothstep(-.05,-.32,oz);
     p.z+=uRecoil.x*.065*armMask;
     p.y+=uRecoil.x*.032*armMask;
     // 3D hit stagger reaction: flinch backward & twist along incoming shot direction
     float h=uHit.x;
     if(h>.001){
       float flinch=sin(h*3.14159)*h;
-      float headMask=smoothstep(.72,1.68,p.y);
+      float headMask=smoothstep(.72,1.68,oy);
       p.x+=uHit.y*flinch*.19*headMask;
       p.z+=uHit.z*flinch*.22*headMask;
       p.y-=flinch*.065*headMask;
