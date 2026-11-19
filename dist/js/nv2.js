@@ -1146,12 +1146,14 @@ export class NV2 extends NV13Pro {
       }
     ];
 
+    const syn = teamIdx === 1 && this.match.synapse ? this.match.synapse.getCounterDirective() : null;
     let bestPb = playbooks[1], bestScore = -Infinity;
     for (const pb of playbooks) {
       let expectedCounter = 0;
       for (let c = 0; c < N_INTENTS; c++) expectedCounter += P[c] * pb.payoff[c];
       const neuralBoost = Pi[pb.actIdx] * 1.15;
-      const sc = pb.base + expectedCounter + neuralBoost;
+      const synBoost = syn ? (syn.playbookBias[pb.name] || 0) : 0;
+      const sc = pb.base + expectedCounter + neuralBoost + synBoost;
       if (sc > bestScore) { bestScore = sc; bestPb = pb; }
     }
 
@@ -1175,8 +1177,8 @@ export class NV2 extends NV13Pro {
         }
       }
     } else if (bestPb.name === 'ANCHOR_AND_CUT' && allies.length >= 2) {
-      // Predicted flank wing cut-off!
-      const predictedLeft = P[2] >= P[3];
+      // Predicted flank wing cut-off (enhanced by NV-Synapse personal player lane memory!)
+      const predictedLeft = syn && Math.abs(syn.favoredLaneX) > 5 ? (syn.favoredLaneX < 0) : (P[2] >= P[3]);
       const cutLane = predictedLeft ? -1 : 1;
       const cutter = allies.find(a => cog.roles.get(a.id)?.role !== 'ANCHOR') || allies[0];
       const ord = cog.roles.get(cutter.id);
@@ -1295,10 +1297,54 @@ export class NV2 extends NV13Pro {
         b.visibleEnemies.push(e);
         this.recordEnemyObservation(a.team, e);
         if (b.spy) recordVisualSighting(b.spy, a, e, t, this.metrics);
+        if (e.human && a.team === 1 && this.match.synapse) {
+          this.match.synapse.observe([e.x, e.y, e.z], {
+            time: t,
+            observerPos: [a.x, a.y, a.z],
+            vx: e.vx || 0,
+            vz: e.vz || 0,
+            crouch: e.crouch || 0,
+            isVisual: true
+          });
+        }
       }
     }
     if (b.seen && b.target && !hadTarget) {
       st.pushToken(this.buildToken(a.team, 0, a, b.target));
+    }
+  }
+
+  /**
+   * EchoPulse 1.0 physically delayed (d / 343 m/s) acoustic arrival handler for NPCs.
+   * Handles realistic occlusion blur and corrugated-steel container echo decoys!
+   */
+  onEchoArrival(rep) {
+    if (!rep) return;
+    const listener = this.match.actors[rep.listenerId];
+    if (!listener?.alive || listener.human) return;
+    const b = this.brains.get(listener.id);
+    const cog = this.teams[listener.team];
+    const t = this.match.time;
+    const px = rep.perceivedPos[0], pz = rep.perceivedPos[2];
+    if (b) {
+      // Only let acoustic arrivals update suspicion if NPC does not currently have direct visual LOS
+      if (!b.seen) {
+        b.lastPos = [px, pz];
+        b.seenAt = Math.max(b.seenAt || 0, t - (rep.isDecoy ? 0.55 : 0.2));
+      }
+      if (rep.sourceActor && cog?.beliefs) {
+        const bf = cog.beliefs.get(rep.sourceActor.id);
+        if (bf && t - bf.lastSightAt > 0.65) {
+          // Stamp perceived acoustic coordinate (or echo decoy bearing!) into Bayesian belief peak
+          bf.peakX = px;
+          bf.peakZ = pz;
+          bf.lastHeardAt = t;
+          bf.decoyed = !!rep.isDecoy;
+        }
+      }
+    }
+    if (rep.sourceActor?.human && listener.team === 1 && this.match.synapse) {
+      this.match.synapse.observe(rep.perceivedPos, {time: t, isVisual: false});
     }
   }
 

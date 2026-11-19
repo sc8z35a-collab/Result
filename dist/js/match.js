@@ -4,6 +4,9 @@ import {NV2} from './nv2.js';
 import {eyeOf, torso, bodyCenter, postureStep} from './posture.js';
 import {DF, initialDF, assist, scheduleDF, bulletGuidanceDF, steerGuidedShot, spendP1, updateDF} from './df1.js';
 import {RD, RD20, RD30, isRDWeapon, initialRD, updateRD, bulletGuidanceRD} from './rd40.js';
+import {solveBallisticImpact} from './ballistics.js';
+import {EchoPulseField} from './echopulse.js';
+import {SynapseProfiler} from './synapse.js';
 const baseSpeed = 360, baseInterval = .24;
 export const weapons = {
   'SW T': {capacity: 10, damage: 9, rate: 100, velocity: 100, speed: baseSpeed, interval: baseInterval, burst: 1, reload: 1.4},
@@ -66,6 +69,9 @@ export class Match {
     this.tankers = tankers.map(t => ({...t, cooldown: 0, maxCooldown: 25, pulse: 0, lastTeam: -1}));
     this.rng = random(1939);
     this.seq = 0;
+    this.echoPulse = new EchoPulseField();
+    this.synapse = new SynapseProfiler();
+    this.techStats = {ricochets: 0, ricochetHits: 0, penetrations: 0, wallbangHits: 0};
     const counts = modes[config.mode] || modes['3v3'];
     this.goals = counts.map(n => config.limit === 'unlimited' ? Infinity : n * clamp(Math.round(config.multiplier) || 5, 1, 99));
     this.receiptId = globalThis.crypto?.randomUUID?.() || Date.now().toString(36) + Math.random().toString(36).slice(2);
@@ -162,8 +168,12 @@ export class Match {
     if (!a.alive || this.ended || a.reload > 0 || a.burstLeft || a.mag >= this.weapon(a).capacity || a.stock <= 0)return false;
     a.reload = this.weapon(a).reload;
     this.nv.onReload?.(a);
+    if (a.human && this.synapse) {
+      const heard = this.actors.some(e => e.alive && e.team !== a.team && Math.hypot(e.x - a.x, e.z - a.z) <= 28);
+      if (heard) this.synapse.observeReload();
+    }
     this.event('reload', {actor: a});
-    return true
+    return true;
   }
   trigger(a) {
     if (this.ended || !a.alive || a.cooldown > 1e-7 || a.reload > 0 || a.burstLeft)return false;
@@ -227,6 +237,10 @@ export class Match {
         homingRate: guidedInfo ? guidedInfo.homingRate : 0,
         homingCos: guidedInfo?.homingCos || 0,
         homingTurned: 0,
+        ricochets: 0,
+        penetrations: 0,
+        ricocheted: false,
+        penetrated: false,
         damage: w.damage,
         speed: w.speed,
         life: 1.35,
@@ -261,11 +275,18 @@ export class Match {
       });
       if (this.casings.length > 42)this.casings.shift();
     }
-    this.nv.sound(a);
+    this.echoPulse.emit(this, {
+      kind: 'fire',
+      pos: firstMuzzle || p,
+      actor: a,
+      team: a.team,
+      loudness: a.gun === 'MS10' ? 1.25 : a.gun === RD ? 1.12 : 1.0,
+      gun: a.gun
+    });
     this.nv.onShotFired?.(a, source);
     this.event('fire', {actor: a, source, gun: a.gun, p: firstMuzzle, dir: firstDir, speed: w.speed, pellets: salvo, burstIndex: a.shotCount})
   }
-  damage(v, owner, power, dir = null) {
+  damage(v, owner, power, dir = null, meta = null) {
     if (this.ended || !v.alive || owner.team === v.team)return null;
     const hadShield = v.shield > 0;
     const absorbed = Math.min(v.shield, power);
@@ -277,9 +298,11 @@ export class Match {
     v.hitFlash = 1;
     if (absorbed > 0)v.shieldFlash = 1;
     if (dir)v.hitDir = [...dir];
+    if (meta?.ricochet) this.techStats.ricochetHits++;
+    if (meta?.wallbang) this.techStats.wallbangHits++;
     this.nv.learn(v, false);
     this.nv.onHit?.(v, owner, dir, power);
-    this.event('hit', {victim: v, actor: owner, shield: absorbed > 0, shieldBreak, kill, damage: power, dir});
+    this.event('hit', {victim: v, actor: owner, shield: absorbed > 0, shieldBreak, kill, damage: power, dir, ricochet: !!meta?.ricochet, wallbang: !!meta?.wallbang});
     if (!kill)return {shield: absorbed > 0, shieldBreak, kill: false};
     v.alive = false;
     v.respawn = 3;
@@ -295,6 +318,7 @@ export class Match {
     if (this.scores[owner.team] >= this.goals[owner.team]) {
       this.winner = owner.team;
       this.ended = true;
+      this.synapse?.save();
       this.event('end', {winner: owner.team})
     }
     return {shield: absorbed > 0, shieldBreak, kill: true}
@@ -324,6 +348,8 @@ export class Match {
             max: .95,
             seed: ++this.seq
           });
+          this.echoPulse.emit(this, {kind: 'tanker', pos: [tk.x, 1.8, tk.z], actor: a, team: a.team, loudness: 1.4});
+          if (a.human) this.synapse?.observeTankerCapture();
           this.event('tanker', {actor: a, tanker: tk});
           this.nv.onTanker?.(a, tk);
           break
@@ -503,7 +529,7 @@ export class Match {
     if (at <= 1) {
       const p = add(a, scale(sub(b, a), at));
       if (target) {
-        const res = this.damage(target, s.owner, s.damage, s.dir);
+        const res = this.damage(target, s.owner, s.damage, s.dir, {ricochet: s.ricocheted, wallbang: s.penetrated});
         const kind = res?.kill ? 'kill' : res?.shieldBreak ? 'break' : res?.shield ? 'shield' : 'hit';
         const dur = kind === 'kill' ? .78 : kind === 'break' ? .58 : kind === 'shield' ? .42 : .36;
         const bc = bodyCenter(target);
@@ -529,6 +555,87 @@ export class Match {
         const mat = hitInfo?.mat || (p[1] >= .08 ? 'steel' : 'concrete');
         const normal = hitInfo?.normal || [0, 1, 0];
         const metal = mat === 'steel';
+        const ball = hitInfo ? solveBallisticImpact(s, hitInfo, this.rng) : {action: 'stop'};
+
+        if (ball.action === 'ricochet') {
+          this.techStats.ricochets++;
+          s.old = [...hitInfo.point];
+          s.p = ball.pos;
+          s.dir = ball.dir;
+          s.speed = ball.speed;
+          s.damage = ball.damage;
+          s.guided = false;
+          s.ricochets = (s.ricochets || 0) + 1;
+          s.ricocheted = true;
+          if (s.trail) {
+            s.trail.push([...hitInfo.point], [...ball.pos]);
+            while (s.trail.length > 10) s.trail.shift();
+          }
+          this.effects.push({
+            kind: 'ricochet',
+            p: [...hitInfo.point],
+            dir: [...ball.dir],
+            normal,
+            gun: s.gun,
+            source: s.source,
+            team: s.team,
+            metal,
+            mat,
+            life: .44,
+            max: .44,
+            actor: s.owner.id,
+            target: false,
+            seed: ++this.seq
+          });
+          this.scorches.push({
+            p: [hitInfo.point[0] + normal[0] * .014, hitInfo.point[1] + normal[1] * .014, hitInfo.point[2] + normal[2] * .014],
+            normal, mat, gun: s.gun, source: s.source, life: 1.85, max: 1.85, seed: this.seq
+          });
+          if (this.scorches.length > 26) this.scorches.shift();
+          this.echoPulse.emit(this, {kind: 'ricochet', pos: hitInfo.point, actor: s.owner, team: s.team, loudness: 0.92, gun: s.gun});
+          this.event('ricochet', {point: hitInfo.point, dir: ball.dir, normal, gun: s.gun, mat, actor: s.owner});
+          return s.life > 0;
+        }
+
+        if (ball.action === 'penetrate') {
+          this.techStats.penetrations++;
+          s.old = [...ball.entryPos];
+          s.p = ball.exitPos;
+          s.dir = ball.dir;
+          s.speed = ball.speed;
+          s.damage = ball.damage;
+          s.guided = false;
+          s.penetrations = (s.penetrations || 0) + 1;
+          s.penetrated = true;
+          if (s.trail) {
+            s.trail.push([...ball.entryPos], [...ball.exitPos]);
+            while (s.trail.length > 10) s.trail.shift();
+          }
+          // Entry crater + far-side exit splinter/ember plume!
+          this.effects.push({
+            kind: 'wall',
+            p: [...ball.entryPos], dir: [...s.dir], normal, gun: s.gun, source: s.source,
+            team: s.team, metal, mat, life: .34, max: .34, actor: s.owner.id, target: false, seed: ++this.seq
+          });
+          this.effects.push({
+            kind: 'penetrate',
+            p: [...ball.exitPos], dir: [...ball.dir], normal: ball.exitNormal, gun: s.gun, source: s.source,
+            team: s.team, metal, mat, life: .44, max: .44, actor: s.owner.id, target: false, seed: ++this.seq
+          });
+          this.scorches.push({
+            p: [ball.entryPos[0] + normal[0] * .014, ball.entryPos[1] + normal[1] * .014, ball.entryPos[2] + normal[2] * .014],
+            normal, mat, gun: s.gun, source: s.source, life: 1.85, max: 1.85, seed: this.seq
+          });
+          this.scorches.push({
+            p: [ball.exitPos[0] + ball.exitNormal[0] * .014, ball.exitPos[1] + ball.exitNormal[1] * .014, ball.exitPos[2] + ball.exitNormal[2] * .014],
+            normal: ball.exitNormal, mat, gun: s.gun, source: s.source, life: 1.85, max: 1.85, seed: ++this.seq
+          });
+          while (this.scorches.length > 26) this.scorches.shift();
+          this.echoPulse.emit(this, {kind: 'penetrate', pos: ball.exitPos, actor: s.owner, team: s.team, loudness: 0.76, gun: s.gun});
+          this.event('penetrate', {point: ball.exitPos, entry: ball.entryPos, dir: ball.dir, mat, thickness: ball.thickness, gun: s.gun, actor: s.owner});
+          return s.life > 0;
+        }
+
         const dur = (s.gun === 'MS10' || s.source === 'p1') ? .48 : .40;
         this.effects.push({
           kind: 'wall',
@@ -569,8 +676,19 @@ export class Match {
     this.time += dt;
     if (this.time > this.tremorAt + 1.2)this.tremorAt = this.time + 65 + this.rng() * 36;
     this.groundMotion = this.time >= this.tremorAt ? Math.sin((this.time - this.tremorAt) / 1.2 * Math.PI) : 0;
-    for (const a of this.actors)this.systems(a, dt);
+    for (const a of this.actors) {
+      const prevStride = a.stride || 0;
+      this.systems(a, dt);
+      // Emit audible EchoPulse footstep waves for sprinting or elevated steel-roof movement!
+      if (a.alive && a.onGround && !a.human && ((a.sprintAmt || 0) > 0.35 || a.y > 0.5)) {
+        if (Math.floor(a.stride / 2.2) > Math.floor(prevStride / 2.2)) {
+          this.echoPulse.emit(this, {kind: 'step', pos: [a.x, a.y + 0.15, a.z], actor: a, team: a.team, loudness: a.y > 0.5 ? 0.85 : 0.55});
+        }
+      }
+    }
     this.updatePlayer(dt, input);
+    const arrivedEchoes = this.echoPulse.step(this);
+    for (const rep of arrivedEchoes) this.nv.onEchoArrival?.(rep);
     this.nv.tick(dt);
     this.updateTankers(dt);
     let write = 0;

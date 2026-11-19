@@ -10,7 +10,7 @@ const $ = s => document.getElementById(s),
 // Optically exact +2/3 wider view width relative to 24.7° / 13.0° FOV:
 // 2 * atan((5/3) * tan(24.7°/2)) = 40.1°, 2 * atan((5/3) * tan(13.0°/2)) = 21.5°.
 const BASE_FOV = 40.1, ADS_FOV = 21.5;
-const defaults = {lightMode: false, resolution: 'HD', graphics: 'high', rate: 360, rateV2: true, hdr: true, khdr: true, shadowMode: 'pro', shadows: true, audioMode: 'hrtf', sensitivity: 1, volume: 55, sound: false};
+const defaults = {lightMode: false, resolution: 'HD', graphics: 'high', rate: 360, rateV2: true, hdr: true, khdr: true, shadowMode: 'pro', shadows: true, fluxGI: true, schlieren: true, echoPulse: true, audioMode: 'hrtf', sensitivity: 1, volume: 55, sound: false};
 const graphicsHints = {
   standard: '軽量描画 · 基本ライト · 標準反射',
   high: '高精細質感 · 動的ライト · 標準水面反射',
@@ -68,6 +68,9 @@ settings.lightMode = !!settings.lightMode;
 settings.shadows = settings.shadowMode !== 'off';
 settings.khdr = !!settings.khdr;
 if (settings.khdr) settings.hdr = true;
+settings.fluxGI = settings.fluxGI !== false;
+settings.schlieren = settings.schlieren !== false;
+settings.echoPulse = settings.echoPulse !== false;
 if (![0, 60, 120, 360].includes(settings.rate))settings.rate = 360;
 if (!modes[rules.mode])rules.mode = '3v3';
 if (!weapons[rules.loadout])rules.loadout = 'SW T';
@@ -344,12 +347,22 @@ function triggerHitUI(e) {
   hitState.rot = kind === 'kill' ? 54 : 45 + (Math.random() - .5) * 9;
   const hm = $('hitmark');
   hm.className = 'is-' + kind;
-  if (kind === 'kill' || kind === 'break') {
-    const bn = $('hitBanner');
+  const bn = $('hitBanner');
+  if (e.ricochet) {
+    bn.textContent = e.kill ? 'RICOCHET KILL' : 'RICOCHET HIT';
+    bn.className = 'is-ricochet';
+    hitState.bannerAge = 0;
+    hitState.bannerDur = e.kill ? .96 : .68;
+  } else if (e.wallbang) {
+    bn.textContent = e.kill ? 'WALLBANG KILL' : 'WALLBANG HIT';
+    bn.className = 'is-wallbang';
+    hitState.bannerAge = 0;
+    hitState.bannerDur = e.kill ? .96 : .68;
+  } else if (kind === 'kill' || kind === 'break') {
     bn.textContent = kind === 'kill' ? 'ELIMINATED' : 'SHIELD BREAK';
     bn.className = 'is-' + kind;
     hitState.bannerAge = 0;
-    hitState.bannerDur = kind === 'kill' ? .88 : .70
+    hitState.bannerDur = kind === 'kill' ? .88 : .70;
   }
 }
 
@@ -595,6 +608,22 @@ function drawSettings() {
   $('shadowHint').textContent = lite
     ? '軽量モードで影描画を自動省略中（解除で復帰）'
     : !renderer?.native && settings.shadowMode !== 'off' ? '互換ソフト影描画' : shadowHints[settings.shadowMode];
+  $('fluxSwitch').setAttribute('aria-checked', String(settings.fluxGI));
+  $('fluxHint').textContent = lite
+    ? '軽量モードで間接光GIを自動省略中（解除で復帰）'
+    : settings.fluxGI
+      ? 'オン · 32×96 2バウンス色滲みラジオシティ＋銃撃/跳弾の動的間接光（12KB/f）'
+      : 'オフ · 直接光のみ（コンテナ色滲み・動的バウンス光なし）';
+  $('schlierenSwitch').setAttribute('aria-checked', String(settings.schlieren));
+  $('schlierenHint').textContent = lite
+    ? '軽量モードで屈折光学・陽炎を自動省略中（解除で復帰）'
+    : settings.schlieren
+      ? 'オン · 衝撃波Gladstone-Dale屈折レンズ＋プリズム色収差＋銃身陽炎（画面揺れ0）'
+      : 'オフ · 衝撃波空間歪み・銃身陽炎なし';
+  $('echoSwitch').setAttribute('aria-checked', String(settings.echoPulse));
+  $('echoHint').textContent = settings.echoPulse
+    ? 'オン · 音速343m/s音響波動コンパス表示（ミュート時も音源方向を可視化）'
+    : 'オフ · 音響波動コンパスを非表示（AIの343m/s音響物理は継続稼働）';
   $('audioHint').textContent = lite
     ? '軽量モードで軽量ステレオ3Dへ自動切替（解除で復帰）'
     : audioHints[settings.audioMode];
@@ -630,6 +659,13 @@ $('sound').onclick = async() => {
 $('lightModeSwitch').onclick = () => setGraphics('lightMode', !settings.lightMode);
 $('hdrSwitch').onclick = () => setGraphics('hdr', !settings.hdr);
 $('khdrSwitch').onclick = () => setGraphics('khdr', !settings.khdr);
+$('fluxSwitch').onclick = () => setGraphics('fluxGI', !settings.fluxGI);
+$('schlierenSwitch').onclick = () => setGraphics('schlieren', !settings.schlieren);
+$('echoSwitch').onclick = () => {
+  settings.echoPulse = !settings.echoPulse;
+  save();
+  drawSettings();
+};
 $('sensitivity').oninput = e => {
   settings.sensitivity = Number(e.target.value);
   $('sensVal').value = settings.sensitivity.toFixed(1) + '×';
@@ -704,6 +740,7 @@ $('resume').onclick = () => {
 $('endMatch').onclick = () => {
   if (match) {
     match.ended = true;
+    match.synapse?.save();
     show('results')
   }
 };
@@ -796,7 +833,30 @@ function resultUI() {
   $('finalA').textContent = match.scores[0];
   $('finalB').textContent = match.scores[1];
   $('roster').innerHTML = '<div class="roster-row heading"><span>参加者</span><span>撃破</span><span>ダウン</span></div>' + match.actors.map(a => `<div class="roster-row"><span class="${a.team?'orange':'cyan'}">${a.name}${a.human?' · 自分':a.isSpy?'<span class="tag-nv21">NV2.1 SPY</span>':''}</span><span>${a.kills}</span><span>${a.deaths}</span></div>`).join('');
-  equipment.result(match)
+  equipment.result(match);
+  const synEl = $('synapseReport');
+  if (synEl && match.synapse) {
+    const s = match.synapse.getSummary();
+    const ts = match.techStats || {ricochets: 0, ricochetHits: 0, penetrations: 0, wallbangHits: 0};
+    const ep = match.echoPulse?.stats || {echoDecoys: 0, nv21RejectedDecoys: 0};
+    const [lw, lc, le] = s.lanesPct;
+    synEl.hidden = false;
+    synEl.innerHTML =
+      `<div class="syn-head"><span class="syn-badge">NV-SYNAPSE 1.0</span><span class="syn-meta">観測 ${s.observations} · 学習 ${s.matchesLearned}戦</span></div>` +
+      `<div class="syn-main"><strong>${s.archetypeJa}</strong><span class="syn-counter">AI対策: ${s.counterJa}</span></div>` +
+      `<div class="syn-traits">${s.traits}</div>` +
+      `<div class="syn-lanes">` +
+        `<div class="syn-lane-labels"><span>西 ${lw}%</span><span>中央 ${lc}%</span><span>東 ${le}%</span></div>` +
+        `<div class="syn-lane-bar"><i class="syn-w" style="width:${lw}%"></i><i class="syn-c" style="width:${lc}%"></i><i class="syn-e" style="width:${le}%"></i></div>` +
+      `</div>` +
+      `<div class="syn-chips">` +
+        `<span>跳弾 <b>${ts.ricochets}</b>${ts.ricochetHits ? ` (命中${ts.ricochetHits})` : ''}</span>` +
+        `<span>貫通 <b>${ts.penetrations}</b>${ts.wallbangHits ? ` (命中${ts.wallbangHits})` : ''}</span>` +
+        `<span>音響デコイ <b>${ep.echoDecoys}</b>${ep.nv21RejectedDecoys ? ` / 2.1看破${ep.nv21RejectedDecoys}` : ''}</span>` +
+      `</div>`;
+  } else if (synEl) {
+    synEl.hidden = true;
+  }
 }
 function turn(dx, dy) {
   if (screen !== 'game' || !match?.player.alive)return;
@@ -1149,7 +1209,7 @@ function frame(ms) {
       rdBarrelPhase: gunMotion.rdBarrelPhase
     }
   });
-  equipment.draw(renderer, match, cam, timeNow, screen === 'game', !!settings.lightMode);
+  equipment.draw(renderer, match, cam, timeNow, screen === 'game', !!settings.lightMode, !!settings.echoPulse);
   if (resetView) {
     resetView = false;
     $('loading').hidden = true
@@ -1157,6 +1217,9 @@ function frame(ms) {
   const appEl = $('app');
   appEl.dataset.renderer = renderer.native ? 'webgl2' : 'software';
   appEl.dataset.lightMode = String(!!settings.lightMode);
+  appEl.dataset.fluxGi = String(!!(settings.fluxGI && !settings.lightMode));
+  appEl.dataset.schlieren = String(!!(settings.schlieren && !settings.lightMode));
+  appEl.dataset.echoPulse = String(!!settings.echoPulse);
   appEl.dataset.audioEngine = SOUND_ENGIN_VERSION;
   appEl.dataset.audioMode = effectiveAudioMode();
   appEl.dataset.audioState = audio.ctx?.state || (audio.on ? 'ready' : 'off');

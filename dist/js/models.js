@@ -764,6 +764,7 @@ export function character(team, gun, variant = 'standard', detail = 'high') {
 }
 
 function shotPalette(s) {
+  if (s.ricocheted) return {core: '#ffffff', jacket: '#f4c86a', outer: '#ff9634', ring: '#ffe98a', spark: '#fff0a4', vapor: '#e8d8be'};
   if (s.gun === 'MS10') return {core: '#f7ffff', jacket: '#8ec7d8', outer: s.team ? '#ff8b4f' : '#3ee4ff', ring: s.team ? '#ffd57a' : '#8ef7ff', spark: '#ffe37a', vapor: '#b8e8f2'};
   if (s.gun === 'RD40') return {core: '#fff7f0', jacket: '#d48272', outer: s.guided ? '#ff4a62' : '#ff7b4e', ring: s.guided ? '#ffcf76' : '#ff9c6e', spark: '#ffd27a', vapor: '#e8c4be'};
   if (s.gun === 'RD30') return {core: '#fffcf2', jacket: '#c9a06a', outer: s.guided ? '#ffae48' : (s.team ? '#ff7d44' : '#f4a250'), ring: s.guided ? '#ffe282' : '#ffcf76', spark: '#ffe388', vapor: '#e6d2b8'};
@@ -1078,6 +1079,35 @@ export function movingDetails(match, time, extra = false, lite = false) {
         const px = e.p[0] + Math.cos(ang) * rad, pz = e.p[2] + Math.sin(ang) * rad;
         const py = .4 + progress * (2.6 + (k % 3) * .8);
         m.beam([px, py, pz], [px, py + .65 * inv, pz], .032 * inv, .032 * inv, 'white', k % 2 ? '#8effef' : '#ffe48f', 3);
+      }
+      continue;
+    }
+
+    if (e.kind === 'ricochet' || e.kind === 'penetrate') {
+      const isRic = e.kind === 'ricochet';
+      const [u, v] = basisOf(isRic ? axis : norm);
+      if (progress < .38) {
+        const f = 1 - progress / .38;
+        const r = (isRic ? .18 : .14) * f;
+        m.ellipsoid(e.p[0], e.p[1], e.p[2], r, r, r, 'white', isRic ? '#fffef0' : '#ffe6a4', 3, 6, 3);
+        starFlare(m, e.p, norm, (isRic ? .72 : .48) * f, .024 * f, 3, isRic ? '#ffe47a' : '#ffba66', seed, 3);
+      }
+      ring(m, add(e.p, scale(norm, .03)), norm, .12 + progress * (isRic ? 1.15 : .88), .032 * inv, 12, isRic ? '#ffd872' : (e.mat === 'wood' ? '#d4a66a' : '#ffa65c'), 3);
+      const count = extra ? (isRic ? 18 : 14) : (isRic ? 12 : 9);
+      for (let k = 0; k < count; k++) {
+        const ang = seed + k * 2.39996;
+        const spread = (isRic ? .38 : .62) * (.45 + (k % 4) * .22);
+        const jet = unit(add(add(scale(axis, isRic ? 1.0 : .85), scale(u, Math.cos(ang) * spread)), scale(v, Math.sin(ang) * spread)));
+        const spd = (isRic ? 2.8 : 2.1) + (k % 5) * .45;
+        const p0 = add(e.p, [jet[0] * progress * spd, jet[1] * progress * spd - progress * progress * 1.15, jet[2] * progress * spd]);
+        if (!isRic && e.mat === 'wood' && k % 2 === 0) {
+          // Spinning wooden cargo crate splinters bursting out the far exit face!
+          const sl = .14 * inv + .04;
+          m.beam(p0, add(p0, scale(jet, sl)), .024, .010, 'wood', k % 4 === 0 ? '#a87d4e' : '#7a5834', 0);
+        } else {
+          const p1 = add(p0, scale(jet, (isRic ? .36 : .26) * inv + .04));
+          m.beam(p0, p1, .024 * inv + .004, .016 * inv + .003, 'white', k % 3 === 0 ? '#ffffff' : '#ffcf64', 3);
+        }
       }
       continue;
     }

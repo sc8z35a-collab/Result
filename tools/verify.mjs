@@ -21,6 +21,11 @@ import {
   computeAcousticPath,traceEarlyReflections,estimateEnclosure,
   synthesizeWaveShaperCurve,createGunImpulseSamples,generateHarborIR
 } from '../dist/js/audio.js';
+import {FluxGI,FLUXGI_WORLD_GLSL} from '../dist/js/fluxgi.js';
+import {SchlierenOptics,SCHLIEREN_COMPOSITE_GLSL} from '../dist/js/schlieren.js';
+import {BALLISTICS_VERSION,WEAPON_PENETRATION,RICOCHET_SIN_STEEL,solveBallisticImpact} from '../dist/js/ballistics.js';
+import {EchoPulseField,ECHOPULSE_VERSION} from '../dist/js/echopulse.js';
+import {SynapseProfiler,SYNAPSE_VERSION,sectorOf} from '../dist/js/synapse.js';
 const h=1/360;
 function duel(loadout='DF1 OUT',limit='unlimited',multiplier=2,events=[]) {
   return new Match({mode:'1v1', limit, multiplier,loadout},event=>events.push(event));
@@ -506,6 +511,172 @@ for (const [mode,counts] of Object.entries(modes)) {
   fxFullVerts:fxFull.count,fxLiteVerts:fxLite.count
  });
 }
-console.log('360Hz sim, weapon specs (DF1 OUT 95-mag 2x rate, MS10), 1s/round ammo regen, supply tankers, ARV1.1 1.76x bullet-side lead auto-aim, 40.1° FOV, deluxe bullet/impact VFX, Lightweight Mode LOD, 16-joint sculpted rig, KHDR, Shadow Flame 1.0 Flash/Pro, Sound Engin 1.0, Human-Realistic Aiming, NV2.1 Spy Engine, and all matches passed.');
+{
+ // ===== 1. FluxGI 1.0: 32x96 2-Bounce Radiosity + Live Dynamic Radiant Light-Field =====
+ assert(FLUXGI_WORLD_GLSL.includes('fluxGISample')&&FLUXGI_WORLD_GLSL.includes('uFluxGI'),'FluxGI GLSL must declare uFluxGI & fluxGISample');
+ const gi=new FluxGI();
+ assert(gi.baked&&gi.texData.length===32*96*4,'FluxGI must pre-bake 32x96 RGBA8 light-field');
+ for(let i=0;i<gi.staticFlux.length;i++) assert(Number.isFinite(gi.staticFlux[i])&&gi.staticFlux[i]>=0,'FluxGI static radiosity must be finite & non-negative');
+ // Probe beside sunlit red NORTH container ([9,77,w=3,d=12.2]) vs teal TIDE container ([9,-23,w=12.2,d=2.65])
+ const redProbe=gi.sampleFlux(6.8,77);
+ const tealProbe=gi.sampleFlux(9,-20.5);
+ const redRatio=redProbe.r/Math.max(1e-4,redProbe.b);
+ const tealRatio=tealProbe.r/Math.max(1e-4,tealProbe.b);
+ assert(redRatio>tealRatio*1.12,`FluxGI red container bounce (r/b=${redRatio.toFixed(2)}) must be warmer than teal container bounce (r/b=${tealRatio.toFixed(2)})`);
+ const beforeDyn=gi.sampleFlux(0,10);
+ gi.injectPoint(0,10,0.25,1.2,1.5,1.4,2);
+ const peakDyn=gi.sampleFlux(0,10);
+ assert(peakDyn.b>beforeDyn.b+0.5,'FluxGI injectPoint must inject dynamic colored radiance');
+ gi.update(null,0.2,false);
+ const decayedDyn=gi.sampleFlux(0,10);
+ assert(decayedDyn.b<peakDyn.b&&decayedDyn.b>=beforeDyn.b,'FluxGI dynamic radiance must smoothly decay over time');
+ console.log('FluxGI 1.0 OK:',{redRatio:+redRatio.toFixed(2),tealRatio:+tealRatio.toFixed(2),dynBoost:+(peakDyn.b-beforeDyn.b).toFixed(2)});
+}
+{
+ // ===== 2. SchlierenOptics 1.0: Gladstone-Dale Refractive Shockwave Lensing & Dispersion =====
+ assert(SCHLIEREN_COMPOSITE_GLSL.includes('schlierenEvaluate')&&SCHLIEREN_COMPOSITE_GLSL.includes('uShocks'),'SchlierenOptics GLSL must declare schlierenEvaluate & uShocks');
+ const sch=new SchlierenOptics();
+ const camPos=[0,1.6,20],camTarget=[0,1.5,0];
+ const vp=multiply(perspective(40.1*Math.PI/180,16/9,0.1,200),lookAt(camPos,camTarget,[0,1,0]));
+ sch.emit('kill',[0,1.5,10]);
+ sch.emit('break',[2.5,1.4,8]);
+ sch.step(null,0.04);
+ const n=sch.project(vp,camPos,40.1,16/9);
+ assert.equal(n,2,'SchlierenOptics must project both visible shockwaves');
+ const primaryUV=[+sch.uShocks[0].toFixed(2),+sch.uShocks[1].toFixed(2)];
+ assert(sch.uShocks[0]>0.3&&sch.uShocks[0]<0.7&&sch.uShocks[1]>0.3&&sch.uShocks[1]<0.7,'Primary kill shockwave UV must project near center');
+ assert(sch.uShocks[2]>0.01&&sch.uShocks[3]>0.001,'Shockwave must have positive screen radius & refractive strength');
+ // Behind-camera shockwave must be culled cleanly
+ sch.reset();
+ sch.emit('kill',[0,1.5,35]);
+ sch.step(null,0.04);
+ assert.equal(sch.project(vp,camPos,40.1,16/9),0,'Behind-camera shockwave must be culled');
+ // Wave expires cleanly after duration
+ sch.reset();
+ sch.emit('ricochet',[0,1.5,12]);
+ for(let i=0;i<15;i++) sch.step(null,0.08);
+ assert.equal(sch.waves.length,0,'Shockwaves must expire cleanly after duration');
+ console.log('SchlierenOptics 1.0 OK:',{projected:n,centerUV:primaryUV});
+}
+{
+ // ===== 3. BallisticCore-X: Oblique Steel Grazing Ricochet Bank-Shot & Wooden Crate Wallbang =====
+ assert.equal(BALLISTICS_VERSION,'BallisticCore-X 1.0');
+ assert(WEAPON_PENETRATION.MS10.wood>=3.0&&RICOCHET_SIN_STEEL>0.35);
+ // 3A. True Grazing Ricochet Bank-Shot around steel container ([9,77,w=3,d=12.2], west face x=7.5, z=70.9..83.1)
+ {
+  const ev=[];
+  const m=duel('MS10','unlimited',2,ev);
+  const p=m.player, e=m.actors[1];
+  Object.assign(p,{x:5.5,y:0,z:82.0,vx:0,vy:0,vz:0,alive:true});
+  Object.assign(e,{x:5.5,y:0,z:70.0,vx:0,vy:0,vz:0,alive:true,hp:100,shield:10});
+  // Aim obliquely at steel face (7.5, 1.35, 76.0) -> grazing angle ~18.4 deg -> reflects straight into enemy at (5.5, 1.35, 70.0)!
+  const eye=eyeOf(p);
+  const dx=7.5-eye[0], dy=1.35-eye[1], dz=76.0-eye[2];
+  p.yaw=Math.atan2(dx,-dz);
+  p.pitch=Math.atan2(dy,Math.hypot(dx,dz));
+  const startTotalHp=e.hp+e.shield;
+  assert(m.trigger(p),'Player must fire MS10 grazing shot');
+  // Step projectiles deterministically (no AI movement so enemy stays at exact bank-shot intersection)
+  for(let i=0;i<80&&m.shots.length;i++){
+   m.time+=h;
+   let w=0;
+   for(const s of m.shots) if(m.projectile(s,h)) m.shots[w++]=s;
+   m.shots.length=w;
+  }
+  assert(m.techStats.ricochets>=1,`Grazing steel shot must trigger ricochet (got ${m.techStats.ricochets})`);
+  assert(ev.some(x=>x.type==='ricochet'),'Ricochet event must be emitted for Sound Engin 1.0 & FluxGI/Schlieren');
+  assert(m.techStats.ricochetHits>=1&&(e.hp+e.shield)<startTotalHp,`Reflected bank-shot must hit target around corner (hits=${m.techStats.ricochetHits}, hp=${e.hp}+${e.shield})`);
+ }
+ // 3B. True Slab-Thickness Wallbang Penetration through wooden crate (['crates', 2.6, 61, 2.6, 2.6, 1.5], z=60.25..61.75)
+ {
+  const ev=[];
+  const m=duel('MS10','unlimited',2,ev);
+  const p=m.player, e=m.actors[1];
+  Object.assign(p,{x:2.6,y:0,z:64.2,vx:0,vy:0,vz:0,alive:true});
+  Object.assign(e,{x:2.6,y:0,z:58.2,vx:0,vy:0,vz:0,alive:true,hp:100,shield:10});
+  // Verify target IS physically occluded by the 1.5m wooden crate!
+  assert(obstruction(eyeOf(p),targetPoint(e))<0.99,'Enemy must be fully behind wooden cargo crate');
+  const eye=eyeOf(p), tp=targetPoint(e);
+  p.yaw=Math.atan2(tp[0]-eye[0],-(tp[2]-eye[2]));
+  p.pitch=Math.atan2(tp[1]-eye[1],Math.hypot(tp[0]-eye[0],tp[2]-eye[2]));
+  const startTotalHp=e.hp+e.shield;
+  assert(m.trigger(p),'Player must fire MS10 straight through wooden crate');
+  for(let i=0;i<80&&m.shots.length;i++){
+   m.time+=h;
+   let w=0;
+   for(const s of m.shots) if(m.projectile(s,h)) m.shots[w++]=s;
+   m.shots.length=w;
+  }
+  assert(m.techStats.penetrations>=1,`MS10 shot through 1.5m wood crate must penetrate (got ${m.techStats.penetrations})`);
+  assert(ev.some(x=>x.type==='penetrate'),'Penetrate event must be emitted');
+  assert(m.techStats.wallbangHits>=1&&(e.hp+e.shield)<startTotalHp,`Wallbang round must emerge from crate and hit hidden enemy (hits=${m.techStats.wallbangHits}, hp=${e.hp}+${e.shield})`);
+ }
+ console.log('BallisticCore-X OK: oblique steel bank-shot kill/hit & 1.5m wood-crate wallbang verified.');
+}
+{
+ // ===== 4. EchoPulse 1.0: 343 m/s Acoustic Propagation, Steel-Alley Echo Decoy vs NV2.1 Haas Filter & Compass =====
+ assert.equal(ECHOPULSE_VERSION,'EchoPulse 1.0');
+ const m=new Match({mode:'3v3',limit:'unlimited',multiplier:2,loadout:'SRA',allyNv21:1},()=>{});
+ // 4A. Speed-of-sound delay (d = 45m -> ~131ms propagation, NOT 0ms teleport!)
+ m.echoPulse.reset();
+ const pl=m.player;
+ const enemy=m.actors.find(a=>a.team===1);
+ Object.assign(pl,{x:0,y:0,z:25,yaw:0,alive:true});
+ Object.assign(enemy,{x:0,y:0,z:-20,alive:true});
+ m.time=1.0;
+ m.echoPulse.emit(m,{kind:'fire',pos:[enemy.x,1.5,enemy.z],actor:enemy,team:1,loudness:1.1,gun:'SRA'});
+ m.time=1.02; // 20ms later: wave only traveled ~6.9m of 45m!
+ assert.equal(m.echoPulse.getCompassArcs(pl,m.time).length,0,'45m gunshot must not arrive at player compass in 20ms');
+ m.time=1.20; // 200ms later: wave physically arrived (>131ms)!
+ const arcs=m.echoPulse.getCompassArcs(pl,m.time);
+ assert(arcs.length>=1&&Math.abs(arcs[0].deg)<12&&arcs[0].alpha>0.05,`Arrived compass arc must point ahead (deg=${arcs[0]?.deg?.toFixed(1)}, alpha=${arcs[0]?.alpha?.toFixed(2)})`);
+ // 4B. Steel-alley occluded early-reflection decoy on standard NV2 vs NV2.1 Spy Haas Precedence rejection
+ // Find a clean occluded geometry with strong steel reflection: shooter behind [-7.5,46] container, listeners on other side with facing steel wall!
+ m.echoPulse.reset();
+ const stdNpc=m.actors.find(a=>a.team===0&&!a.human&&!a.isSpy);
+ const spyNpc=m.actors.find(a=>a.team===0&&a.isSpy);
+ assert(stdNpc&&spyNpc,'3v3 with allyNv21=1 must have both standard NV2 and NV2.1 Spy ally');
+ // Position shooter at (-10.2, 1.4, 46) behind [-7.5, 46] steel container and both ally listeners near the alley corner at (-4.2, 0, 55):
+ // direct line is blocked by steel (occlusion=0.86), while an opposing steel container wall reflects a clear bright echo around the corner!
+ m.echoPulse.reset();
+ Object.assign(enemy,{x:-10.2,y:0,z:46,alive:true});
+ Object.assign(stdNpc,{x:-4.2,y:0,z:55,alive:true});
+ Object.assign(spyNpc,{x:-4.2,y:0,z:55,alive:true});
+ m.time=2.0;
+ m.echoPulse.emit(m,{kind:'fire',pos:[-10.2,1.4,46],actor:enemy,team:1,loudness:1.15,gun:'MS10'});
+ assert(m.echoPulse.stats.echoDecoys>=1&&m.echoPulse.stats.nv21RejectedDecoys>=1,`EchoPulse steel-alley reflection must decoy standard NV2 and be rejected by NV2.1 Haas precedence (stats=${JSON.stringify(m.echoPulse.stats)})`);
+ m.time=2.4;
+ const arrived=m.echoPulse.step(m);
+ assert(arrived.length>=2&&arrived.some(r=>r.isDecoy)&&arrived.some(r=>!r.isDecoy),'Arrived queue must deliver decoyed report to NV2 and true report to NV2.1');
+ console.log('EchoPulse 1.0 OK:',{delayArcDeg:+arcs[0].deg.toFixed(1),stats:m.echoPulse.stats});
+}
+{
+ // ===== 5. NV-Synapse 1.0: 12-Dim Behavioral Twin, 12x12 Markov Predictor & Counter-Playbook Compiler =====
+ assert.equal(SYNAPSE_VERSION,'NV-Synapse 1.0');
+ const syn=new SynapseProfiler();
+ // Feed fair-play enemy visual sightings of a West-flanking, right-peeking, tanker-hunting player
+ const observerPos=[0,0,-25];
+ const route=[[-16,55],[-16,25],[-16,-10],[-16,-45]];
+ for(let rep=0;rep<4;rep++){
+  for(let k=0;k<route.length;k++){
+   const [px,pz]=route[k];
+   syn.observe([px,0,pz],{time:rep*12+k*2.5,observerPos,vx:3.4,vz:-4.0,crouch:0,isVisual:true});
+  }
+ }
+ syn.observeReload();
+ syn.observeTankerCapture();
+ syn.observeTankerCapture();
+ assert(syn.fp.laneWest>0.55,`NV-Synapse must learn West lane habit (got ${syn.fp.laneWest.toFixed(2)})`);
+ const fromZ=sectorOf(-16,55);
+ const pred=syn.predictNextZone(fromZ);
+ assert(pred.zone===sectorOf(-16,25)&&pred.confidence>0.25,`NV-Synapse 12x12 Markov chain must predict next West sector (pred=${pred.zone}, expected=${sectorOf(-16,25)}, conf=${pred.confidence.toFixed(2)})`);
+ const dir=syn.getCounterDirective();
+ assert(dir.favoredLaneX<0,'Counter directive must lock onto favored West lane X=-15');
+ assert(dir.playbookBias.PINCER_DOUBLE_FLANK>0.3||dir.playbookBias.TANKER_DENIAL_BOX>0.4,'Counter directive must boost counter-playbook weights');
+ const sum=syn.getSummary();
+ assert(sum.archetypeJa&&sum.counterJa&&sum.lanesPct[0]>50&&sum.observations>=16,'NV-Synapse summary must output complete Japanese tactical readout');
+ console.log('NV-Synapse 1.0 OK:',{archetype:sum.archetype,ja:sum.archetypeJa,counter:sum.counterJa,lanesPct:sum.lanesPct,confPct:sum.confidencePct});
+}
+console.log('360Hz sim, weapon specs (DF1 OUT 95-mag 2x rate, MS10, RD20/30/40), FluxGI 1.0, SchlierenOptics 1.0, BallisticCore-X, EchoPulse 1.0, NV-Synapse 1.0, Lightweight Mode LOD, 16-joint sculpted rig, KHDR, Shadow Flame 1.0 Flash/Pro, Sound Engin 1.0, Human-Realistic Aiming, NV2.1 Spy Engine, and all matches passed.');
 
 

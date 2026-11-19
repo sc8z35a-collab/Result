@@ -1,6 +1,7 @@
 import {SHADOW_FLAME_WORLD_GLSL} from './shadowflame.js';
 import {KHDR_TONE_GLSL} from './khdr.js';
 import {ARTICULATED_RIG_GLSL} from './rig.js';
+import {FLUXGI_WORLD_GLSL} from './fluxgi.js';
 
 export const shared = `
 precision highp float;
@@ -106,6 +107,7 @@ void main(){
 export const worldFS = `#version 300 es
 ${shared}
 ${SHADOW_FLAME_WORLD_GLSL}
+${FLUXGI_WORLD_GLSL}
 in vec3 wPos,wNormal,wColor,lPos;
 in vec2 uv;
 flat in float layer;
@@ -192,15 +194,25 @@ void main(){
     float penBand=4.*vis*(1.-vis);
     direct+=vec3(1.12,.76,.40)*penBand*max(nl,0.)*(.10+.09*penSoft);
   }
-  // Shadow Flame 1.0 Pro: 1-bounce warm sunlit asphalt indirect bounce into shadowed container walls
+  // Shadow Flame 1.0 Pro warm asphalt bounce + FluxGI 1.0 Real-Time 2-Bounce Colored Radiosity & Dynamic Light-Field!
   vec3 bounceGI=vec3(0.);
   if(sfMode>=2 && uMode!=2 && kind<1.5){
     float sideMask=1.-abs(N.y);
     float lowMask=1.-smoothstep(0.,3.6,max(0.,wPos.y));
-    bounceGI=vec3(.24,.20,.15)*(1.-vis)*sideMask*lowMask*.38;
+    bounceGI=vec3(.24,.20,.15)*(1.-vis)*sideMask*lowMask*.32;
+  }
+  float giSkyAO=1.;
+  if(uFluxGIOn==1 && uMode!=2 && kind<2.5 && abs(wPos.x)<27. && abs(wPos.z)<104.){
+    vec4 gi=fluxGISample(wPos,N);
+    vec3 giRad=gi.rgb/(1.+gi.rgb*.42);
+    float sideFill=mix(1.0,.62,max(0.,N.y));
+    float heightFade=1.-smoothstep(2.5,7.8,max(0.,wPos.y));
+    float shadowLift=.22+.78*(1.-vis);
+    bounceGI+=giRad*sideFill*heightFade*shadowLift*(uKHDR==1?.52:.42);
+    giSkyAO=mix(.84,1.04,gi.a);
   }
 
-  vec3 light=ambient*umbraDepth*umbraTint*(1.-edge)+direct+bounceGI;
+  vec3 light=ambient*giSkyAO*umbraDepth*umbraTint*(1.-edge)+direct+bounceGI;
   vec3 c=base*light;
 
   if(uQuality>=0){

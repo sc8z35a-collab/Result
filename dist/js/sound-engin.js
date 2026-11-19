@@ -2018,6 +2018,42 @@ export class SoundEngin {
     this._playTone({f0: 2420, f1: 2340, dur: 0.090, attack: 0.003, gain: 0.022, type: 'sine', pan: 0.09, bus: this.uiBus, start: now + 0.088});
   }
 
+  _playRicochet(e, now) {
+    const p = e.point;
+    const path = computeAcousticPath(p, this.listenerPos);
+    if (path.dist > 64) return;
+    const start = now + path.delay;
+    const v = clamp(path.directGain * 1.25, 0.05, 0.98);
+    const lpf = path.cutoffHz;
+    const j = 0.88 + Math.random() * 0.24;
+    const rev = clamp(0.28 + path.reverbBoost + this.enclosure * 0.26, 0.16, 0.78);
+    // Iconic tumbling Doppler oblique steel ricochet zing ("kiiiing-pyuuun!") + molten spark shear
+    const f0 = (e.mat === 'steel' ? 2850 : 2150) * j;
+    const f1 = f0 * (Math.random() < 0.4 ? 1.42 : 0.42);
+    this._playTone({f0, f1, dur: 0.24, attack: 0.002, gain: 0.135 * v, type: 'sine', lpf, pos: p, bus: this.impactsBus, reverbSend: rev, start});
+    this._playTone({f0: f0 * 1.48, f1: f1 * 1.32, dur: 0.19, attack: 0.002, gain: 0.065 * v, type: 'triangle', lpf, pos: p, bus: this.impactsBus, start: start + 0.006});
+    this._playBuffer({buffer: this.whiteNoiseBuf, loop: true, dur: 0.065, gain: 0.17 * v, filterType: 'bandpass', f0: 4600 * j, f1: 1200 * j, q: 2.6, lpf, pos: p, bus: this.impactsBus, reverbSend: rev, start});
+  }
+
+  _playPenetrate(e, now) {
+    const p = e.point;
+    const path = computeAcousticPath(p, this.listenerPos);
+    if (path.dist > 56) return;
+    const start = now + path.delay;
+    const v = clamp(path.directGain * 1.18, 0.04, 0.92);
+    const lpf = path.cutoffHz;
+    const j = 0.9 + Math.random() * 0.2;
+    if (e.mat === 'wood') {
+      // Crisp wooden crate punch-through crack + splinter tear
+      this._playTone({f0: 210 * j, f1: 78 * j, dur: 0.09, gain: 0.15 * v, type: 'triangle', lpf, pos: p, bus: this.impactsBus, start});
+      this._playBuffer({buffer: this.whiteNoiseBuf, loop: true, dur: 0.095, gain: 0.19 * v, filterType: 'bandpass', f0: 2450 * j, f1: 680 * j, q: 1.5, lpf, pos: p, bus: this.impactsBus, reverbSend: 0.35, start});
+    } else {
+      // High-velocity steel edge punch-through tear
+      this._playTone({f0: 1480 * j, f1: 420 * j, dur: 0.11, gain: 0.14 * v, type: 'sawtooth', lpf, pos: p, bus: this.impactsBus, start});
+      this._playBuffer({buffer: this.whiteNoiseBuf, loop: true, dur: 0.075, gain: 0.18 * v, filterType: 'bandpass', f0: 4200 * j, f1: 1100 * j, q: 2.2, lpf, pos: p, bus: this.impactsBus, reverbSend: 0.4, start});
+    }
+  }
+
   // --------------------------------------------------------------------------
   // Event Dispatcher (Full Backward Compatibility with PortAudio)
   // --------------------------------------------------------------------------
@@ -2048,6 +2084,14 @@ export class SoundEngin {
     }
     if (e.type === 'd01' && a === player) {
       this._playD01Ping(now);
+      return;
+    }
+    if (e.type === 'ricochet' && e.point) {
+      this._playRicochet(e, now);
+      return;
+    }
+    if (e.type === 'penetrate' && e.point) {
+      this._playPenetrate(e, now);
       return;
     }
     if (e.type === 'reload' && a) {

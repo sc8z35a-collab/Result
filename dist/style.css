@@ -1298,6 +1298,191 @@ body.touch #rdHud {
   border-color: #ffd678cc;
 }
 
+/* ==========================================================================
+   Next-Gen 5 Innovations UI: FluxGI 1.0 · SchlierenOptics 1.0 · EchoPulse 1.0
+   BallisticCore-X Banners · NV-Synapse 1.0 Match Results Telemetry
+   ========================================================================== */
+.badge-gi, .badge-opt, .badge-echo {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font: 700 10px/1.2 var(--mono);
+  letter-spacing: .06em;
+  vertical-align: middle;
+}
+.badge-gi {
+  color: #fff3cc;
+  background: linear-gradient(90deg, #4f3a15, #1b4a4a);
+  border: 1px solid #f2c86888;
+}
+.badge-opt {
+  color: #e6dcff;
+  background: linear-gradient(90deg, #2d2154, #174957);
+  border: 1px solid #9c8cff88;
+}
+.badge-echo {
+  color: #cffff5;
+  background: linear-gradient(90deg, #104940, #1a3d52);
+  border: 1px solid #59f0d885;
+}
+.gi-toggle[aria-checked=true] {
+  background: linear-gradient(90deg, #e5a944, #59d9c8);
+  border-color: #ffeaad;
+  box-shadow: 0 0 16px #f0bc5848;
+}
+.opt-toggle[aria-checked=true] {
+  background: linear-gradient(90deg, #8a78f5, #56dcf2);
+  border-color: #cfc6ff;
+  box-shadow: 0 0 16px #8678f552;
+}
+.echo-toggle[aria-checked=true] {
+  background: linear-gradient(90deg, #32d6b6, #5ce2f5);
+  border-color: #aefcf0;
+  box-shadow: 0 0 16px #48e5cc48;
+}
+
+/* BallisticCore-X Special Hit/Kill Banners */
+#hitBanner.is-ricochet {
+  color: #ffea88;
+  text-shadow: 0 0 14px #ffa824, 0 0 4px #ffe878, 0 1px 3px #1b1104;
+}
+#hitBanner.is-wallbang {
+  color: #ffb88c;
+  text-shadow: 0 0 14px #ff4c2e, 0 0 4px #ff9c66, 0 1px 3px #1d0906;
+}
+
+/* EchoPulse 1.0 Peripheral Sound-to-Sight 343 m/s Acoustic Compass */
+#echoCompass {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 232px;
+  height: 232px;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 1;
+}
+#echoCompass i {
+  position: absolute;
+  inset: 0;
+  display: block;
+  border-radius: 50%;
+  opacity: 0;
+  --ep-ang: 0deg;
+  --ep-col: #ff9c54d8;
+  --ep-hi: #ffe3a8ff;
+  transform: rotate(var(--ep-ang));
+  background: conic-gradient(from -17deg, transparent 0deg, var(--ep-col) 10deg, var(--ep-hi) 17deg, var(--ep-col) 24deg, transparent 34deg);
+  -webkit-mask-image: radial-gradient(circle closest-side, transparent 84%, #000 88%, #000 96%, transparent 100%);
+  mask-image: radial-gradient(circle closest-side, transparent 84%, #000 88%, #000 96%, transparent 100%);
+  filter: drop-shadow(0 0 2px #071418d8) drop-shadow(0 0 6px var(--ep-col));
+  will-change: transform, opacity;
+}
+#echoCompass i.ep-fire { --ep-col: #ff9b4ce0; --ep-hi: #ffe4a6ff; }
+#echoCompass i.ep-ricochet { --ep-col: #ffd248ee; --ep-hi: #fff8c2ff; }
+#echoCompass i.ep-penetrate { --ep-col: #ff664ee0; --ep-hi: #ffd0b0ff; }
+#echoCompass i.ep-tanker { --ep-col: #4ef2dce0; --ep-hi: #d6fff9ff; }
+#echoCompass i.ep-step { --ep-col: #8ad6e8cc; --ep-hi: #dffaffff; }
+#echoCompass i.ep-occ {
+  background: conic-gradient(from -11deg, transparent 0deg, var(--ep-col) 8deg, var(--ep-hi) 11deg, var(--ep-col) 14deg, transparent 22deg);
+  filter: none;
+}
+body.light-mode #echoCompass i { filter: none !important; }
+@media (max-width: 600px) {
+  #echoCompass { width: 168px; height: 168px; }
+}
+
+/* NV-Synapse 1.0 AI Tactical Profile & Physics Telemetry Card (Match Results) */
+.synapse-report {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: linear-gradient(145deg, #10252a9e, #16212c94);
+  border: 1px solid #68d8e844;
+  border-left: 3px solid #64e8dc;
+  font-size: 11px;
+}
+.syn-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.syn-badge {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font: 800 9.5px/1.2 var(--mono);
+  letter-spacing: .1em;
+  color: #96fff2;
+  background: linear-gradient(90deg, #12444a, #242f4f);
+  border: 1px solid #62ebd878;
+}
+.syn-meta {
+  font: 600 10px/1 var(--mono);
+  color: #9cb4b8;
+}
+.syn-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 10px;
+}
+.syn-main strong {
+  font-size: 14px;
+  color: #f4f8ee;
+  letter-spacing: .02em;
+}
+.syn-counter {
+  font: 700 10.5px/1.3 var(--mono);
+  color: #ffd788;
+}
+.syn-traits {
+  margin-top: 3px;
+  font: 500 10px/1.35 var(--mono);
+  color: #b4cad0;
+}
+.syn-lanes { margin-top: 8px; }
+.syn-lane-labels {
+  display: flex;
+  justify-content: space-between;
+  font: 600 9.5px/1.2 var(--mono);
+  color: #b6c8c6;
+  margin-bottom: 3px;
+}
+.syn-lane-bar {
+  display: flex;
+  height: 5px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: #ffffff18;
+  gap: 1px;
+}
+.syn-lane-bar i { display: block; height: 100%; }
+.syn-lane-bar .syn-w { background: #64e4d6; }
+.syn-lane-bar .syn-c { background: #f2c968; }
+.syn-lane-bar .syn-e { background: #f59472; }
+.syn-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 7px;
+  margin-top: 8px;
+  padding-top: 7px;
+  border-top: 1px solid #96b4b828;
+  font: 600 10px/1.2 var(--mono);
+  color: #c5d6d4;
+}
+.syn-chips span {
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: #0d1d21a8;
+  border: 1px solid #8eb0b530;
+}
+.syn-chips b { color: #ffe294; font-weight: 800; }
+
 
 
 

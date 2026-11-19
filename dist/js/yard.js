@@ -129,30 +129,44 @@ export function surfaceAt(x, z, y) {
   }
   return best
 }
-export function rayBox(a, b, o) {
+export function rayBoxSpan(a, b, o) {
   let enter = 0, exit = 1;
   for (const [k, lo, hi] of [[0, o.x0, o.x1], [1, o.y0, o.y1], [2, o.z0, o.z1]]) {
     const d = b[k] - a[k];
     if (Math.abs(d) < 1e-8) {
-      if (a[k] < lo || a[k] > hi)return Infinity;
+      if (a[k] < lo || a[k] > hi)return null;
       continue
     }
     let p = (lo - a[k]) / d, q = (hi - a[k]) / d;
     if (p > q)[p, q] = [q, p];
     enter = Math.max(enter, p);
     exit = Math.min(exit, q);
-    if (enter > exit)return Infinity
+    if (enter > exit)return null
   }
-  return enter
+  return {enter, exit}
+}
+export function rayBox(a, b, o) {
+  const s = rayBoxSpan(a, b, o);
+  return s ? s.enter : Infinity
+}
+function boxFaceNormal(point, o) {
+  const eps = 2e-3;
+  if (Math.abs(point[0] - o.x0) < eps)return [-1, 0, 0];
+  if (Math.abs(point[0] - o.x1) < eps)return [1, 0, 0];
+  if (Math.abs(point[2] - o.z0) < eps)return [0, 0, -1];
+  if (Math.abs(point[2] - o.z1) < eps)return [0, 0, 1];
+  if (Math.abs(point[1] - o.y0) < eps)return [0, -1, 0];
+  return [0, 1, 0]
 }
 export function raycastMaterial(a, b) {
-  let nearest = Infinity, hitObj = null;
+  let nearest = Infinity, hitObj = null, hitSpan = null;
   for (const i of nearby(Math.min(a[0], b[0]), Math.min(a[2], b[2]), Math.max(a[0], b[0]), Math.max(a[2], b[2]))) {
     const o = obstacles[i];
-    const t = rayBox(a, b, o);
-    if (t < nearest) {
-      nearest = t;
-      hitObj = o
+    const span = rayBoxSpan(a, b, o);
+    if (span && span.enter < nearest) {
+      nearest = span.enter;
+      hitObj = o;
+      hitSpan = span
     }
   }
   let groundHit = false;
@@ -161,20 +175,31 @@ export function raycastMaterial(a, b) {
     if (tg < nearest) {
       nearest = tg;
       hitObj = null;
+      hitSpan = null;
       groundHit = true
     }
   }
   if (!(nearest <= 1))return null;
-  const point = [a[0] + (b[0] - a[0]) * nearest, a[1] + (b[1] - a[1]) * nearest, a[2] + (b[2] - a[2]) * nearest];
-  if (groundHit || !hitObj)return {t: nearest, point, normal: [0, 1, 0], mat: 'concrete'};
-  const eps = 1e-3;
-  let normal = [0, 1, 0];
-  if (Math.abs(point[0] - hitObj.x0) < eps)normal = [-1, 0, 0];
-  else if (Math.abs(point[0] - hitObj.x1) < eps)normal = [1, 0, 0];
-  else if (Math.abs(point[2] - hitObj.z0) < eps)normal = [0, 0, -1];
-  else if (Math.abs(point[2] - hitObj.z1) < eps)normal = [0, 0, 1];
-  else if (Math.abs(point[1] - hitObj.y0) < eps)normal = [0, -1, 0];
-  return {t: nearest, point, normal, mat: hitObj.mat || 'steel'}
+  const dx = b[0] - a[0], dy = b[1] - a[1], dz = b[2] - a[2];
+  const point = [a[0] + dx * nearest, a[1] + dy * nearest, a[2] + dz * nearest];
+  if (groundHit || !hitObj)return {t: nearest, point, normal: [0, 1, 0], mat: 'concrete', thickness: Infinity, exitPoint: null, exitNormal: null};
+  const normal = boxFaceNormal(point, hitObj);
+  // Compute true full-slab exit along the ray direction (even if segment b ends inside the box!)
+  let exitT = hitSpan.exit, exitPoint = null, exitNormal = null, thickness = Infinity;
+  const segLen = Math.hypot(dx, dy, dz);
+  if (segLen > 1e-6) {
+    const invL = 1 / segLen;
+    const ux = dx * invL, uy = dy * invL, uz = dz * invL;
+    const far = [point[0] + ux * 16, point[1] + uy * 16, point[2] + uz * 16];
+    const fullSpan = rayBoxSpan(point, far, hitObj);
+    if (fullSpan && fullSpan.exit > 1e-4 && fullSpan.exit < 0.999) {
+      thickness = fullSpan.exit * 16;
+      exitPoint = [point[0] + ux * thickness, point[1] + uy * thickness, point[2] + uz * thickness];
+      exitNormal = boxFaceNormal(exitPoint, hitObj);
+      exitT = nearest + thickness * invL;
+    }
+  }
+  return {t: nearest, tExit: exitT, point, normal, exitPoint, exitNormal, thickness, mat: hitObj.mat || 'steel', box: hitObj}
 }
 export function obstruction(a, b) {
   let nearest = Infinity;

@@ -7,6 +7,8 @@ import * as shader from './shaders.js';
 import {HDRDisplay} from './hdr.js';
 import {ShadowFlame, shadowModes} from './shadowflame.js';
 import {KHDRPipeline} from './khdr.js';
+import {FluxGI} from './fluxgi.js';
+import {SchlierenOptics} from './schlieren.js';
 
 const I = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
 export const sizes = {HD: [1280, 720], FHD: [1920, 1080], '2K': [2560, 1440]};
@@ -116,6 +118,9 @@ export class Renderer {
     this.skyP = program(gl, shader.skyVS, shader.skyFS);
     this.sf = new ShadowFlame(gl, shader.postVS);
     this.khdr = new KHDRPipeline(gl, shader.postVS);
+    this.fluxGI = new FluxGI();
+    this.fluxGI.initGL(gl);
+    this.schlieren = new SchlierenOptics();
     this.floatHDR = this.khdr.floatHDR;
 
     const [textures, wave] = await Promise.all([loadTextures(gl), new Promise((res, rej) => {
@@ -155,6 +160,7 @@ export class Renderer {
       uMats: 0,
       uSfStaticPCF: 1,
       uSky: 2,
+      uFluxGI: 6,
       uSfDynPCF: 8,
       uSfStaticRaw: 12,
       uSfNearRaw: 13
@@ -202,7 +208,7 @@ export class Renderer {
   }
   useOffscreen() {
     if (this.isLite()) return false;
-    return this.quality() >= 2 || !!this.config?.khdr || this.shadowMode() >= 2;
+    return this.quality() >= 2 || !!this.config?.khdr || this.shadowMode() >= 2 || this.config?.schlieren !== false;
   }
   settings(config) {
     const prevKHDR = !this.config?.lightMode && !!this.config?.khdr;
@@ -259,6 +265,7 @@ export class Renderer {
       if (e.kind === 'kill') list.push({p: e.p, i: frac * 6.4, c: [2.0, 1.35, .52], pri: 94 - d});
       else if (e.kind === 'break') list.push({p: e.p, i: frac * 5.6, c: [.42, 1.85, 2.15], pri: 88 - d});
       else if (e.kind === 'tanker') list.push({p: e.p, i: frac * 6.0, c: [.55, 1.8, 1.55], pri: 86 - d});
+      else if (e.kind === 'ricochet' || e.kind === 'penetrate') list.push({p: e.p, i: frac * 4.2, c: [1.98, 1.38, .48], pri: 76 - d});
       else if (e.kind === 'muzzle' && !e.human) list.push({p: e.p, i: frac * 3.4, c: e.gun === 'MS10' ? [.42, 1.5, 1.95] : e.gun === 'RD20' ? [.46, 1.52, 1.88] : e.gun === 'RD30' ? [1.90, 1.20, .44] : e.source === 'p1' ? [1.45, .65, 1.95] : [1.85, 1.15, .44], pri: 70 - d});
       else if (e.kind === 'shield') list.push({p: e.p, i: frac * 3.4, c: [.42, 1.7, 1.95], pri: 68 - d});
       else if (e.kind === 'hit' || e.kind === 'wall') {
@@ -299,9 +306,14 @@ export class Renderer {
       this.lightCol.set(L.c, k * 3);
     }
   }
-  worldPass(vp, eye, output, khdrOn, sfMode, quality, time, terrainMesh = this.terrain) {
+  worldPass(vp, eye, output, khdrOn, sfMode, quality, time, terrainMesh = this.terrain, fluxGIOn = false) {
     const gl = this.gl, p = this.world;
     gl.useProgram(p.obj);
+    if (this.fluxGI?.tex) {
+      gl.activeTexture(gl.TEXTURE6);
+      gl.bindTexture(gl.TEXTURE_2D, this.fluxGI.tex);
+    }
+    if (p.uFluxGIOn != null) gl.uniform1i(p.uFluxGIOn, fluxGIOn ? 1 : 0);
     gl.uniformMatrix4fv(p.uVP, false, vp);
     gl.uniformMatrix4fv(p.uModel, false, I);
     this.sf.applyWorldUniforms(p, sfMode);
@@ -331,6 +343,8 @@ export class Renderer {
       quality = this.quality(),
       extra = !lite && quality >= 2,
       khdrOn = !lite && !!cfg.khdr,
+      fluxGIOn = !lite && cfg.fluxGI !== false,
+      schlierenOn = !lite && cfg.schlieren !== false,
       sfMode = this.shadowMode(),
       offscreen = this.useOffscreen(),
       eye = cam.pos,
@@ -351,6 +365,13 @@ export class Renderer {
 
     if (offscreen) this.khdr.ensure(this.canvas.width, this.canvas.height);
     this.lastVP = vp;
+
+    // Advance FluxGI 1.0 dynamic light-field & SchlierenOptics 1.0 3D shockwave projector
+    if (fluxGIOn && this.fluxGI) this.fluxGI.update(match, dt, true);
+    if (schlierenOn && this.schlieren) {
+      this.schlieren.step(match, dt);
+      this.schlieren.project(vp, eye, cam.fov, this.aspect);
+    }
 
     // Pack live actor positions + crouch factor (w = 1.0 + crouch) for Shadow Flame contact shadows
     this.actorData.fill(0);
@@ -388,7 +409,7 @@ export class Renderer {
       gl.viewport(0, 0, this.mirrorDim[0], this.mirrorDim[1]);
       gl.clearColor(0, 0, 0, 0);
       gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-      this.worldPass(this.mirrorVP, re, 3, khdrOn, sfMode, Math.min(1, quality), time, activeTerrain);
+      this.worldPass(this.mirrorVP, re, 3, khdrOn, sfMode, Math.min(1, quality), time, activeTerrain, fluxGIOn);
     }
     gl.activeTexture(gl.TEXTURE4);
     gl.bindTexture(gl.TEXTURE_2D, this.mirrorTex);
@@ -403,7 +424,7 @@ export class Renderer {
     gl.clearColor(.24, .35, .39, 1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
-    this.worldPass(vp, eye, sceneOutput, khdrOn, sfMode, quality, time, activeTerrain);
+    this.worldPass(vp, eye, sceneOutput, khdrOn, sfMode, quality, time, activeTerrain, fluxGIOn);
 
     const p = this.world;
     if (match) {
@@ -550,7 +571,7 @@ export class Renderer {
       }
     }
 
-    // 6. Unified KHDR / Extra / Shadow Flame Pro Post-Process & Composite
+    // 6. Unified KHDR / Extra / Shadow Flame Pro / SchlierenOptics 1.0 Post-Process & Composite
     if (offscreen && this.khdr.targets) {
       this.khdr.composite({
         w: this.canvas.width,
@@ -564,7 +585,13 @@ export class Renderer {
         shake: view.shake || 0,
         hurt: view.hurt || 0,
         time,
-        emptyVao: this.empty
+        emptyVao: this.empty,
+        schlierenOn,
+        shockCount: schlierenOn && this.schlieren ? this.schlieren.activeCount : 0,
+        shocks: this.schlieren?.uShocks || null,
+        shockMeta: this.schlieren?.uShockMeta || null,
+        gunHeat: schlierenOn && view.firstPerson ? (view.motion?.heat || 0) : 0,
+        aspect: this.aspect
       });
     }
 

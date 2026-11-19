@@ -113,7 +113,7 @@ export class PilotEquipment {
     $('pauseCredits').hidden = !a?.df;
     this.accountView()
   }
-  draw(renderer, match, cam, t, play, lite = false) {
+  draw(renderer, match, cam, t, play, lite = false, echoOn = true) {
     const a = match?.player,
       d = a?.df,
       rd = a?.rd,
@@ -124,6 +124,27 @@ export class PilotEquipment {
       isRD20 = rdOn && a.gun === 'RD20',
       ads = !!(on && d.ads),
       thermal = ads && d.scope === 'thermal' && this.wallet.state.evr;
+
+    // EchoPulse 1.0 Peripheral Sound-to-Sight Tactical Acoustic Compass (works even when muted!)
+    const compass = $('echoCompass');
+    if (compass) {
+      const arcs = (play && echoOn && a?.alive && !ads && match?.echoPulse)
+        ? match.echoPulse.getCompassArcs(a, match.time, 6)
+        : [];
+      const nodes = compass.children;
+      for (let i = 0; i < nodes.length; i++) {
+        const el = nodes[i];
+        const arc = arcs[i];
+        if (!arc) {
+          el.style.opacity = '0';
+          continue;
+        }
+        el.className = 'ep-' + arc.kind + (arc.occluded ? ' ep-occ' : '');
+        el.style.setProperty('--ep-ang', arc.deg.toFixed(1) + 'deg');
+        el.style.opacity = (arc.alpha * (arc.occluded ? .62 : .88)).toFixed(3);
+      }
+    }
+
     $('dfHud').hidden = !on;
     const rdHud = $('rdHud');
     if (rdHud) {

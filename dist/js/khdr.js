@@ -9,6 +9,7 @@
 //   6. K-Extended: 16x Linear Nit Headroom WebGPU Bridge for true HDR10+/OLED displays
 
 import {clamp} from './geometry.js';
+import {SCHLIEREN_COMPOSITE_GLSL} from './schlieren.js';
 
 function makeProgram(gl, vs, fs) {
   const obj = gl.createProgram(), sh = [];
@@ -294,6 +295,7 @@ uniform float uTime;
 out vec4 frag;
 
 ${KHDR_TONE_GLSL}
+${SCHLIEREN_COMPOSITE_GLSL}
 
 vec3 dec(vec3 v){return uLinear==1?max(v,vec3(0.)):kDecodeLogK(v);}
 vec3 aces(vec3 x){return clamp((x*(2.51*x+.03))/(x*(2.43*x+.59)+.14),0.,1.);}
@@ -322,10 +324,34 @@ void main(){
   float r2=dot(fromC,fromC);
   vec4 rawM=texture(uScene,vUV);
   float worldMask=smoothstep(.25,.75,rawM.a);
-  vec3 base=dec(rawM.rgb);
+
+  // 0. SchlierenOptics 1.0: Gladstone-Dale Refractive Shockwave Lensing + Cauchy Prismatic Dispersion + Thermal Mirage!
+  vec2 sUV,sDisp;
+  float sRim;
+  schlierenEvaluate(vUV,worldMask,uTime,sUV,sDisp,sRim);
+  vec2 uvR=clamp(vUV+sUV,vec2(.001),vec2(.999));
+  vec3 base;
+  if(dot(sUV,sUV)+dot(sDisp,sDisp)>1e-8){
+    vec4 sG=texture(uScene,uvR);
+    // Guard against bleeding foreground first-person weapon pixels into refracted background world
+    float refrMask=smoothstep(.25,.75,sG.a)*worldMask;
+    vec2 uvEff=mix(vUV,uvR,refrMask);
+    vec2 dispEff=sDisp*refrMask;
+    vec3 gCol=dec(texture(uScene,uvEff).rgb);
+    if(dot(dispEff,dispEff)>1e-9){
+      float rCol=dec(texture(uScene,clamp(uvEff+dispEff,vec2(.001),vec2(.999))).rgb).r;
+      float bCol=dec(texture(uScene,clamp(uvEff-dispEff,vec2(.001),vec2(.999))).rgb).b;
+      base=vec3(rCol,gCol.g,bCol);
+    } else {
+      base=gCol;
+    }
+    base+=vec3(.92,.98,1.14)*sRim*refrMask;
+  } else {
+    base=dec(rawM.rgb);
+  }
 
   // 1. Perceptual-Luma FXAA (operates cleanly in both FP16 linear HDR & Log-K!)
-  if(uUseFXAA==1){
+  if(uUseFXAA==1 && dot(sUV,sUV)<1e-6){
     vec3 cNW=dec(texture(uScene,vUV+vec2(-px.x,-px.y)).rgb);
     vec3 cNE=dec(texture(uScene,vUV+vec2(px.x,-px.y)).rgb);
     vec3 cSW=dec(texture(uScene,vUV+vec2(-px.x,px.y)).rgb);
@@ -584,7 +610,7 @@ export class KHDRPipeline {
     }
   }
 
-  composite({w, h, finalOutput, khdrOn, hasBloom, useFXAA, sfScreenTex, dt, shake, hurt, time, emptyVao}) {
+  composite({w, h, finalOutput, khdrOn, hasBloom, useFXAA, sfScreenTex, dt, shake, hurt, time, emptyVao, schlierenOn = false, shockCount = 0, shocks = null, shockMeta = null, gunHeat = 0, aspect = 16 / 9}) {
     const gl = this.gl, t = this.targets;
     gl.disable(gl.DEPTH_TEST);
 
@@ -618,6 +644,12 @@ export class KHDRPipeline {
     gl.uniform1f(this.compP.uShake, clamp(shake || 0, 0, 1));
     gl.uniform1f(this.compP.uHurt, clamp(hurt || 0, 0, 1));
     gl.uniform1f(this.compP.uTime, time);
+    if (this.compP.uSchlierenOn != null) gl.uniform1i(this.compP.uSchlierenOn, schlierenOn ? 1 : 0);
+    if (this.compP.uShockCount != null) gl.uniform1i(this.compP.uShockCount, shockCount || 0);
+    if (this.compP.uGunHeat != null) gl.uniform1f(this.compP.uGunHeat, gunHeat || 0);
+    if (this.compP.uAspect != null) gl.uniform1f(this.compP.uAspect, aspect || 16 / 9);
+    if (this.compP.uShocks != null && shocks) gl.uniform4fv(this.compP.uShocks, shocks);
+    if (this.compP.uShockMeta != null && shockMeta) gl.uniform4fv(this.compP.uShockMeta, shockMeta);
 
     gl.bindVertexArray(emptyVao);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
