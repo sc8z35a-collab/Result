@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {createRequire} from 'node:module';
 import {Match,modes,weapons,npcWeapons} from '../dist/js/match.js';
 import {ARV1_VERSION,ARV1_ASSIST_STRENGTH,ARV1_LAUNCH_GAIN,ARV1_LAUNCH_STEP,ARV1_LOCK_ACQUIRE,ARV1_LOCK_HOLD} from '../dist/js/df1.js';
-import {RD40_AA_VERSION,RD40_ASSIST_STRENGTH,RD40_LOCK_ACQUIRE,RD40_LOCK_HOLD,RD40_D01_DURATION} from '../dist/js/rd40.js';
+import {RD40_AA_VERSION,RD40_ASSIST_STRENGTH,RD40_LOCK_ACQUIRE,RD40_LOCK_HOLD,RD40_D01_DURATION,RD30_MINI_STRENGTH,RD20_AA_STRENGTH,RD_SPECS} from '../dist/js/rd40.js';
 import {PilotWallet} from '../dist/js/wallet.js';
 import {ThermalOptic} from '../dist/js/optic.js';
 import {eyeOf,targetPoint} from '../dist/js/posture.js';
@@ -28,7 +28,7 @@ function duel(loadout='DF1 OUT',limit='unlimited',multiplier=2,events=[]) {
 function forward(m,actor,frames) {for(let i=0;i<frames;i++){m.time+=h;m.systems(actor,h)}}
 function arrange(m,x,z1,z2){const a=m.player,b=m.actors[1];Object.assign(a,{x,y:0,z:z1,yaw:.025,pitch:Math.atan2(-.38,z1-z2)});Object.assign(b,{x,y:0,z:z2,vx:0,vy:0,vz:0});return [a,b]}
 function burst(m) {const a=m.player;assert(m.trigger(a));while(a.burstLeft||a.cooldown>1e-7)forward(m,a,1)}
-for(const [id,cap,damage,rate,velocity,burstSize,shotsPerTrigger] of [['SW T',10,9,100,100,1,1],['SRA',30,6,120,80,1,1],['D1',40,5,100,60,2,2],['MS10',24,9,130,180,1,1],['DF1 OUT',95,2.8,300,65,3,3],['RD40',130,3,170,140,1,2]]) {
+for(const [id,cap,damage,rate,velocity,burstSize,shotsPerTrigger] of [['SW T',10,9,100,100,1,1],['SRA',30,6,120,80,1,1],['D1',40,5,100,60,2,2],['MS10',24,9,130,180,1,1],['DF1 OUT',95,2.8,300,65,3,3],['RD20',20,6,110,70,1,1],['RD30',80,3,100,100,1,2],['RD40',130,3,170,140,1,2]]) {
  const w=weapons[id];assert.deepEqual([w.capacity,w.damage,w.rate,w.velocity,w.burst],[cap,damage,rate,velocity,burstSize]);const m=duel(id);burst(m);assert.equal(m.shots.length,shotsPerTrigger);assert.equal(m.player.mag,cap-shotsPerTrigger);
 }
 {
@@ -49,7 +49,8 @@ for(const [id,cap,damage,rate,velocity,burstSize,shotsPerTrigger] of [['SW T',10
 }
 {
  // RD40: Player-only twin-linked full-auto (2 simultaneous shots, 3 dmg each, 130 mag, vel 140, rate 170)
- // + Auto-Aim 1.2 (1.92x, 1.4x lock acquire range, expanded lock hold tracking cone) + D01 SENSOR behind-wall tracking!
+ // + Auto-Aim 1.2 (1.92x, 1.4x lock acquire range, expanded lock hold tracking cone) + D01 SENSOR behind-wall tracking
+ // + Live kinetic lock/fire/tracking motion telemetry & audio cues!
  const rd=weapons.RD40;
  assert(rd.playerOnly===true&&!npcWeapons.includes('RD40'),'RD40 must be strictly player-only');
  assert(rd.auto===true&&rd.pellets===2&&rd.damage===3&&rd.capacity===130&&rd.velocity===140&&rd.rate===170);
@@ -60,11 +61,13 @@ for(const [id,cap,damage,rate,velocity,burstSize,shotsPerTrigger] of [['SW T',10
  assert(Math.abs(RD40_LOCK_ACQUIRE/ARV1_LOCK_ACQUIRE-1.4)<1e-6,'RD40 lock acquire range must be exact 1.4x ARV1.1');
  assert(RD40_LOCK_HOLD>ARV1_LOCK_HOLD*1.7,'RD40 lock hold tracking cone must be significantly expanded');
 
- // 1. Simultaneous 2-round full-auto firing + 1-round final mag edge case
+ // 1. Simultaneous 2-round full-auto firing + alternating barrelPhase & firePulse + 1-round final mag edge case
  const mAuto=duel('RD40'),pAuto=mAuto.player;
+ const phase0=pAuto.rd.barrelPhase;
  assert(mAuto.trigger(pAuto));
  assert.equal(mAuto.shots.length,2,'Single RD40 trigger must emit 2 simultaneous bullets');
  assert.equal(pAuto.mag,128,'Single twin salvo must consume 2 rounds from 130-round mag');
+ assert(pAuto.rd.firePulse===1&&pAuto.rd.barrelPhase===1-phase0,'RD40 trigger must pulse firePulse and alternate barrelPhase');
  assert(mAuto.shots.every(s=>s.damage===3&&Math.abs(s.speed-504)<1e-6));
  for(let i=0;i<220;i++){mAuto.trigger(pAuto);mAuto.time+=h;mAuto.systems(pAuto,h)}
  assert(mAuto.shots.length>=10&&pAuto.mag<=120,'Holding full-auto on RD40 must chain simultaneous 2-round salvos at rate 170');
@@ -77,21 +80,26 @@ for(const [id,cap,damage,rate,velocity,burstSize,shotsPerTrigger] of [['SW T',10
  const mDfCone=duel('DF1 OUT'),[pDfC,tDfC]=arrange(mDfCone,2,85,73);
  pDfC.yaw=0.125;forward(mDfCone,pDfC,180);
  assert(!pDfC.df.locked,'DF1 OUT should NOT lock outside its 0.1035 rad cone');
- const mRdCone=duel('RD40'),[pRdC,tRdC]=arrange(mRdCone,2,85,73);
+ const rdEvents=[];
+ const mRdCone=duel('RD40','unlimited',2,rdEvents),[pRdC,tRdC]=arrange(mRdCone,2,85,73);
  pRdC.yaw=0.125;forward(mRdCone,pRdC,110);
  assert(pRdC.rd.locked&&pRdC.rd.focusId===tRdC.id,'RD40 1.4x expanded lock cone MUST lock cleanly at 0.125 rad');
+ assert(rdEvents.some(e=>e.type==='rdlock'),'RD40 lock acquire must emit rdlock motion/audio event');
+ assert(pRdC.rd.lockBlend>0.4&&pRdC.rd.lockPulse>0.5,'RD40 lock acquire must drive lockBlend & lockPulse telemetry');
 
- // 3. Expanded lock-tracking hold cone (0.19 rad > ARV1_LOCK_HOLD 0.1446 rad) + twin Auto-Aim 1.2 guided bullets
+ // 3. Expanded lock-tracking hold cone (0.19 rad > ARV1_LOCK_HOLD 0.1446 rad) + 3D gimbal trackYaw + twin Auto-Aim 1.2 guided bullets
  pRdC.yaw=0.19;forward(mRdCone,pRdC,12);
  assert(pRdC.rd.locked,'RD40 expanded lock hold cone must NOT drop lock at 0.19 rad');
  assert(pRdC.yaw<0.188,'RD40 Auto-Aim 1.2 smooth tracking must pull aim smoothly toward locked target');
+ assert(Math.abs(pRdC.rd.trackYaw)>0.02,'RD40 gimbal tracking telemetry trackYaw must actively follow off-axis target');
  mRdCone.shots.length=0;pRdC.cooldown=0;
  assert(mRdCone.trigger(pRdC));
  assert.equal(mRdCone.shots.length,2);
  assert(mRdCone.shots.every(s=>s.guided&&s.homingTargetId===tRdC.id),'Both twin RD40 bullets must be Auto-Aim 1.2 guided');
 
- // 4. D01 SENSOR: sustains lock & smoothly tracks aim even when target ducks behind a steel container, for finite RD40_D01_DURATION (4.0s)!
- const mD01=duel('RD40'),[pD,tD]=arrange(mD01,2,85,75);
+ // 4. D01 SENSOR: sustains lock & smoothly tracks aim behind steel container, emits d01 event, and expires cleanly after 4.0s!
+ const d01Events=[];
+ const mD01=duel('RD40','unlimited',2,d01Events),[pD,tD]=arrange(mD01,2,85,75);
  forward(mD01,pD,110);
  assert(pD.rd.locked&&!pD.rd.d01Active,'RD40 starts with direct LOS lock');
  // Teleport pair across a solid steel container (occluded LOS!)
@@ -100,6 +108,7 @@ for(const [id,cap,damage,rate,velocity,burstSize,shotsPerTrigger] of [['SW T',10
  assert(obstruction(eyeOf(pD),targetPoint(tD))<=1,'Test geometry must be occluded by steel container');
  forward(mD01,pD,36); // 0.1s behind wall
  assert(pD.rd.locked&&pD.rd.occluded&&pD.rd.d01Active&&pD.rd.d01Timer>3.5&&pD.rd.d01Timer<RD40_D01_DURATION,'D01 SENSOR must activate and keep lock behind cover');
+ assert(d01Events.some(e=>e.type==='d01')&&pD.rd.d01Blend>0.4,'D01 SENSOR activation must emit d01 event and raise d01Blend');
  // Shift enemy laterally behind the steel container and verify D01 SENSOR aim smoothly follows them!
  tD.x=-6.6;
  const yawBeforeTrack=pD.yaw;
@@ -114,9 +123,63 @@ for(const [id,cap,damage,rate,velocity,burstSize,shotsPerTrigger] of [['SW T',10
  const vmRd=viewModel('RD40'),mfRd=muzzleFlashMesh('RD40',1,1,true,false),mfRdLite=muzzleFlashMesh('RD40',1,1,false,true);
  assert(vmRd.count>400&&mfRd.count>mfRdLite.count&&mfRdLite.count>0);
  for(const mesh of [vmRd,mfRd,mfRdLite]) for(let i=0;i<mesh.data.length;i+=STRIDE) assert(Number.isFinite(mesh.data[i])&&Number.isFinite(mesh.data[i+1])&&Number.isFinite(mesh.data[i+2]));
- // 6. Ensure NPCs never equip RD40 in 3v3
+ // 6. Ensure NPCs never equip RD40 or DF1 OUT in 3v3, while RD30 IS open to NPCs (enemy AO uses RD30!)
  const m3=new Match({mode:'3v3',limit:'points',multiplier:2,loadout:'RD40'});
  assert(m3.player.gun==='RD40'&&m3.actors.filter(a=>!a.human).every(a=>a.gun!=='RD40'&&a.gun!=='DF1 OUT'));
+ assert(m3.actors.some(a=>!a.human&&a.gun==='RD30'),'RD30 must be open to NPCs and actively equipped in 3v3');
+}
+{
+ // RD30: Open to NPCs & Player · 80 mag · 3 dmg · 2 simultaneous full-auto · vel 100 (360 m/s) · rate 100 · Auto-Aim 1.1 mini
+ const w30=weapons.RD30;
+ assert(!w30.playerOnly&&npcWeapons.includes('RD30'),'RD30 must be open to NPCs');
+ assert(w30.capacity===80&&w30.damage===3&&w30.pellets===2&&w30.auto===true&&w30.velocity===100&&w30.rate===100);
+ assert(Math.abs(w30.speed-360)<1e-6&&Math.abs(w30.interval-0.24)<1e-6);
+ assert(RD30_MINI_STRENGTH>1.0&&RD30_MINI_STRENGTH<ARV1_ASSIST_STRENGTH,'ARV1.1 mini strength must be compact (< ARV1.1)');
+ assert(RD_SPECS.RD30.lockAcquire<ARV1_LOCK_ACQUIRE,'ARV1.1 mini lock cone must be tighter than ARV1.1');
+
+ const m30=duel('RD30'),[p30,t30]=arrange(m30,2,85,73);
+ p30.yaw=0.05;
+ const yawBefore=p30.yaw,pitchBefore=p30.pitch;
+ forward(m30,p30,190);
+ assert(p30.rd.locked&&p30.rd.focusId===t30.id,'RD30 ARV1.1 mini must lock cleanly inside compact cone');
+ assert.equal(p30.yaw,yawBefore,'RD30 ARV1.1 mini must be bullet-side only (zero camera yaw pull)');
+ assert.equal(p30.pitch,pitchBefore,'RD30 ARV1.1 mini must be bullet-side only (zero camera pitch pull)');
+ m30.shots.length=0;p30.cooldown=0;
+ assert(m30.trigger(p30));
+ assert.equal(m30.shots.length,2,'RD30 must fire 2 simultaneous full-auto rounds');
+ assert.equal(p30.mag,78);
+ assert(m30.shots.every(s=>s.damage===3&&Math.abs(s.speed-360)<1e-6&&s.guided),'Both RD30 twin rounds must carry ARV1.1 mini guidance');
+ for(const mesh of [viewModel('RD30'),character(1,'RD30','standard','high'),character(1,'RD30','standard','lite'),muzzleFlashMesh('RD30',1,1,true,false)]) {
+  assert(mesh.count>100);
+  for(let i=0;i<mesh.data.length;i+=STRIDE) assert(Number.isFinite(mesh.data[i])&&Number.isFinite(mesh.data[i+1])&&Number.isFinite(mesh.data[i+2]));
+ }
+
+ // RD20: 20 mag · 6 dmg · 1 simultaneous full-auto · vel 70 (252 m/s) · rate 110 · Auto-Aim 1.1 (1.76x bullet-side)
+ const w20=weapons.RD20;
+ assert(!w20.playerOnly&&npcWeapons.includes('RD20'),'RD20 must be selectable & valid');
+ assert(w20.capacity===20&&w20.damage===6&&w20.pellets===1&&w20.auto===true&&w20.velocity===70&&w20.rate===110);
+ assert(Math.abs(w20.speed-252)<1e-6&&Math.abs((1/w20.interval)/(1/weapons['SW T'].interval)-1.1)<1e-6);
+ assert(Math.abs(RD20_AA_STRENGTH-ARV1_ASSIST_STRENGTH)<1e-6,'RD20 must carry full ARV1.1 (1.76x) strength');
+
+ const m20=duel('RD20'),[p20,t20]=arrange(m20,2,85,73);
+ p20.yaw=0.06;
+ const y20=p20.yaw,pt20=p20.pitch;
+ forward(m20,p20,160);
+ assert(p20.rd.locked&&p20.rd.focusId===t20.id,'RD20 ARV1.1 must lock cleanly');
+ assert.equal(p20.yaw,y20,'RD20 ARV1.1 must be bullet-side only (zero camera pull)');
+ assert.equal(p20.pitch,pt20);
+ m20.shots.length=0;p20.cooldown=0;
+ assert(m20.trigger(p20));
+ assert.equal(m20.shots.length,1,'RD20 must fire 1 simultaneous full-auto round');
+ assert.equal(p20.mag,19);
+ assert(m20.shots[0].damage===6&&Math.abs(m20.shots[0].speed-252)<1e-6&&m20.shots[0].guided,'RD20 round must carry ARV1.1 bullet-side guidance');
+ // Hold full-auto fire on RD20 -> chains continuous single rounds
+ for(let i=0;i<260;i++){m20.trigger(p20);m20.time+=h;m20.systems(p20,h)}
+ assert(m20.shots.length>=4&&p20.mag<=16,'Holding full-auto on RD20 must chain rapid 1-round salvos at rate 110');
+ for(const mesh of [viewModel('RD20'),character(1,'RD20','standard','high'),character(1,'RD20','standard','lite'),muzzleFlashMesh('RD20',1,1,true,false)]) {
+  assert(mesh.count>100);
+  for(let i=0;i<mesh.data.length;i+=STRIDE) assert(Number.isFinite(mesh.data[i])&&Number.isFinite(mesh.data[i+1])&&Number.isFinite(mesh.data[i+2]));
+ }
 }
 {
  // Supply tanker: +100 rounds immediately and 1.5x ammo refinement speed (0.6667s/round vs 1.0s/round, plus DF1 P1 1.5x), cooldown enforced, reset on respawn.

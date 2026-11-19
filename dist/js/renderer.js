@@ -243,7 +243,12 @@ export class Renderer {
     if (pl?.alive && pl.flash > .005) {
       const f = clamp(pl.flash / .11, 0, 1);
       const mp = add(eye, add(scale(fwd, .85), add(scale(right, .14), scale(up, -.12))));
-      const col = pl.gun === 'MS10' ? [.48, 1.45, 1.8] : pl.gun === 'RD40' ? [1.95, .74, .58] : pl.gun === 'DF1 OUT' ? [.48, 1.45, 1.25] : [1.8, 1.2, .52];
+      const col = pl.gun === 'MS10' ? [.48, 1.45, 1.8]
+        : pl.gun === 'RD40' ? [1.95, .74, .58]
+        : pl.gun === 'RD30' ? [1.90, 1.22, .46]
+        : pl.gun === 'RD20' ? [.46, 1.52, 1.88]
+        : pl.gun === 'DF1 OUT' ? [.48, 1.45, 1.25]
+        : [1.8, 1.2, .52];
       list.push({p: mp, i: f * 3.8, c: col, pri: 100});
     }
     for (const e of match.effects) {
@@ -254,17 +259,28 @@ export class Renderer {
       if (e.kind === 'kill') list.push({p: e.p, i: frac * 6.4, c: [2.0, 1.35, .52], pri: 94 - d});
       else if (e.kind === 'break') list.push({p: e.p, i: frac * 5.6, c: [.42, 1.85, 2.15], pri: 88 - d});
       else if (e.kind === 'tanker') list.push({p: e.p, i: frac * 6.0, c: [.55, 1.8, 1.55], pri: 86 - d});
-      else if (e.kind === 'muzzle' && !e.human) list.push({p: e.p, i: frac * 3.4, c: e.gun === 'MS10' ? [.42, 1.5, 1.95] : e.source === 'p1' ? [1.45, .65, 1.95] : [1.85, 1.15, .44], pri: 70 - d});
+      else if (e.kind === 'muzzle' && !e.human) list.push({p: e.p, i: frac * 3.4, c: e.gun === 'MS10' ? [.42, 1.5, 1.95] : e.gun === 'RD20' ? [.46, 1.52, 1.88] : e.gun === 'RD30' ? [1.90, 1.20, .44] : e.source === 'p1' ? [1.45, .65, 1.95] : [1.85, 1.15, .44], pri: 70 - d});
       else if (e.kind === 'shield') list.push({p: e.p, i: frac * 3.4, c: [.42, 1.7, 1.95], pri: 68 - d});
       else if (e.kind === 'hit' || e.kind === 'wall') {
-        const ic = e.source === 'p1' ? [1.45, .65, 1.95] : e.gun === 'MS10' ? [.46, 1.6, 1.95] : e.gun === 'RD40' ? [1.95, .72, .52] : e.kind === 'hit' ? [1.85, 1.15, .45] : [1.65, 1.05, .45];
+        const ic = e.source === 'p1' ? [1.45, .65, 1.95]
+          : e.gun === 'MS10' ? [.46, 1.6, 1.95]
+          : e.gun === 'RD40' ? [1.95, .72, .52]
+          : e.gun === 'RD30' ? [1.90, 1.18, .44]
+          : e.gun === 'RD20' ? [.48, 1.54, 1.88]
+          : e.kind === 'hit' ? [1.85, 1.15, .45] : [1.65, 1.05, .45];
         list.push({p: e.p, i: frac * (e.kind === 'hit' ? 3.1 : 2.5), c: ic, pri: (e.kind === 'hit' ? 62 : 52) - d});
       }
     }
     for (const s of match.shots) {
       const d = Math.hypot(s.p[0] - eye[0], s.p[2] - eye[2]);
       if (d > 42) continue;
-      const c = s.source === 'p1' ? [1.45, .68, 2.05] : s.gun === 'MS10' ? [.38, 1.65, 2.1] : s.gun === 'RD40' ? [1.95, .64, .58] : s.guided ? [.38, 1.85, 1.65] : s.team ? [1.65, .86, .38] : [.58, 1.55, 1.28];
+      const c = s.source === 'p1' ? [1.45, .68, 2.05]
+        : s.gun === 'MS10' ? [.38, 1.65, 2.1]
+        : s.gun === 'RD40' ? [1.95, .64, .58]
+        : s.gun === 'RD30' ? [1.88, 1.18, .44]
+        : s.gun === 'RD20' ? [.44, 1.56, 1.92]
+        : s.guided ? [.38, 1.85, 1.65]
+        : s.team ? [1.65, .86, .38] : [.58, 1.55, 1.28];
       list.push({p: s.p, i: s.gun === 'MS10' ? 2.9 : (s.gun === 'RD40' || s.source === 'p1' || s.guided) ? 2.2 : 1.6, c, pri: 58 - d});
     }
     if (match.tankers) {
@@ -456,7 +472,7 @@ export class Renderer {
       this.sf.bindTextures(sfMode);
     }
 
-    // 5. First-person weapon with full kinematic spring recoil, blowback, reload choreography, sway, and 3D muzzle flash.
+    // 5. First-person weapon with full kinematic spring recoil, blowback, RD40 lock/track/D01 gimbal choreography, reload & 3D muzzle flash.
     if (match?.player.alive && view.firstPerson) {
       const a = match.player,
         motion = view.motion || {},
@@ -470,6 +486,16 @@ export class Renderer {
         landDrop = motion.landDrop || 0,
         blowback = motion.blowback ?? (a.recoil || 0),
         gunHeat = motion.heat || 0,
+        rdX = motion.rdX || 0,
+        rdY = motion.rdY || 0,
+        rdZ = motion.rdZ || 0,
+        rdPitch = motion.rdPitch || 0,
+        rdYaw = motion.rdYaw || 0,
+        rdRoll = motion.rdRoll || 0,
+        rdLock = motion.rdLock || 0,
+        rdD01 = motion.rdD01 || 0,
+        rdLockPulse = motion.rdLockPulse || 0,
+        rdBarrelPhase = motion.rdBarrelPhase || 0,
         progress = a.reload > 0 ? 1 - a.reload / weapons[a.gun].reload : 0;
 
       let relDrop = 0, relPitch = 0, relRoll = 0, relX = 0;
@@ -486,12 +512,12 @@ export class Renderer {
         speed = Math.min(1, Math.hypot(a.vx, a.vz) / 4.8),
         crouchRoll = a.crouch * .12,
         crouchX = -a.crouch * .022;
-      const bx = .205 + stride * .010 * speed + swayX + relX + crouchX;
-      const by = -.205 + Math.cos(a.stride * 5.3) * .006 * speed - relDrop + kY + swayY - landDrop;
-      const bz = .54 - kZ;
+      const bx = .205 + stride * .010 * speed + swayX + relX + crouchX + rdX;
+      const by = -.205 + Math.cos(a.stride * 5.3) * .006 * speed - relDrop + kY + swayY - landDrop + rdY;
+      const bz = .54 - kZ + rdZ;
 
       const base = add(eye, add(scale(right, bx), add(scale(up, by), scale(fwd, bz))));
-      const basis = rotateBasis(right, up, fwd, relPitch + kPitch - swayY * 1.4, kYaw + swayX * 1.6, relRoll + kRoll + crouchRoll - swayX * 2.2);
+      const basis = rotateBasis(right, up, fwd, relPitch + kPitch + rdPitch - swayY * 1.4, kYaw + rdYaw + swayX * 1.6, relRoll + kRoll + rdRoll + crouchRoll - swayX * 2.2);
       const fpVP = multiply(perspective(66 * Math.PI / 180, this.aspect, .04, 50), lookAt(eye, cam.target));
       const modelM = matrix(basis.right, basis.up, basis.back, base);
 
@@ -504,6 +530,9 @@ export class Renderer {
       gl.uniform1i(p.uOutput, sceneOutput);
       gl.uniform1i(p.uKHDR, khdrOn ? 1 : 0);
       gl.uniform2f(p.uRecoil, blowback, a.recoilSide || 0);
+      if (p.uAnim) gl.uniform4f(p.uAnim, rdLock, rdD01, rdLockPulse, rdBarrelPhase);
+      if (p.uAnim2) gl.uniform4f(p.uAnim2, 0, time, 0, 0);
+      gl.uniform2f(p.uHitFX, lite ? 0 : rdLock, lite ? 0 : rdD01);
       gl.uniform1f(p.uGunHeat, lite ? 0 : gunHeat);
       gl.uniformMatrix4fv(p.uModel, false, modelM);
       this.draw(this.devices[a.gun]);
@@ -514,6 +543,8 @@ export class Renderer {
         gl.bindBuffer(gl.ARRAY_BUFFER, this.fpFlash.buf);
         gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(mf.data), gl.DYNAMIC_DRAW);
         gl.uniform2f(p.uRecoil, 0, 0);
+        if (p.uAnim) gl.uniform4f(p.uAnim, 0, 0, 0, 0);
+        gl.uniform2f(p.uHitFX, 0, 0);
         gl.uniform1f(p.uGunHeat, 0);
         this.draw(this.fpFlash);
       }

@@ -3,7 +3,7 @@ import {teams, tankers, walkable, moveActor, floorAt, obstruction, raycastMateri
 import {NV2} from './nv2.js';
 import {eyeOf, torso, bodyCenter, postureStep} from './posture.js';
 import {DF, initialDF, assist, scheduleDF, bulletGuidanceDF, steerGuidedShot, spendP1, updateDF} from './df1.js';
-import {RD, initialRD40, updateRD40, bulletGuidanceRD40} from './rd40.js';
+import {RD, RD20, RD30, isRDWeapon, initialRD, updateRD, bulletGuidanceRD} from './rd40.js';
 const baseSpeed = 360, baseInterval = .24;
 export const weapons = {
   'SW T': {capacity: 10, damage: 9, rate: 100, velocity: 100, speed: baseSpeed, interval: baseInterval, burst: 1, reload: 1.4},
@@ -11,11 +11,13 @@ export const weapons = {
   D1: {capacity: 40, damage: 5, rate: 100, velocity: 60, speed: baseSpeed * .6, interval: baseInterval, burst: 2, reload: 1.85},
   MS10: {capacity: 24, damage: 9, rate: 130, velocity: 180, speed: baseSpeed * 1.8, interval: baseInterval / 1.3, burst: 1, reload: 1.55, auto: true},
   [DF]: {capacity: 95, damage: 2.8, rate: 300, velocity: 65, speed: baseSpeed * .65, interval: baseInterval / 3, burst: 3, reload: 1.85, auto: true, playerOnly: true},
+  [RD20]: {capacity: 20, damage: 6, rate: 110, velocity: 70, speed: baseSpeed * .7, interval: baseInterval / 1.1, burst: 1, pellets: 1, reload: 1.55, auto: true},
+  [RD30]: {capacity: 80, damage: 3, rate: 100, velocity: 100, speed: baseSpeed * 1.0, interval: baseInterval, burst: 1, pellets: 2, reload: 1.75, auto: true},
   [RD]: {capacity: 130, damage: 3, rate: 170, velocity: 140, speed: baseSpeed * 1.4, interval: baseInterval / 1.7, burst: 1, pellets: 2, reload: 1.95, auto: true, playerOnly: true}
 };
 export const modes = {'3v3': [3, 3], '1v2': [1, 2], '1v1': [1, 1]};
 const names = [['YOU', 'NAGI', 'KAI'], ['RIN', 'SORA', 'AO']];
-export const npcWeapons = ['SW T', 'SRA', 'D1', 'MS10'];
+export const npcWeapons = ['SW T', 'SRA', 'D1', 'MS10', 'RD30', 'RD20'];
 const sphereHit = (a, d, c, r) => {
   const v = sub(a, c), A = dot(d, d), B = dot(v, d), C = dot(v, v) - r * r;
   if (C <= 0)return 0;
@@ -151,7 +153,7 @@ export class Match {
       reloadFrac: 0,
       queue: [],
       df: a.gun === DF ? {...initialDF(), pattern: a.df?.pattern || 'central', scope: a.df?.scope || 'plastic'} : null,
-      rd: a.gun === RD ? initialRD40() : null
+      rd: isRDWeapon(a.gun) ? initialRD(a.gun) : null
     });
     if (!a.human)this.nv.attach(a);
     if (!initial)this.event('spawn', {actor: a})
@@ -187,16 +189,20 @@ export class Match {
       a.mag -= salvo
     }
     a.cooldown = w.interval;
-    a.flash = a.gun === 'MS10' ? .115 : a.gun === RD ? .105 : .095;
+    a.flash = a.gun === 'MS10' ? .115 : a.gun === RD ? .108 : a.gun === RD30 ? .098 : .095;
     a.recoil = 1;
     a.recoilSide = (this.rng() - .5) * 2;
     a.shotCount = (a.shotCount || 0) + 1;
+    if (a.rd) {
+      a.rd.firePulse = 1;
+      a.rd.barrelPhase = 1 - (a.rd.barrelPhase || 0);
+    }
     const p = eyeOf(a);
-    const barrelLen = a.gun === 'MS10' ? .92 : a.gun === RD ? .88 : a.gun === 'D1' ? .78 : a.gun === 'SW T' ? .60 : .74;
+    const barrelLen = a.gun === 'MS10' ? .92 : a.gun === RD ? .88 : a.gun === RD30 ? .80 : a.gun === RD20 ? .68 : a.gun === 'D1' ? .78 : a.gun === 'SW T' ? .60 : .74;
     let firstDir = null, firstMuzzle = null;
     for (let k = 0; k < salvo; k++) {
       const barrelSide = salvo === 2 ? (k === 0 ? -1 : 1) : 0;
-      const guidedInfo = a.df ? bulletGuidanceDF(this, a) : a.rd ? bulletGuidanceRD40(this, a, barrelSide) : null;
+      const guidedInfo = a.df ? bulletGuidanceDF(this, a) : a.rd ? bulletGuidanceRD(this, a, barrelSide) : null;
       const dir = guidedInfo ? guidedInfo.dir : forward(a.yaw, a.pitch);
       const right = unit(cross(dir, [0, 1, 0]));
       const up = cross(right, dir);
@@ -397,7 +403,7 @@ export class Match {
       }
     } else a.ammoClock = 0;
     if (a.df)updateDF(this, a, dt);
-    if (a.rd)updateRD40(this, a, dt);
+    if (a.rd)updateRD(this, a, dt);
     if (a.burstLeft) {
       a.nextBurst -= dt;
       if (a.nextBurst <= 1e-7) {

@@ -1,14 +1,17 @@
-import {clamp, angleDiff, forward, unit, sub} from './geometry.js';
+import {clamp, angleDiff, forward} from './geometry.js';
 import {obstruction} from './yard.js';
 import {eyeOf, targetPoint} from './posture.js';
 import {ARV1_LOCK_ACQUIRE, ARV1_LOCK_HOLD} from './df1.js';
 
+export const RD20 = 'RD20';
+export const RD30 = 'RD30';
 export const RD = 'RD40';
-// RD40 Twin-Linked Full-Auto Carbine — Auto-Aim 1.2 + D01 SENSOR Through-Wall Tracker:
-// - Auto-Aim 1.2: 1.6x base * 1.2 = 1.92x guidance strength + velocity lead prediction
-// - Lock acquisition cone expanded 1.4x vs ARV1.1
-// - Lock persistence/tracking cone dramatically widened (1.75x ARV1.1 hold cone) so lock sticks reliably
-// - D01 SENSOR: sustains lock & smooth magnetic aim tracking through walls/cover for up to 4.0s
+
+// RD-Series Smart-Carbine Family (ARV1.1 / ARV1.1 mini / ARV1.2 + D01 SENSOR):
+// - RD20: Auto-Aim 1.1 (1.76x bullet-side smart guidance + velocity lead)
+// - RD30: Auto-Aim 1.1 mini (compact bullet-side smart guidance; open to both Player & NPCs)
+// - RD40: Player-only flagship with Auto-Aim 1.2 (1.92x, 1.4x lock cone, 1.75x expanded hold cone)
+//         + D01 SENSOR (4.0s through-wall lock & aim tracking) + live kinetic motion telemetry
 export const RD40_AA_VERSION = '1.2';
 export const RD40_BASE_STRENGTH = 1.6;
 export const RD40_UPGRADE_MULT = 1.2;
@@ -27,10 +30,72 @@ export const RD40_HOMING_COS = 0.925;                                       // ~
 export const RD40_HOMING_BUDGET = 0.022 * RD40_ASSIST_STRENGTH;             // 0.04224 rad max curve
 export const RD40_HOMING_RATE = 1.25 * RD40_ASSIST_STRENGTH;                // 2.40 rad/s smooth curve
 export const RD40_TRACK_RATE = 2.8;                                         // rad/s silky magnetic aim tracking cap
-const RD_BULLET_SPEED = 360 * 1.4;                                          // 504 m/s (velocity ratio 140)
 
-export function initialRD40() {
+export const RD30_MINI_STRENGTH = 1.6 * 0.72;                               // 1.152x compact ARV1.1 mini
+export const RD20_AA_STRENGTH = 1.6 * 1.1;                                  // 1.76x ARV1.1
+
+export const RD_SPECS = {
+  [RD20]: {
+    tier: '1.1',
+    label: 'ARV1.1',
+    strength: RD20_AA_STRENGTH,
+    launchGain: 0.28 * RD20_AA_STRENGTH,
+    launchStep: 0.013 * RD20_AA_STRENGTH,
+    lockAcquire: ARV1_LOCK_ACQUIRE,
+    lockHold: ARV1_LOCK_HOLD,
+    focusTime: 0.36,
+    maxRange: 102,
+    homingBudget: 0.016 * RD20_AA_STRENGTH,
+    homingRate: 1.05 * RD20_AA_STRENGTH,
+    homingCos: 0.962,
+    speed: 360 * 0.7,
+    trackAim: false,
+    d01Duration: 0
+  },
+  [RD30]: {
+    tier: '1.1 mini',
+    label: 'ARV1.1 mini',
+    strength: RD30_MINI_STRENGTH,
+    launchGain: 0.24 * RD30_MINI_STRENGTH,
+    launchStep: 0.011 * RD30_MINI_STRENGTH,
+    lockAcquire: ARV1_LOCK_ACQUIRE * 0.85,
+    lockHold: ARV1_LOCK_HOLD * 0.90,
+    focusTime: 0.42,
+    maxRange: 92,
+    homingBudget: 0.011 * RD30_MINI_STRENGTH,
+    homingRate: 0.78 * RD30_MINI_STRENGTH,
+    homingCos: 0.974,
+    speed: 360 * 1.0,
+    trackAim: false,
+    d01Duration: 0
+  },
+  [RD]: {
+    tier: '1.2',
+    label: 'ARV1.2',
+    strength: RD40_ASSIST_STRENGTH,
+    launchGain: RD40_LAUNCH_GAIN,
+    launchStep: RD40_LAUNCH_STEP,
+    lockAcquire: RD40_LOCK_ACQUIRE,
+    lockHold: RD40_LOCK_HOLD,
+    focusTime: 0.26,
+    maxRange: 118,
+    homingBudget: RD40_HOMING_BUDGET,
+    homingRate: RD40_HOMING_RATE,
+    homingCos: RD40_HOMING_COS,
+    speed: 360 * 1.4,
+    trackAim: true,
+    d01Duration: RD40_D01_DURATION
+  }
+};
+
+export const isRDWeapon = gun => gun in RD_SPECS;
+
+export function initialRD(gun = RD) {
+  const spec = RD_SPECS[gun] || RD_SPECS[RD];
   return {
+    gun,
+    tier: spec.tier,
+    label: spec.label,
     focusId: -1,
     focus: 0,
     scanAt: 0,
@@ -38,26 +103,37 @@ export function initialRD40() {
     occluded: false,
     d01Active: false,
     d01Timer: 0,
-    d01Max: RD40_D01_DURATION,
+    d01Max: spec.d01Duration,
     d01Cooldowns: {},
-    lastAimPoint: null
+    lastAimPoint: null,
+    targetDist: 0,
+    // Rich kinetic motion telemetry (powers RD40 3D gimbal tracking, lock-snap, D01 sensor stance & HUD FX)
+    lockBlend: 0,
+    d01Blend: 0,
+    lockPulse: 0,
+    d01Pulse: 0,
+    firePulse: 0,
+    barrelPhase: 0,
+    trackYaw: 0,
+    trackPitch: 0
   };
 }
+export const initialRD40 = () => initialRD(RD);
 
-function leadPoint(origin, e, speed = RD_BULLET_SPEED) {
+function leadPoint(origin, e, speed) {
   const tp = targetPoint(e);
   const vx = e.vx || 0, vy = e.vy || 0, vz = e.vz || 0;
   if (vx * vx + vy * vy + vz * vz < 0.04) return tp;
   const dist = Math.hypot(tp[0] - origin[0], tp[1] - origin[1], tp[2] - origin[2]);
-  const tof = clamp(dist / Math.max(80, speed), 0, 0.36);
-  const lead = [tp[0] + vx * tof * 0.88, tp[1] + vy * tof * 0.35, tp[2] + vz * tof * 0.88];
+  const tof = clamp(dist / Math.max(70, speed), 0, 0.38);
+  const lead = [tp[0] + vx * tof * 0.86, tp[1] + vy * tof * 0.35, tp[2] + vz * tof * 0.86];
   return obstruction(origin, lead) > 1 ? lead : tp;
 }
 
-function aimAt(a, e, useLead = false) {
+function aimAt(a, e, speed, useLead = false) {
   const origin = eyeOf(a),
     raw = targetPoint(e),
-    p = useLead ? leadPoint(origin, e, RD_BULLET_SPEED) : raw,
+    p = useLead ? leadPoint(origin, e, speed) : raw,
     dx = p[0] - origin[0],
     dy = p[1] - origin[1],
     dz = p[2] - origin[2],
@@ -73,39 +149,48 @@ function clearLock(d) {
   d.d01Active = false;
   d.d01Timer = 0;
   d.lastAimPoint = null;
+  d.targetDist = 0;
 }
 
-// Per-tick 360Hz RD40 Auto-Aim 1.2 + D01 SENSOR lock acquisition, expanded tracking hold,
-// finite through-wall persistence, and smooth magnetic aim tracking.
-export function updateRD40(match, a, dt) {
+// Per-tick 360Hz RD-Series smart-aim & D01 SENSOR updater + kinetic motion telemetry.
+export function updateRD(match, a, dt) {
   const d = a.rd;
   if (!d) return;
+  const spec = RD_SPECS[d.gun || a.gun] || RD_SPECS[RD];
   const t = match.time;
+  const wasLocked = d.locked;
+  const wasD01 = d.d01Active;
 
-  // 1. Validate & maintain active target across the expanded RD40_LOCK_HOLD cone (including behind walls via D01 SENSOR)
+  // Decay impulse pulses smoothly
+  d.lockPulse = Math.max(0, d.lockPulse - dt * 2.8);
+  d.d01Pulse = Math.max(0, d.d01Pulse - dt * 2.1);
+  d.firePulse = Math.max(0, d.firePulse - dt * 7.5);
+
+  // 1. Validate & maintain active target across the weapon's lock hold cone (plus D01 SENSOR on RD40)
   if (d.focusId >= 0) {
     const cur = match.actors[d.focusId];
     if (!cur?.alive || cur.team === a.team) {
       clearLock(d);
     } else {
-      const s = aimAt(a, cur, false);
+      const s = aimAt(a, cur, spec.speed, false);
       const sep = Math.hypot(angleDiff(s.yaw, a.yaw) * Math.cos(a.pitch), s.pitch - a.pitch);
       const hasLOS = obstruction(s.origin, s.raw) > 1;
-      if (s.range > 118 || sep >= RD40_LOCK_HOLD) {
+      d.targetDist = s.range;
+      if (s.range > spec.maxRange || sep >= spec.lockHold) {
         clearLock(d);
       } else if (hasLOS) {
         d.occluded = false;
         d.d01Active = false;
-        d.d01Timer = RD40_D01_DURATION;
-        delete d.d01Cooldowns[cur.id];
-        d.focus = Math.min(1, d.focus + dt / 0.26);
+        d.d01Timer = spec.d01Duration;
+        if (spec.d01Duration > 0) delete d.d01Cooldowns[cur.id];
+        d.focus = Math.min(1, d.focus + dt / spec.focusTime);
         d.locked = d.focus >= 1;
-      } else if (d.d01Timer > 0) {
-        // D01 SENSOR keeps lock & aim tracking alive while target moves behind a wall/container!
+      } else if (spec.d01Duration > 0 && d.d01Timer > 0) {
+        // RD40 D01 SENSOR keeps lock & smooth aim tracking alive behind walls/cover!
         d.occluded = true;
         d.d01Active = true;
         d.d01Timer = Math.max(0, d.d01Timer - dt);
-        d.focus = Math.min(1, d.focus + dt / 0.26);
+        d.focus = Math.min(1, d.focus + dt / spec.focusTime);
         d.locked = d.focus >= 1;
         if (d.d01Timer <= 1e-6) {
           d.d01Cooldowns[cur.id] = t + RD40_D01_COOLDOWN;
@@ -117,31 +202,32 @@ export function updateRD40(match, a, dt) {
     }
   }
 
-  // 2. Scan for new target inside 1.4x expanded RD40_LOCK_ACQUIRE cone (direct LOS prioritized, then close-range D01 SENSOR)
+  // 2. Scan for new target inside the weapon's lock acquisition cone
   if (d.focusId < 0 || (!d.locked && t >= d.scanAt)) {
     if (t >= d.scanAt || d.focusId < 0) {
       d.scanAt = t + 0.04;
-      let best = -1, bestCost = Infinity, bestOccluded = false;
+      let best = -1, bestCost = Infinity, bestOccluded = false, bestRange = 0;
       for (const e of match.actors) {
         if (!e.alive || e.team === a.team) continue;
-        const s = aimAt(a, e, false);
-        if (s.range > 115) continue;
+        const s = aimAt(a, e, spec.speed, false);
+        if (s.range > spec.maxRange) continue;
         const sep = Math.hypot(angleDiff(s.yaw, a.yaw) * Math.cos(a.pitch), s.pitch - a.pitch);
-        if (sep >= RD40_LOCK_ACQUIRE) continue;
+        if (sep >= spec.lockAcquire) continue;
         const hasLOS = obstruction(s.origin, s.raw) > 1;
         if (hasLOS) {
           if (sep < bestCost) {
             best = e.id;
             bestCost = sep;
             bestOccluded = false;
+            bestRange = s.range;
           }
-        } else if (s.range <= RD40_D01_PROX_RANGE && (d.d01Cooldowns[e.id] || 0) <= t) {
-          // Close-range D01 SENSOR detection through cover (slightly higher cost so visible enemies always win priority)
+        } else if (spec.d01Duration > 0 && s.range <= RD40_D01_PROX_RANGE && (d.d01Cooldowns[e.id] || 0) <= t) {
           const sensorCost = sep + 0.08;
           if (sensorCost < bestCost) {
             best = e.id;
             bestCost = sensorCost;
             bestOccluded = true;
+            bestRange = s.range;
           }
         }
       }
@@ -151,21 +237,39 @@ export function updateRD40(match, a, dt) {
         d.locked = false;
         d.occluded = bestOccluded;
         d.d01Active = bestOccluded;
-        d.d01Timer = RD40_D01_DURATION;
+        d.d01Timer = spec.d01Duration;
+        d.targetDist = bestRange;
       }
     }
   }
 
-  // 3. Smooth Auto-Aim 1.2 + D01 SENSOR continuous magnetic aim tracking (follows enemies seamlessly even behind walls!)
-  if (d.locked && d.focusId >= 0) {
+  // Emit state-transition pulses & audio cues for human RD40 (lock acquired & D01 SENSOR wall-track engaged)
+  if (d.locked && !wasLocked) {
+    d.lockPulse = 1;
+    if (a.human && spec.trackAim) match.event('rdlock', {actor: a, gun: a.gun, d01: d.d01Active});
+  }
+  if (d.d01Active && !wasD01) {
+    d.d01Pulse = 1;
+    if (a.human && spec.trackAim) match.event('d01', {actor: a, gun: a.gun});
+  }
+
+  // 3. Smooth Auto-Aim 1.2 + D01 SENSOR magnetic aim tracking & 3D gimbal lead telemetry (RD40)
+  let targetTrackYaw = 0, targetTrackPitch = 0;
+  if (d.focusId >= 0) {
     const e = match.actors[d.focusId];
     if (e?.alive && e.team !== a.team) {
-      const s = aimAt(a, e, !d.occluded);
+      const s = aimAt(a, e, spec.speed, !d.occluded);
       const dyaw = angleDiff(s.yaw, a.yaw);
       const dpitch = s.pitch - a.pitch;
       const ang = Math.hypot(dyaw, dpitch);
       d.lastAimPoint = s.raw;
-      if (ang > 1e-4 && ang < RD40_LOCK_HOLD) {
+      d.targetDist = s.range;
+      // Live gimbal tracking offset for badass 3D weapon aim-tracking animation
+      const gimbalGain = d.locked ? 1.0 : d.focus * 0.55;
+      targetTrackYaw = clamp(dyaw * 1.85 * gimbalGain, -0.22, 0.22);
+      targetTrackPitch = clamp(dpitch * 1.65 * gimbalGain, -0.16, 0.16);
+
+      if (spec.trackAim && d.locked && ang > 1e-4 && ang < spec.lockHold) {
         const rate = d.d01Active ? 4.4 : 4.8;
         const step = Math.min(ang, ang * (1 - Math.exp(-rate * dt)), RD40_TRACK_RATE * dt);
         const frac = step / ang;
@@ -174,12 +278,22 @@ export function updateRD40(match, a, dt) {
       }
     }
   }
-}
 
-// Auto-Aim 1.2 twin-barrel launch solver (1.92x strength + velocity lead + widened 360Hz homing envelope).
-export function bulletGuidanceRD40(match, a, barrelSide = 0) {
+  // Smoothly interpolate weapon pose blends & gimbal vectors
+  const kPose = 1 - Math.exp(-13 * dt);
+  const kGimbal = 1 - Math.exp(-16 * dt);
+  d.lockBlend += ((d.locked ? 1 : d.focus * 0.35) - d.lockBlend) * kPose;
+  d.d01Blend += ((d.d01Active ? 1 : 0) - d.d01Blend) * kPose;
+  d.trackYaw += (targetTrackYaw - d.trackYaw) * kGimbal;
+  d.trackPitch += (targetTrackPitch - d.trackPitch) * kGimbal;
+}
+export const updateRD40 = updateRD;
+
+// RD-Series bullet-side smart auto-aim launch solver (RD20 ARV1.1, RD30 ARV1.1 mini, RD40 ARV1.2).
+export function bulletGuidanceRD(match, a, barrelSide = 0) {
   const d = a.rd;
-  const microFan = barrelSide * 0.0022;
+  const spec = RD_SPECS[d?.gun || a.gun] || RD_SPECS[RD];
+  const microFan = barrelSide * (a.gun === RD ? 0.0022 : 0.0042);
   const e = d && d.focusId >= 0 ? match.actors[d.focusId] : null;
   if (!d || !d.locked || !e?.alive || e.team === a.team) {
     return {
@@ -188,34 +302,36 @@ export function bulletGuidanceRD40(match, a, barrelSide = 0) {
       targetId: -1,
       homingBudget: 0,
       homingRate: 0,
-      homingCos: RD40_HOMING_COS
+      homingCos: spec.homingCos
     };
   }
-  const s = aimAt(a, e, true);
+  const s = aimAt(a, e, spec.speed, true);
   const yaw = angleDiff(s.yaw, a.yaw);
   const pitch = s.pitch - a.pitch;
   const ang = Math.hypot(yaw, pitch);
   const hasLOS = obstruction(s.origin, s.raw) > 1;
-  // When target is behind cover (D01 SENSOR active), preserve lock & aim tracking, while bullets stay physically fair (no shooting through walls).
-  if (!hasLOS || ang > RD40_ASSIST_MAX_ANG) {
+  if (!hasLOS || ang > spec.lockHold) {
     return {
       dir: forward(a.yaw + microFan, clamp(a.pitch, -1.31, 1.31)),
       guided: false,
       targetId: -1,
       homingBudget: 0,
       homingRate: 0,
-      homingCos: RD40_HOMING_COS
+      homingCos: spec.homingCos
     };
   }
-  const gain = Math.min(RD40_LAUNCH_GAIN, RD40_LAUNCH_STEP / Math.max(0.00001, ang));
+  // Keep NPC smart-guidance authentically human when NPCs equip RD30 / RD20
+  const npcScale = a.human ? 1.0 : 0.38;
+  const gain = Math.min(spec.launchGain * npcScale, (spec.launchStep * npcScale) / Math.max(0.00001, ang));
   const shotYaw = a.yaw + yaw * gain + microFan * 0.45;
   const shotPitch = clamp(a.pitch + pitch * gain, -1.31, 1.31);
   return {
     dir: forward(shotYaw, shotPitch),
     guided: true,
     targetId: e.id,
-    homingBudget: RD40_HOMING_BUDGET,
-    homingRate: RD40_HOMING_RATE,
-    homingCos: RD40_HOMING_COS
+    homingBudget: spec.homingBudget * npcScale,
+    homingRate: spec.homingRate * npcScale,
+    homingCos: spec.homingCos
   };
 }
+export const bulletGuidanceRD40 = bulletGuidanceRD;

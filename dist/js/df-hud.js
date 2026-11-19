@@ -86,7 +86,24 @@ export class PilotEquipment {
   lobby(loadout) {
     $('dfSetup').hidden = loadout !== 'DF1 OUT';
     const rdEl = $('rdSetup');
-    if (rdEl) rdEl.hidden = loadout !== 'RD40';
+    if (rdEl) {
+      const isRD = loadout === 'RD20' || loadout === 'RD30' || loadout === 'RD40';
+      rdEl.hidden = !isRD;
+      rdEl.classList.toggle('is-rd20', loadout === 'RD20');
+      rdEl.classList.toggle('is-rd30', loadout === 'RD30');
+      rdEl.classList.toggle('is-rd40', loadout === 'RD40');
+      if (isRD) {
+        const specs = {
+          RD20: ['ARV1.1', 'オートエイム 1.1（1.76×弾道誘導＋予測射撃） · 20発 1発同時フルオート', 'CLASS', '軽量スマートカービン · プレイヤー / NPC 開放'],
+          RD30: ['ARV1.1 mini', '軽量オートエイム 1.1 mini 搭載 · 80発 2発同時フルオート', 'CLASS', '標準ツインバレル · プレイヤー / NPC 開放'],
+          RD40: ['ARV1.2', '強化オートエイム 1.2（1.92×） · ロック範囲 1.4倍 · 広域追従＆立体モーション', 'D01 SENSOR', '壁裏に隠れた敵にも最大 4.0秒間ロック＆エイムを追従']
+        }[loadout];
+        if ($('rdSpec1Title')) $('rdSpec1Title').textContent = specs[0];
+        if ($('rdSpec1Desc')) $('rdSpec1Desc').textContent = specs[1];
+        if ($('rdSpec2Title')) $('rdSpec2Title').textContent = specs[2];
+        if ($('rdSpec2Desc')) $('rdSpec2Desc').textContent = specs[3];
+      }
+    }
     this.accountView()
   }
   prepare(a) {
@@ -102,22 +119,46 @@ export class PilotEquipment {
       rd = a?.rd,
       on = !!(play && d && a.alive),
       rdOn = !!(play && rd && a.alive),
+      isRD40 = rdOn && a.gun === 'RD40',
+      isRD30 = rdOn && a.gun === 'RD30',
+      isRD20 = rdOn && a.gun === 'RD20',
       ads = !!(on && d.ads),
       thermal = ads && d.scope === 'thermal' && this.wallet.state.evr;
     $('dfHud').hidden = !on;
     const rdHud = $('rdHud');
-    if (rdHud) rdHud.hidden = !rdOn;
+    if (rdHud) {
+      rdHud.hidden = !rdOn;
+      rdHud.classList.toggle('is-rd20', isRD20);
+      rdHud.classList.toggle('is-rd30', isRD30);
+      rdHud.classList.toggle('is-rd40', isRD40);
+      rdHud.classList.toggle('is-locked', !!(rdOn && rd.locked));
+    }
     $('touchDF').hidden = !on;
     $('optics').hidden = !ads;
     $('optics').classList.toggle('thermal-on', thermal);
     $('thermal').hidden = !thermal;
+
+    const reticle = $('reticle');
+    if (reticle) {
+      reticle.classList.toggle('is-rd-locked', !!(isRD40 && rd.locked));
+      reticle.classList.toggle('is-rd-d01', !!(isRD40 && rd.d01Active));
+      reticle.classList.toggle('is-rd-fire', !!(isRD40 && (rd.firePulse || 0) > .18));
+    }
+
     const lock = $('lockDot');
     const lockTag = $('lockTag');
+    const rdOverlay = $('rdOverlay');
+    const rdTether = $('rdTether');
+    const rdTetherGlow = $('rdTetherGlow');
     lock.hidden = true;
-    lock.classList.remove('is-rd40', 'is-d01');
+    lock.classList.remove('is-rd40', 'is-rd30', 'is-rd20', 'is-d01', 'is-acquiring', 'is-firing');
     if (lockTag) lockTag.hidden = true;
+    if (rdOverlay) {
+      rdOverlay.hidden = true;
+      rdOverlay.classList.remove('is-d01', 'is-fire', 'is-acquiring');
+    }
 
-    let lockTargetId = -1, isRdLock = false, isD01 = false;
+    let lockTargetId = -1, lockStyle = 'df', isD01 = false, isAcquiring = false;
     if (on) {
       $('reticle').hidden = ads;
       if (thermal && (!lite || this.lastThermal === undefined || t - this.lastThermal >= .05 || t < this.lastThermal)) {
@@ -129,22 +170,42 @@ export class PilotEquipment {
       $('p1Text').textContent = `P1 ${d.p1} / 20　${d.cooling>0?'冷却 '+d.cooling.toFixed(1)+' s':d.boost?'BOOST':'待機'}　${Math.round(d.heat)}%`;
       $('heatBar').style.width = d.heat + '%';
       $('dfKeys').textContent = 'Q 範囲 · X ブースト · 右クリック 照準 · V レンズ';
-      if (d.locked && !thermal) lockTargetId = d.focusId;
+      if (d.locked && !thermal) {
+        lockTargetId = d.focusId;
+        lockStyle = 'df';
+      }
     } else if (rdOn && rdHud) {
-      const pct = Math.round(rd.focus * 100);
-      $('rdFocusText').textContent = rd.locked
-        ? (rd.d01Active ? 'ARV1.2  •  D01 壁裏LOCK' : 'ARV1.2  •  LOCK (1.4×広域)')
-        : rd.focus > 0 ? `ARV1.2  ·  焦点 ${pct}%` : 'ARV1.2  ·  待機 (1.4×広域)';
-      $('rdSensorText').textContent = rd.d01Active
-        ? `D01 SENSOR  ·  壁裏追従 ${rd.d01Timer.toFixed(1)}s`
-        : rd.locked ? 'D01 SENSOR  ·  追従待機 (4.0s)' : 'D01 SENSOR  ·  常時スキャン';
-      rdHud.classList.toggle('is-d01', !!rd.d01Active);
-      const barPct = rd.d01Active ? (rd.d01Timer / (rd.d01Max || 4)) * 100 : rd.locked ? 100 : rd.focus * 100;
-      $('d01Bar').style.width = Math.max(0, Math.min(100, barPct)).toFixed(1) + '%';
-      if (rd.locked) {
-        lockTargetId = rd.focusId;
-        isRdLock = true;
-        isD01 = !!rd.d01Active;
+      const pct = Math.round((rd.focus || 0) * 100);
+      if (isRD40) {
+        $('rdFocusText').textContent = rd.locked
+          ? (rd.d01Active ? 'ARV1.2  •  D01 壁裏LOCK' : 'ARV1.2  •  LOCK (1.4×広域)')
+          : rd.focus > 0 ? `ARV1.2  ·  焦点 ${pct}%` : 'ARV1.2  ·  待機 (1.4×広域)';
+        $('rdSensorText').hidden = false;
+        $('rdSensorText').textContent = rd.d01Active
+          ? `D01 SENSOR  ·  壁裏追従 ${rd.d01Timer.toFixed(1)}s`
+          : rd.locked ? 'D01 SENSOR  ·  追従待機 (4.0s)' : 'D01 SENSOR  ·  常時スキャン';
+        rdHud.classList.toggle('is-d01', !!rd.d01Active);
+        const barPct = rd.d01Active ? (rd.d01Timer / (rd.d01Max || 4)) * 100 : rd.locked ? 100 : (rd.focus || 0) * 100;
+        $('d01Bar').style.width = Math.max(0, Math.min(100, barPct)).toFixed(1) + '%';
+        if (rd.focusId >= 0 && (rd.locked || rd.focus > .04)) {
+          lockTargetId = rd.focusId;
+          lockStyle = 'rd40';
+          isD01 = !!rd.d01Active;
+          isAcquiring = !rd.locked;
+        }
+      } else {
+        const label = isRD30 ? 'ARV1.1 mini' : 'ARV1.1';
+        $('rdFocusText').textContent = rd.locked
+          ? `${label}  •  弾道誘導 LOCK`
+          : rd.focus > 0 ? `${label}  ·  焦点 ${pct}%` : `${label}  ·  待機`;
+        $('rdSensorText').hidden = false;
+        $('rdSensorText').textContent = isRD30 ? 'RD30  ·  2発同時フルオート' : 'RD20  ·  軽量スマート誘導 1.76×';
+        rdHud.classList.remove('is-d01');
+        $('d01Bar').style.width = Math.max(0, Math.min(100, (rd.locked ? 1 : rd.focus || 0) * 100)).toFixed(1) + '%';
+        if (rd.locked) {
+          lockTargetId = rd.focusId;
+          lockStyle = isRD30 ? 'rd30' : 'rd20';
+        }
       }
     }
     if (lockTargetId < 0)return;
@@ -160,13 +221,64 @@ export class PilotEquipment {
     const sx = Math.max(4, Math.min(96, 50 + 50 * dot(rel, r) / (z * tan * renderer.aspect)));
     const sy = Math.max(6, Math.min(94, 50 - 50 * dot(rel, u) / (z * tan)));
     lock.hidden = false;
-    lock.classList.toggle('is-rd40', isRdLock && !isD01);
-    lock.classList.toggle('is-d01', isD01);
-    lock.style.left = sx + '%';
-    lock.style.top = sy + '%';
-    if (lockTag && isD01) {
-      lockTag.hidden = false;
-      lockTag.textContent = 'D01 ' + rd.d01Timer.toFixed(1) + 's';
+    lock.style.left = sx.toFixed(2) + '%';
+    lock.style.top = sy.toFixed(2) + '%';
+
+    if (lockStyle === 'rd40') {
+      const lp = rd.lockPulse || 0;
+      const fp = rd.firePulse || 0;
+      const dp = rd.d01Pulse || 0;
+      const foc = rd.focus || 0;
+      const distM = Math.max(1, Math.round(rd.targetDist || z));
+      const rotDeg = isAcquiring
+        ? (1 - foc) * 52
+        : isD01
+          ? 45 + Math.sin(t * 2.8) * 12
+          : Math.sin(t * 3.1) * 3.5 + (rd.barrelPhase ? 1 : -1) * fp * 11;
+      const scaleVal = isAcquiring
+        ? 1.78 - 0.72 * foc
+        : 1.0 + fp * 0.24 - lp * 0.16 + (isD01 ? Math.sin(t * 6.0) * 0.045 : 0);
+      const wavePulse = isD01 ? Math.max(dp, (t * 0.95) % 1) : lp;
+      const ringScale = isD01 ? 0.75 + wavePulse * 1.95 : 0.72 + (1 - lp) * 2.15;
+      const ringOp = isD01 ? Math.max(0, (1 - wavePulse) * 0.85) : lp * 0.95;
+
+      lock.classList.add(isD01 ? 'is-d01' : 'is-rd40');
+      lock.classList.toggle('is-acquiring', isAcquiring);
+      lock.classList.toggle('is-firing', fp > .15 && !isAcquiring);
+      lock.style.setProperty('--lock-rot', rotDeg.toFixed(1) + 'deg');
+      lock.style.setProperty('--lock-scale', scaleVal.toFixed(3));
+      lock.style.setProperty('--ring-scale', ringScale.toFixed(3));
+      lock.style.setProperty('--ring-op', ringOp.toFixed(3));
+
+      if (lockTag) {
+        lockTag.hidden = false;
+        lockTag.textContent = isD01
+          ? `D01 ${rd.d01Timer.toFixed(1)}s · ${distM}m`
+          : isAcquiring
+            ? `SCAN ${Math.round(foc * 100)}%`
+            : `ARV1.2 · ${distM}m`;
+      }
+
+      // Live vector tracking tether laser from reticle center (50, 50) to tracked target (sx, sy)
+      if (rdOverlay && rdTether && (rd.locked || foc > .32)) {
+        const sxs = sx.toFixed(2), sys = sy.toFixed(2);
+        rdOverlay.hidden = false;
+        rdOverlay.classList.toggle('is-d01', isD01);
+        rdOverlay.classList.toggle('is-fire', fp > .15 && !isAcquiring);
+        rdOverlay.classList.toggle('is-acquiring', isAcquiring);
+        rdTether.setAttribute('x2', sxs);
+        rdTether.setAttribute('y2', sys);
+        if (rdTetherGlow) {
+          rdTetherGlow.setAttribute('x2', sxs);
+          rdTetherGlow.setAttribute('y2', sys);
+        }
+      }
+    } else {
+      lock.classList.toggle('is-rd30', lockStyle === 'rd30');
+      lock.classList.toggle('is-rd20', lockStyle === 'rd20');
+      lock.style.setProperty('--lock-rot', '0deg');
+      lock.style.setProperty('--lock-scale', '1');
+      lock.style.setProperty('--ring-op', '0');
     }
   }
 }

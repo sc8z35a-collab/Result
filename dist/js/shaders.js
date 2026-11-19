@@ -64,13 +64,34 @@ void main(){
     int boneId=int(floor(aKind*.1+.001));
     cleanKind=mod(aKind,10.);
     rigApplyCharacter(p,n,boneId,uGait,uPose,uHit,uRecoil,uAnim,uAnim2);
-  } else if(uMode==2 && uRecoil.x>.001){
-    // First-person weapon blowback: upper slide/rails kick back & subtle barrel pulse on shot
-    float slide=smoothstep(.038,.075,p.y)*smoothstep(.12,-.16,p.z)*smoothstep(-.78,-.35,p.z);
-    p.z+=uRecoil.x*.036*slide;
-    float tip=smoothstep(-.35,-.80,p.z);
-    p.x+=uRecoil.y*uRecoil.x*.003*tip;
-    p.y+=uRecoil.x*.004*tip;
+  } else if(uMode==2){
+    // First-person weapon blowback + RD40 kinetic lock-on / twin-barrel hydraulic servo / D01 SENSOR pod motion
+    float rdLock=uAnim.x;
+    float rdD01=uAnim.y;
+    float rdLockPulse=uAnim.z;
+    float rdPhase=uAnim.w;
+    if(uRecoil.x>.001){
+      float slide=smoothstep(.038,.075,p.y)*smoothstep(.12,-.16,p.z)*smoothstep(-.78,-.35,p.z);
+      p.z+=uRecoil.x*.036*slide;
+      float tip=smoothstep(-.35,-.80,p.z);
+      p.x+=uRecoil.y*uRecoil.x*.003*tip;
+      p.y+=uRecoil.x*.004*tip;
+      // Alternating twin-barrel hydraulic servo recoil for twin-linked RD40/RD30
+      float barrelZone=smoothstep(-.26,-.36,p.z)*step(abs(p.x),.065)*step(.012,abs(p.x));
+      float sideBias=p.x<0.?(1.0-rdPhase*.36):(0.64+rdPhase*.36);
+      p.z+=uRecoil.x*.042*barrelZone*sideBias;
+    }
+    if(rdLock>.001 || rdD01>.001 || rdLockPulse>.001){
+      float pod=smoothstep(.092,.116,p.y)*smoothstep(-.26,-.02,p.z);
+      float deploy=rdLock*.011+rdD01*.011+rdLockPulse*.015;
+      p.y+=deploy*pod;
+      p.z-=deploy*.92*pod;
+      if(rdD01>.01){
+        p.x+=sin(uAnim2.y*12.0)*0.0055*rdD01*pod;
+      }
+      float rail=step(.048,abs(p.x))*smoothstep(-.72,-.04,p.z);
+      p.x+=sign(p.x)*rdLockPulse*.0065*rail;
+    }
   }
   vec4 world=uModel*vec4(p,1.);
   wPos=world.xyz;
@@ -279,6 +300,14 @@ void main(){
   if(kind>2.5&&kind<3.5){
     float boost=(uQuality>=2?3.15:uQuality==1?2.45:uQuality==0?2.05:1.75)*(uKHDR==1?1.26:1.);
     c=base*(boost+.38*detail);
+    if(uMode==2 && (uHitFX.x>.01 || uHitFX.y>.01)){
+      float wave=.5+.5*sin(uTime*16.-lPos.z*26.);
+      c*=1.+uHitFX.x*(.38+.30*wave);
+      if(uHitFX.y>.01){
+        float scan=smoothstep(.62,.98,.5+.5*sin(uTime*11.+lPos.z*18.));
+        c=mix(c,vec3(.38,2.15,1.85)*(1.+.35*scan),uHitFX.y*(.42+.32*scan));
+      }
+    }
   }
   if(kind>4.5)c=mix(c,base*1.2,.6);
 

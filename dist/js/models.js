@@ -144,6 +144,61 @@ function rd40Device(m) {
   m.box(0, .120, -.68, .022, .030, .036, 'white', sensorGlow, 0, 3);
 }
 
+// RD30: Open-access twin-linked 80-round squad carbine with ARV1.1 mini rail module.
+function rd30Device(m) {
+  const slate = '#2d373d', alloy = '#78888d', amber = '#ffaa4a', teal = '#5ee8d4';
+  m.box(0, .020, -.10, .118, .096, .39, 'blackMetal', slate, .24, 1);
+  m.box(0, .072, -.09, .104, .032, .35, 'steel', alloy, .18, 1);
+  // Twin parallel medium barrels + compact twin brakes
+  for (const sx of [-1, 1]) {
+    const bx = sx * .032;
+    m.box(bx, .025, -.43, .034, .054, .32, 'blackMetal', '#3a464c', .16, 1);
+    m.tube([bx, .025, -.26], [bx, .025, -.72], .019, .017, 'steel', '#59686e', 9, 1);
+    m.box(bx, .025, -.70, .030, .032, .080, 'steel', '#99a8ad', .14, 1);
+    for (let i = 0; i < 4; i++) {
+      m.box(sx * .054, .025, -.31 - i * .070, .008, .016, .030, 'white', i % 2 ? teal : amber, 0, 3);
+    }
+  }
+  m.box(0, .025, -.44, .022, .028, .34, 'steel', '#56646a', 0, 1);
+  // 80-round compact twin drum mag + grip + stock
+  for (const sx of [-1, 1]) {
+    m.tube([sx * .048, -.098, -.13], [sx * .048, -.098, -.23], .042, .042, 'blackMetal', '#354046', 9, 1);
+  }
+  m.box(0, -.068, -.18, .074, .072, .096, 'blackMetal', slate, 0, 1);
+  m.beam([0, -.036, .022], [0, -.148, .072], .060, .078, 'rubber', rubber, 0);
+  m.beam([0, .040, .090], [0, .014, .235], .036, .026, 'steel', alloy, 1);
+  m.box(0, -.024, .238, .062, .125, .042, 'rubber', '#242c30', 0, 0);
+  // Compact ARV1.1 mini micro-optic rail
+  m.box(0, .106, -.09, .072, .028, .125, 'blackMetal', slate, 0, 1);
+  m.box(0, .126, -.09, .048, .024, .085, 'steel', '#4e5d63', 0, 1);
+  m.box(0, .126, -.135, .026, .014, .014, 'white', amber, 0, 3);
+}
+
+// RD20: Agile 20-round full-auto tactical carbine with ARV1.1 precision guidance module.
+function rd20Device(m) {
+  const dark = '#263036', steel = '#7d8e92', cyan = '#54f0d8', gold = '#f5ca64';
+  m.box(0, .020, -.09, .092, .092, .35, 'blackMetal', dark, .22, 1);
+  m.box(0, .068, -.09, .082, .030, .33, 'steel', steel, .18, 1);
+  m.box(0, .024, -.37, .066, .058, .28, 'steel', '#4a5a60', .16, 1);
+  m.tube([0, .024, -.26], [0, .024, -.64], .024, .021, 'blackMetal', '#333f45', 10, 1);
+  m.box(0, .024, -.62, .044, .040, .082, 'steel', '#96a8ad', .14, 1);
+  for (const sx of [-1, 1]) {
+    m.box(sx * .038, .028, -.35, .008, .016, .22, 'white', cyan, 0, 3);
+    m.box(sx * .048, .052, -.10, .008, .012, .18, 'white', gold, 0, 3);
+  }
+  // Angled 20-round stick mag + grip + compact stock
+  m.beam([0, -.034, -.14], [0, -.145, -.19], .052, .072, 'blackMetal', '#344046', 1);
+  m.box(0, -.108, -.175, .056, .018, .076, 'white', gold, 0, 1);
+  m.beam([0, -.036, .022], [0, -.146, .070], .056, .074, 'rubber', rubber, 0);
+  m.beam([0, .036, .086], [0, .008, .220], .034, .024, 'steel', steel, 1);
+  m.box(0, -.022, .224, .056, .118, .040, 'rubber', '#222b2f', 0, 0);
+  // ARV1.1 sleek top holo sight
+  m.box(0, .102, -.08, .060, .022, .110, 'blackMetal', dark, 0, 1);
+  for (const sx of [-1, 1]) m.box(sx * .026, .134, -.08, .009, .046, .066, 'steel', steel, 0, 1);
+  m.box(0, .156, -.08, .060, .009, .066, 'steel', steel, 0, 1);
+  m.box(0, .132, -.08, .008, .008, .008, 'white', cyan, 0, 3);
+}
+
 function device(m, gun) {
   if (gun === 'DF1 OUT') {
     dfDevice(m);
@@ -155,6 +210,14 @@ function device(m, gun) {
   }
   if (gun === 'RD40') {
     rd40Device(m);
+    return;
+  }
+  if (gun === 'RD30') {
+    rd30Device(m);
+    return;
+  }
+  if (gun === 'RD20') {
+    rd20Device(m);
     return;
   }
   const long = gun === 'SW T' ? .52 : gun === 'SRA' ? .69 : .72;
@@ -208,6 +271,8 @@ function dfDevice(m) {
 export function muzzleOffset(gun) {
   if (gun === 'MS10') return [0, .024, -.86];
   if (gun === 'RD40') return [0, .026, -.85];
+  if (gun === 'RD30') return [0, .025, -.75];
+  if (gun === 'RD20') return [0, .024, -.67];
   if (gun === 'DF1 OUT') return [0, .032, -.70];
   if (gun === 'SW T') return [0, .024, -.58];
   if (gun === 'SRA') return [0, .024, -.75];
@@ -219,10 +284,10 @@ export function muzzleFlashMesh(gun, intensity, seed, extra = false, lite = fals
   const m = new Mesh();
   if (intensity <= .01) return m;
   const [mx0, my, mz] = muzzleOffset(gun);
-  const barrels = gun === 'RD40' ? [mx0 - .036, mx0 + .036] : [mx0];
-  const s = intensity * (gun === 'MS10' ? 1.25 : gun === 'RD40' ? .86 : gun === 'D1' ? 1.05 : .95);
-  const coreCol = gun === 'MS10' ? '#e8ffff' : gun === 'RD40' ? '#fff4ea' : gun === 'DF1 OUT' ? '#dcfff7' : '#fff8dc';
-  const outerCol = gun === 'MS10' ? '#4de2ff' : gun === 'RD40' ? '#ff5c5c' : gun === 'DF1 OUT' ? '#6de8d5' : gun === 'SRA' ? '#ffcf76' : '#ffaa4e';
+  const barrels = gun === 'RD40' ? [mx0 - .036, mx0 + .036] : gun === 'RD30' ? [mx0 - .032, mx0 + .032] : [mx0];
+  const s = intensity * (gun === 'MS10' ? 1.25 : gun === 'RD40' ? .88 : gun === 'RD30' ? .78 : gun === 'D1' ? 1.05 : .95);
+  const coreCol = gun === 'MS10' ? '#e8ffff' : gun === 'RD40' ? '#fff4ea' : gun === 'RD30' ? '#fff6e4' : (gun === 'DF1 OUT' || gun === 'RD20') ? '#dcfff7' : '#fff8dc';
+  const outerCol = gun === 'MS10' ? '#4de2ff' : gun === 'RD40' ? '#ff5c5c' : gun === 'RD30' ? '#ffad4e' : gun === 'RD20' ? '#58f0d8' : gun === 'DF1 OUT' ? '#6de8d5' : gun === 'SRA' ? '#ffcf76' : '#ffaa4e';
   const rot = (seed * 1.618) % 6.28;
   for (let b = 0; b < barrels.length; b++) {
     const mx = barrels[b];
@@ -344,11 +409,16 @@ export function character(team, gun, variant = 'standard', detail = 'high') {
     }
     // Simplified Weapon Silhouette (Bone 15)
     m.boneOffset = 150;
-    const wLen = gun === 'MS10' ? .82 : gun === 'D1' ? .64 : gun === 'SRA' ? .68 : .58;
-    const wCol = gun === 'MS10' ? '#465861' : gun === 'DF1 OUT' ? '#3d5452' : '#404a4d';
-    const wGlow = gun === 'MS10' ? '#58e8ff' : gun === 'DF1 OUT' ? '#5ae8d0' : accent;
-    m.box(.072, 1.270, -.360, .068, .110, wLen * .62, 'blackMetal', wCol, 0, 1);
-    m.box(.072, 1.292, -.360 - wLen * .44, .036, .038, wLen * .48, 'steel', '#2c3437', 0, 1);
+    const wLen = gun === 'MS10' ? .82 : gun === 'D1' ? .64 : gun === 'SRA' ? .68 : gun === 'RD30' ? .62 : gun === 'RD20' ? .52 : .58;
+    const wCol = gun === 'MS10' ? '#465861' : gun === 'DF1 OUT' ? '#3d5452' : gun === 'RD30' ? '#4b4846' : gun === 'RD20' ? '#384e54' : '#404a4d';
+    const wGlow = gun === 'MS10' ? '#58e8ff' : gun === 'DF1 OUT' ? '#5ae8d0' : gun === 'RD30' ? '#ffbe62' : gun === 'RD20' ? '#64f0ff' : accent;
+    m.box(.072, 1.270, -.360, gun === 'RD30' ? .086 : .068, .110, wLen * .62, 'blackMetal', wCol, 0, 1);
+    if (gun === 'RD30') {
+      m.box(.044, 1.292, -.360 - wLen * .44, .026, .030, wLen * .48, 'steel', '#2c3437', 0, 1);
+      m.box(.100, 1.292, -.360 - wLen * .44, .026, .030, wLen * .48, 'steel', '#2c3437', 0, 1);
+    } else {
+      m.box(.072, 1.292, -.360 - wLen * .44, .036, .038, wLen * .48, 'steel', '#2c3437', 0, 1);
+    }
     m.box(.072, 1.170, -.340, .042, .145, .075, 'blackMetal', darkArmor, 0, 1);
     m.box(.072, 1.320, -.420, .024, .016, .180, 'white', wGlow, 0, 3);
     m.boneOffset = 0;
@@ -696,6 +766,8 @@ export function character(team, gun, variant = 'standard', detail = 'high') {
 function shotPalette(s) {
   if (s.gun === 'MS10') return {core: '#f7ffff', jacket: '#8ec7d8', outer: s.team ? '#ff8b4f' : '#3ee4ff', ring: s.team ? '#ffd57a' : '#8ef7ff', spark: '#ffe37a', vapor: '#b8e8f2'};
   if (s.gun === 'RD40') return {core: '#fff7f0', jacket: '#d48272', outer: s.guided ? '#ff4a62' : '#ff7b4e', ring: s.guided ? '#ffcf76' : '#ff9c6e', spark: '#ffd27a', vapor: '#e8c4be'};
+  if (s.gun === 'RD30') return {core: '#fffcf2', jacket: '#c9a06a', outer: s.guided ? '#ffae48' : (s.team ? '#ff7d44' : '#f4a250'), ring: s.guided ? '#ffe282' : '#ffcf76', spark: '#ffe388', vapor: '#e6d2b8'};
+  if (s.gun === 'RD20') return {core: '#f4ffff', jacket: '#7eb8c8', outer: s.guided ? '#4ce4ff' : (s.team ? '#ff8c52' : '#58c8e8'), ring: s.guided ? '#a8f8ff' : '#ffe088', spark: '#b8fbff', vapor: '#c2e4ee'};
   if (s.source === 'p1') return {core: '#fdf4ff', jacket: '#a688d8', outer: '#cc7dff', ring: '#76f8ff', spark: '#ffd2ff', vapor: '#d8c4f4'};
   if (s.gun === 'DF1 OUT') return {core: '#f2fffd', jacket: '#7ac7bc', outer: s.guided ? '#3bf2d6' : '#58e2cc', ring: s.guided ? '#8effef' : '#f2bd74', spark: s.guided ? '#a4fff4' : '#99f6e4', vapor: '#b8e8e0'};
   if (s.gun === 'D1') return {core: '#fff8ea', jacket: '#c49664', outer: s.team ? '#ff7644' : '#ffa952', ring: '#ffe27e', spark: '#ffd278', vapor: '#d8cfc0'};
@@ -796,7 +868,10 @@ export function movingDetails(match, time, extra = false, lite = false) {
       const w = isMS10 ? .058 : isGuided || isP1 ? .048 : .042;
       m.beam(tail, head, w, w, 'white', pal.outer, 3);
       m.beam(coreTail, tip, w * .52, w * .52, 'white', pal.core, 3);
-      if (isGuided) ring(m, add(head, scale(s.dir, -.35)), s.dir, .10, .014, 6, '#92fff2', 3);
+      if (isGuided) {
+        const gCol = s.gun === 'RD40' ? '#ff7082' : s.gun === 'RD30' ? '#ffd478' : s.gun === 'RD20' ? '#7cf0ff' : '#92fff2';
+        ring(m, add(head, scale(s.dir, -.35)), s.dir, s.gun === 'RD40' ? .115 : .10, .014, s.gun === 'RD40' ? 8 : 6, gCol, 3);
+      }
       continue;
     }
     const [right, up] = basisOf(s.dir);
@@ -882,13 +957,16 @@ export function movingDetails(match, time, extra = false, lite = false) {
     }
 
     if (isGuided) {
-      // Hexagonal ARV1 smart-guidance telemetry rings locked around the projectile
-      const gRings = extra ? 3 : 2;
+      // Smart-guidance telemetry rings locked around curving ARV1.1 / ARV1.1 mini / ARV1.2 projectiles
+      const isRD40Shot = s.gun === 'RD40';
+      const gRings = isRD40Shot ? (extra ? 4 : 3) : (extra ? 3 : 2);
+      const gSegs = isRD40Shot ? 8 : 6;
+      const primaryRing = isRD40Shot ? '#ff5a72' : s.gun === 'RD30' ? '#ffd678' : s.gun === 'RD20' ? '#7cf0ff' : '#a8fff5';
       for (let r = 0; r < gRings; r++) {
-        const back = .28 + r * .95 + ((time * 18 + s.id * .7) % .55);
+        const back = .24 + r * (isRD40Shot ? .78 : .95) + ((time * (isRD40Shot ? 24 : 18) + s.id * .7) % .52);
         if (back > tailLen) continue;
-        const rad = .095 + r * .042;
-        ring(m, add(head, scale(s.dir, -back)), s.dir, rad, .013, 6, r === 0 ? '#a8fff5' : pal.ring, 3);
+        const rad = (isRD40Shot ? .112 : .095) + r * (isRD40Shot ? .048 : .042);
+        ring(m, add(head, scale(s.dir, -back)), s.dir, rad, isRD40Shot ? .015 : .013, gSegs, r % 2 === 0 ? primaryRing : pal.ring, 3);
       }
     }
 

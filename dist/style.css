@@ -951,27 +951,59 @@ body.light-mode #app.cinematic #backdrop i {
 }
 
 /* ==========================================================================
-   RD40 Twin-Linked Carbine, Auto-Aim 1.2 & D01 SENSOR Wall-Track HUD
+   RD-Series (RD20 / RD30 / RD40) 8-Weapon Grid & Kinetic Lock/Track/Fire HUD
    ========================================================================== */
 .guns {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 6px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 5px;
 }
 .guns button {
   font-size: 13px;
-  padding: 9px 4px;
-  min-height: 48px;
+  padding: 5px 4px;
+  min-height: 35px;
+}
+.lobby-panel .panel-heading { padding: 10px 24px 8px; }
+.lobby-panel .panel-heading h2 { font-size: 21px; margin-top: 2px; }
+.lobby-panel .panel-body { padding: 10px 24px 10px; }
+.lobby-panel fieldset { margin-bottom: 9px; }
+.lobby-panel legend { margin-bottom: 5px; font-size: 12.5px; }
+.lobby-panel .mode-grid button { min-height: 48px; padding: 7px 11px; }
+.lobby-panel .mode-grid b { font-size: 17.5px; }
+.lobby-panel .mode-grid span { margin-top: 2px; font-size: 10.5px; }
+.lobby-panel .ally-ai-wrap { padding: 7px 11px 8px; }
+.lobby-panel .spy-grid button { min-height: 42px; padding: 5px 10px; }
+.lobby-panel .spy-note { margin-top: 4px; font-size: 10.5px; }
+.lobby-panel .compact button { min-height: 36px; padding: 6px 12px; font-size: 13px; }
+.lobby-panel .mult input { min-height: 36px; padding: 4px; font-size: 15px; }
+.lobby-panel .note { margin-top: 4px; font-size: 11px; }
+.lobby-panel .weapon-stats { margin-top: 6px; font-size: 11px; gap: 3px 13px; }
+.lobby-panel .df-setup { margin-top: 6px; padding: 6px 10px; }
+.lobby-panel .panel-foot { padding: 9px 24px; }
+.lobby-panel .primary { min-height: 42px; padding: 8px 22px; white-space: nowrap; flex-shrink: 0; }
+#loadout button[data-value="RD20"][aria-pressed="true"] {
+  border-color: #6ce8ff;
+  background: linear-gradient(135deg, #3ac7e830, #e6c66a1c);
+  color: #dffbff;
+  box-shadow: inset 0 -3px #6ce8ff, 0 0 14px #52dcf532;
+}
+#loadout button[data-value="RD30"][aria-pressed="true"] {
+  border-color: #ffbe62;
+  background: linear-gradient(135deg, #f59c3c34, #4edbc41e);
+  color: #ffebd0;
+  box-shadow: inset 0 -3px #ffbe62, 0 0 14px #f5a03e38;
 }
 #loadout button[data-value="RD40"][aria-pressed="true"] {
   border-color: #ff6e7a;
-  background: linear-gradient(135deg, #ff4e6634, #4be8cc1e);
-  color: #ffd8dc;
-  box-shadow: inset 0 -3px #ff6e7a, 0 0 14px #ff546838;
+  background: linear-gradient(135deg, #ff4e6638, #4be8cc22);
+  color: #ffdce0;
+  box-shadow: inset 0 -3px #ff6e7a, 0 0 16px #ff546842;
 }
 @media (max-width: 600px) {
-  .guns { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
-  .guns button { min-height: 38px; font-size: 12px; padding: 6px 4px; }
+  .guns { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; }
+  .guns button { min-height: 36px; font-size: 11px; padding: 5px 2px; }
+  .lobby-panel .panel-foot { padding: 8px 12px; gap: 8px; }
+  .lobby-panel .primary { gap: 10px; padding: 8px 14px; font-size: 13px; }
 }
 .rd-setup {
   border-left-color: #ff6b78;
@@ -979,12 +1011,133 @@ body.light-mode #app.cinematic #backdrop i {
 }
 .rd-setup strong {
   color: #ff9ca5;
-  min-width: 78px;
+  min-width: 82px;
+}
+.rd-setup.is-rd20 {
+  border-left-color: #62e4ff;
+  background: linear-gradient(135deg, #10252d96, #18272882);
+}
+.rd-setup.is-rd20 strong { color: #8af0ff; }
+.rd-setup.is-rd30 {
+  border-left-color: #ffbe62;
+  background: linear-gradient(135deg, #28201596, #14262482);
+}
+.rd-setup.is-rd30 strong { color: #ffd48c; }
+
+/* RD-Series Reticles & RD40 1.4x Smart-Aperture Lock Ring */
+#reticle.is-rd20 i, #reticle.is-rd20 em {
+  background: #e6fbff;
+  box-shadow: 0 0 4px #54dcff99, 0 0 1px #0c1f26;
+}
+#reticle.is-rd30 i, #reticle.is-rd30 em {
+  background: #fff4df;
+  box-shadow: 0 0 4px #ffb85c99, 0 0 1px #20160a;
 }
 #reticle.is-rd40 i, #reticle.is-rd40 em {
   background: #ffece8;
   box-shadow: 0 0 5px #ff5c6e99, 0 0 1px #1e0c10;
+  transition: background .12s ease, box-shadow .12s ease;
 }
+#reticle.is-rd40:before {
+  content: '';
+  position: absolute;
+  left: -34px;
+  top: -34px;
+  width: 68px;
+  height: 68px;
+  border-radius: 50%;
+  border: 1px dashed #ff829258;
+  box-shadow: inset 0 0 10px #ff546818;
+  pointer-events: none;
+  transition: transform .14s ease, border-color .14s ease, box-shadow .14s ease;
+}
+#reticle.is-rd40.is-rd-locked:before {
+  transform: scale(.86) rotate(22deg);
+  border-style: solid;
+  border-color: #ff6e7eb8;
+  box-shadow: 0 0 12px #ff4f6644, inset 0 0 10px #ff6e7e28;
+}
+#reticle.is-rd40.is-rd-d01:before {
+  transform: scale(.92) rotate(-35deg);
+  border-style: dashed;
+  border-color: #5ffae0cc;
+  box-shadow: 0 0 14px #4ef2d84c, inset 0 0 12px #5ffae028;
+}
+#reticle.is-rd40.is-rd-fire:before {
+  transform: scale(.98);
+  border-color: #ffd884e0;
+  box-shadow: 0 0 16px #ffae5266;
+}
+#reticle.is-rd40.is-rd-d01 i, #reticle.is-rd40.is-rd-d01 em {
+  background: #d8fff8;
+  box-shadow: 0 0 6px #4ef2d8bb, 0 0 1px #08201e;
+}
+#reticle.is-rd40.is-rd-fire i, #reticle.is-rd40.is-rd-fire em {
+  background: #fff5d4;
+  box-shadow: 0 0 7px #ffbe58cc, 0 0 2px #26120a;
+}
+
+/* RD40 Full-Screen SVG Vector Tracking Tether Laser */
+#rdOverlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 1;
+  overflow: visible;
+  filter: drop-shadow(0 0 4px #ff546899);
+}
+#rdTetherGlow {
+  stroke: #ff526840;
+  stroke-width: 5px;
+  stroke-linecap: round;
+}
+#rdTether {
+  stroke: #ff8e9cd8;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-dasharray: 6 4;
+  animation: rdTetherFlow .45s linear infinite;
+}
+#rdOverlay.is-acquiring {
+  opacity: .58;
+}
+#rdOverlay.is-fire {
+  filter: drop-shadow(0 0 7px #ffbe58cc);
+}
+#rdOverlay.is-fire #rdTetherGlow {
+  stroke: #ffc46860;
+  stroke-width: 7px;
+}
+#rdOverlay.is-fire #rdTether {
+  stroke: #ffe69eff;
+  stroke-width: 2.1px;
+  stroke-dasharray: none;
+}
+#rdOverlay.is-d01 {
+  filter: drop-shadow(0 0 6px #4ef2d8bb);
+}
+#rdOverlay.is-d01 #rdTetherGlow {
+  stroke: #4ef2d848;
+  stroke-width: 6px;
+}
+#rdOverlay.is-d01 #rdTether {
+  stroke: #76ffebee;
+  stroke-width: 1.7px;
+  stroke-dasharray: 9 5;
+  animation: rdTetherFlow .6s linear infinite;
+}
+@keyframes rdTetherFlow {
+  from { stroke-dashoffset: 20; }
+  to { stroke-dashoffset: 0; }
+}
+body.light-mode #rdOverlay,
+body.light-mode #lockDot {
+  filter: none !important;
+}
+
+/* RD-Series HUD Card (RD20 / RD30 / RD40) */
 #rdHud {
   position: absolute;
   left: max(clamp(16px, 3vw, 44px), env(safe-area-inset-left));
@@ -1000,6 +1153,22 @@ body.light-mode #app.cinematic #backdrop i {
   box-shadow: 0 4px 16px #07101460;
 }
 #rdHud > span { display: block; white-space: nowrap; }
+#rdHud.is-rd20 {
+  border-color: #62e4ff3e;
+  border-left-color: #62e4ff;
+  color: #e4f8fc;
+}
+#rdHud.is-rd20 .d01-line i { background: linear-gradient(90deg, #4cd8ff, #9cf8ff); }
+#rdHud.is-rd30 {
+  border-color: #ffbe6240;
+  border-left-color: #ffbe62;
+  color: #faf0df;
+}
+#rdHud.is-rd30 .d01-line i { background: linear-gradient(90deg, #ffae48, #ffe084); }
+#rdHud.is-rd40.is-locked {
+  border-color: #ff7a8a78;
+  box-shadow: 0 4px 18px #07101470, 0 0 14px #ff546838;
+}
 #rdHud.is-d01 {
   border-color: #5cf5dc88;
   border-left-color: #5cf5dc;
@@ -1034,31 +1203,99 @@ body.touch #rdHud {
   line-height: 1.3;
   background: #161a1e8c;
 }
+
+/* Kinetic Target-Lock Brackets, Shockwave Ring & Distance/D01 Telemetry Tag */
+#lockDot {
+  --lock-rot: 0deg;
+  --lock-scale: 1;
+  --ring-scale: 1;
+  --ring-op: 0;
+  transform: translate(-50%, -50%) scale(var(--lock-scale)) rotate(var(--lock-rot));
+  will-change: transform, left, top;
+}
+#lockRing {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1.5px solid var(--lock);
+  transform: translate(-50%, -50%) scale(var(--ring-scale));
+  opacity: var(--ring-op);
+  pointer-events: none;
+  box-shadow: 0 0 10px var(--lock);
+}
+#lockDot.is-rd20 {
+  width: 26px;
+  height: 26px;
+  --lock: #66e8ff;
+  filter: drop-shadow(0 0 4px #4ed8ff99);
+}
+#lockDot.is-rd30 {
+  width: 26px;
+  height: 26px;
+  --lock: #ffc266;
+  filter: drop-shadow(0 0 4px #ffa84499);
+}
 #lockDot.is-rd40 {
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
   --lock: #ff6e7c;
-  filter: drop-shadow(0 0 5px #ff5064aa);
+  filter: drop-shadow(0 0 6px #ff5064cc);
+}
+#lockDot.is-rd40 i {
+  width: 9px;
+  height: 9px;
+  border-width: 2px 0 0 2px;
+}
+#lockDot.is-rd40.is-acquiring {
+  --lock: #ffb870;
+  opacity: .84;
+}
+#lockDot.is-rd40.is-firing {
+  --lock: #ffe08a;
+  filter: drop-shadow(0 0 9px #ffaa48ee);
 }
 #lockDot.is-d01 {
   width: 34px;
   height: 34px;
   --lock: #5ffae0;
-  filter: drop-shadow(0 0 7px #4ef2d8cc);
+  filter: drop-shadow(0 0 8px #4ef2d8dd);
+}
+#lockDot.is-d01 i {
+  width: 9px;
+  height: 9px;
+  border-width: 2px 0 0 2px;
 }
 #lockTag {
   position: absolute;
   left: 50%;
-  top: calc(100% + 4px);
-  transform: translateX(-50%);
-  padding: 1px 5px;
+  top: calc(100% + 6px);
+  transform: translateX(-50%) rotate(calc(-1 * var(--lock-rot)));
+  padding: 1.5px 6px;
   border-radius: 3px;
   font: 800 9px/1.2 var(--mono);
-  letter-spacing: .06em;
-  color: #a6fff2;
-  background: #0c2224cc;
-  border: 1px solid #5af2da80;
+  letter-spacing: .07em;
+  color: #ffe2e6;
+  background: #1f1116d4;
+  border: 1px solid #ff748488;
   white-space: nowrap;
+  pointer-events: none;
+}
+#lockDot.is-d01 #lockTag {
+  color: #a8fff2;
+  background: #0b2324d8;
+  border-color: #5af2da99;
+}
+#lockDot.is-acquiring #lockTag {
+  color: #ffe8c2;
+  background: #201a12c4;
+  border-color: #ffbd7078;
+}
+#lockDot.is-firing #lockTag {
+  color: #fff6d0;
+  border-color: #ffd678cc;
 }
 
 

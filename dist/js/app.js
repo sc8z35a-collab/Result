@@ -32,6 +32,8 @@ const recoilProfiles = {
   D1: {z: .020, y: .0035, pitch: .028, yaw: .0055, roll: .013, camPitch: 0, camRoll: 0, shake: 0, spread: 2.5, heat: .11, fov: 0},
   MS10: {z: .025, y: .004, pitch: .030, yaw: .007, roll: .016, camPitch: 0, camRoll: 0, shake: 0, spread: 2.4, heat: .15, fov: 0},
   'DF1 OUT': {z: .022, y: .0035, pitch: .028, yaw: .005, roll: .014, camPitch: 0, camRoll: 0, shake: 0, spread: 2.2, heat: .15, fov: 0},
+  RD20: {z: .021, y: .0035, pitch: .028, yaw: .0055, roll: .014, camPitch: 0, camRoll: 0, shake: 0, spread: 2.3, heat: .12, fov: 0},
+  RD30: {z: .023, y: .0038, pitch: .029, yaw: .0055, roll: .015, camPitch: 0, camRoll: 0, shake: 0, spread: 2.4, heat: .13, fov: 0},
   RD40: {z: .023, y: .0035, pitch: .026, yaw: .005, roll: .013, camPitch: 0, camRoll: 0, shake: 0, spread: 2.1, heat: .12, fov: 0}
 };
 // Ultra-small precision micro-recoil with rapid smooth recovery (laser-controllable).
@@ -41,6 +43,8 @@ const aimRecoil = {
   D1: {pitch: .0018, yaw: .0006, recoverRate: 16.5, recoverRatio: .94, climb: .008},
   MS10: {pitch: .0026, yaw: .0009, recoverRate: 15.5, recoverRatio: .92, climb: .010},
   'DF1 OUT': {pitch: .0016, yaw: .0005, recoverRate: 17.5, recoverRatio: .95, climb: .006},
+  RD20: {pitch: .0017, yaw: .0005, recoverRate: 17.0, recoverRatio: .94, climb: .006},
+  RD30: {pitch: .0018, yaw: .00055, recoverRate: 16.5, recoverRatio: .94, climb: .007},
   RD40: {pitch: .0015, yaw: .00045, recoverRate: 18.0, recoverRatio: .95, climb: .005}
 };
 let settings = {...defaults};
@@ -117,7 +121,7 @@ const keys = new Set(), audio = new SoundEngin();
 let feed = [];
 const fixed = 1 / 360;
 
-// Second-order spring-damper kinematic model for crisp weapon blowback & sway (zero camera shake).
+// Second-order spring-damper kinematic model for crisp weapon blowback, sway & RD40 lock/track choreography (zero camera shake).
 const gunMotion = {
   z: 0, vz: 0,
   y: 0, vy: 0,
@@ -134,7 +138,11 @@ const gunMotion = {
   shake: 0,
   fovPunch: 0,
   wasOnGround: true,
-  shotSide: 1
+  shotSide: 1,
+  rdSnap: 0, vrdSnap: 0,
+  rdX: 0, rdY: 0, rdZ: 0,
+  rdPitch: 0, rdYaw: 0, rdRoll: 0,
+  rdLock: 0, rdD01: 0, rdLockPulse: 0, rdBarrelPhase: 0
 };
 // Ultra-small aim recoil tracker (supports crouch damping, manual pull-down cancel, & rapid recovery).
 const recoilState = {pitch: 0, yaw: 0, holdUntil: 0, shotsInBurst: 0, lastShotAt: -10};
@@ -154,7 +162,9 @@ function resetMotion() {
   Object.assign(gunMotion, {
     z: 0, vz: 0, y: 0, vy: 0, pitch: 0, vpitch: 0, yaw: 0, vyaw: 0, roll: 0, vroll: 0,
     swayX: 0, swayY: 0, land: 0, vland: 0, blowback: 0, heat: 0, spread: 0,
-    camPitch: 0, vcamPitch: 0, camRoll: 0, vcamRoll: 0, shake: 0, fovPunch: 0, wasOnGround: true
+    camPitch: 0, vcamPitch: 0, camRoll: 0, vcamRoll: 0, shake: 0, fovPunch: 0, wasOnGround: true,
+    rdSnap: 0, vrdSnap: 0, rdX: 0, rdY: 0, rdZ: 0, rdPitch: 0, rdYaw: 0, rdRoll: 0,
+    rdLock: 0, rdD01: 0, rdLockPulse: 0, rdBarrelPhase: 0
   });
   Object.assign(recoilState, {pitch: 0, yaw: 0, holdUntil: 0, shotsInBurst: 0, lastShotAt: -10});
   Object.assign(hitState, {age: 1, dur: .28, kind: 'hit', rot: 45, bannerAge: 1, bannerDur: 0});
@@ -171,7 +181,13 @@ function resetMotion() {
 function kickWeapon(gun) {
   const r = recoilProfiles[gun] || recoilProfiles['SW T'];
   const ar = aimRecoil[gun] || aimRecoil['SW T'];
-  gunMotion.shotSide = Math.random() < .35 ? gunMotion.shotSide : -gunMotion.shotSide;
+  const a = match?.player;
+  if ((gun === 'RD40' || gun === 'RD30') && a?.rd) {
+    // Alternating twin-barrel harmonic roll polarity synced with shader barrel blowback!
+    gunMotion.shotSide = a.rd.barrelPhase ? 1 : -1;
+  } else {
+    gunMotion.shotSide = Math.random() < .35 ? gunMotion.shotSide : -gunMotion.shotSide;
+  }
   const side = gunMotion.shotSide * (.7 + Math.random() * .4);
   const j = .92 + Math.random() * .16;
   gunMotion.z = Math.min(.045, gunMotion.z + r.z * .35);
@@ -179,7 +195,11 @@ function kickWeapon(gun) {
   gunMotion.vy += r.y * 8.0 * j;
   gunMotion.vpitch += r.pitch * 9.5 * j;
   gunMotion.vyaw += r.yaw * 8.0 * side;
-  gunMotion.vroll += r.roll * 9.5 * side;
+  gunMotion.vroll += r.roll * (gun === 'RD40' ? 14.5 : 9.5) * side;
+  if (gun === 'RD40') {
+    // Stabilized hydraulic recoil cadence kick with zero camera shake
+    gunMotion.vz += .045;
+  }
   gunMotion.blowback = 1;
   gunMotion.heat = Math.min(1, gunMotion.heat + r.heat);
   gunMotion.spread = Math.min(9, gunMotion.spread + r.spread);
@@ -191,7 +211,6 @@ function kickWeapon(gun) {
   gameKick = .35;
 
   // Apply ultra-small, tightly controllable micro-recoil to player aim.
-  const a = match?.player;
   if (a?.alive) {
     if (timeNow - recoilState.lastShotAt < .35) recoilState.shotsInBurst = Math.min(8, recoilState.shotsInBurst + 1);
     else recoilState.shotsInBurst = 0;
@@ -223,6 +242,7 @@ function stepMotion(dt, a) {
   [gunMotion.yaw, gunMotion.vyaw] = stepSpring(gunMotion.yaw, gunMotion.vyaw, 280, 27, sub);
   [gunMotion.roll, gunMotion.vroll] = stepSpring(gunMotion.roll, gunMotion.vroll, 270, 27, sub);
   [gunMotion.land, gunMotion.vland] = stepSpring(gunMotion.land, gunMotion.vland, 190, 22, sub);
+  [gunMotion.rdSnap, gunMotion.vrdSnap] = stepSpring(gunMotion.rdSnap, gunMotion.vrdSnap, 310, 24, sub);
 
   gunMotion.z = clamp(gunMotion.z, -.01, .055);
   gunMotion.y = clamp(gunMotion.y, -.015, .02);
@@ -230,6 +250,7 @@ function stepMotion(dt, a) {
   gunMotion.yaw = clamp(gunMotion.yaw, -.04, .04);
   gunMotion.roll = clamp(gunMotion.roll, -.07, .07);
   gunMotion.land = clamp(gunMotion.land, -.015, .04);
+  gunMotion.rdSnap = clamp(gunMotion.rdSnap, -.08, .18);
   gunMotion.camPitch = gunMotion.vcamPitch = 0;
   gunMotion.camRoll = gunMotion.vcamRoll = 0;
   gunMotion.shake = 0;
@@ -263,11 +284,54 @@ function stepMotion(dt, a) {
     gunMotion.wasOnGround = a.onGround;
     const speed = Math.hypot(a.vx, a.vz);
     const moveSpread = (a.onGround ? Math.min(2.6, speed * .36) : 4.2) * (1 - a.crouch * .45);
-    gunMotion.spread = moveSpread + (gunMotion.spread - moveSpread) * Math.exp(-14 * dt)
+    gunMotion.spread = moveSpread + (gunMotion.spread - moveSpread) * Math.exp(-14 * dt);
+
+    // RD-Series 3D first-person kinetic choreography (RD40 badass lock-cant + magnetic gimbal tracking + D01 SENSOR stance)
+    const rd = a.rd;
+    if (rd && a.gun === 'RD40') {
+      const lock = rd.lockBlend || 0;
+      const d01 = rd.d01Blend || 0;
+      const pulse = rd.lockPulse || 0;
+      const fp = rd.firePulse || 0;
+      const snap = gunMotion.rdSnap;
+      const tYaw = rd.trackYaw || 0;
+      const tPitch = rd.trackPitch || 0;
+      const bSign = rd.barrelPhase ? 1 : -1;
+      gunMotion.rdX = -lock * .018 + tYaw * .055 - snap * .008;
+      gunMotion.rdY = lock * .012 + d01 * .009 + tPitch * .042 + snap * .006;
+      gunMotion.rdZ = -snap * .024 - pulse * .014 + lock * .012;
+      gunMotion.rdYaw = tYaw * .48;
+      gunMotion.rdPitch = tPitch * .44 + snap * .035 + Math.cos(timeNow * 4.4) * .008 * d01;
+      gunMotion.rdRoll = -lock * .095 + d01 * .032 + tYaw * .34 + Math.sin(timeNow * 5.2) * .015 * d01 - snap * .065 + bSign * fp * .022;
+      gunMotion.rdLock = lock;
+      gunMotion.rdD01 = d01;
+      gunMotion.rdLockPulse = pulse;
+      gunMotion.rdBarrelPhase = rd.barrelPhase || 0;
+    } else if (rd && a.gun === 'RD30') {
+      const bSign = rd.barrelPhase ? 1 : -1;
+      gunMotion.rdX = gunMotion.rdY = gunMotion.rdZ = gunMotion.rdPitch = gunMotion.rdYaw = 0;
+      gunMotion.rdRoll = -(rd.lockBlend || 0) * .024 + bSign * (rd.firePulse || 0) * .014;
+      gunMotion.rdLock = (rd.lockBlend || 0) * .55;
+      gunMotion.rdD01 = 0;
+      gunMotion.rdLockPulse = (rd.lockPulse || 0) * .4;
+      gunMotion.rdBarrelPhase = rd.barrelPhase || 0;
+    } else if (rd && a.gun === 'RD20') {
+      gunMotion.rdX = gunMotion.rdY = gunMotion.rdZ = gunMotion.rdPitch = gunMotion.rdYaw = 0;
+      gunMotion.rdRoll = -(rd.lockBlend || 0) * .028;
+      gunMotion.rdLock = (rd.lockBlend || 0) * .55;
+      gunMotion.rdD01 = 0;
+      gunMotion.rdLockPulse = (rd.lockPulse || 0) * .4;
+      gunMotion.rdBarrelPhase = 0;
+    } else {
+      gunMotion.rdX = gunMotion.rdY = gunMotion.rdZ = gunMotion.rdPitch = gunMotion.rdYaw = gunMotion.rdRoll = 0;
+      gunMotion.rdLock = gunMotion.rdD01 = gunMotion.rdLockPulse = gunMotion.rdBarrelPhase = 0;
+    }
   } else {
     recoilState.pitch = recoilState.yaw = recoilState.shotsInBurst = 0;
     gunMotion.spread *= Math.exp(-14 * dt);
-    gunMotion.wasOnGround = true
+    gunMotion.wasOnGround = true;
+    gunMotion.rdX = gunMotion.rdY = gunMotion.rdZ = gunMotion.rdPitch = gunMotion.rdYaw = gunMotion.rdRoll = 0;
+    gunMotion.rdLock = gunMotion.rdD01 = gunMotion.rdLockPulse = gunMotion.rdBarrelPhase = 0;
   }
   $('reticle').style.setProperty('--spread', clamp(gunMotion.spread, 0, 12).toFixed(2) + 'px')
 }
@@ -463,6 +527,9 @@ function lobby() {
   const dmgLabel = w.pellets > 1 ? `威力 ${w.damage} × ${w.pellets}` : `威力 ${w.damage}`;
   const tags = [`弾倉 ${w.capacity} 発`, dmgLabel, modeLabel, `連射比 ${w.rate}`, `弾速比 ${w.velocity}`];
   if (rules.loadout === 'MS10')tags.push('全武器最速弾速');
+  if (rules.loadout === 'RD20')tags.push('オートエイム 1.1');
+  if (rules.loadout === 'RD30')tags.push('オートエイム 1.1 mini · NPC開放');
+  if (rules.loadout === 'RD40')tags.push('オートエイム 1.2 + D01 SENSOR');
   if (w.playerOnly)tags.push('プレイヤー専用');
   $('weaponStats').innerHTML = tags.map(s => `<span>${s}</span>`).join('');
   $('start').disabled = !ready || starting;
@@ -647,6 +714,17 @@ function event(e) {
   if (!p)return;
   audio.event(e, p);
   if (e.type === 'fire' && e.actor === p)kickWeapon(e.gun || p.gun);
+  if (e.type === 'rdlock' && e.actor === p) {
+    // Crisp tactical cant lock-snap kick on RD40 target acquisition (zero camera shake)
+    gunMotion.vrdSnap += 2.1;
+    gunMotion.vroll -= .72;
+    gunMotion.vz += .16;
+  }
+  if (e.type === 'd01' && e.actor === p) {
+    // Smooth optical-radar sensor pod deploy rise impulse
+    gunMotion.vrdSnap += 1.35;
+    gunMotion.vy += .12;
+  }
   if (e.type === 'spawn' && e.actor === p) {
     recoilState.pitch = recoilState.yaw = recoilState.shotsInBurst = 0;
     setTouchCrouch(false);
@@ -699,6 +777,8 @@ function hud() {
   $('respawn').hidden = a.alive;
   $('reticle').hidden = !a.alive;
   $('reticle').classList.toggle('is-ms10', a.gun === 'MS10');
+  $('reticle').classList.toggle('is-rd20', a.gun === 'RD20');
+  $('reticle').classList.toggle('is-rd30', a.gun === 'RD30');
   $('reticle').classList.toggle('is-rd40', a.gun === 'RD40');
   $('spawnCounter').textContent = Math.max(0, a.respawn).toFixed(1) + ' s';
   if (match.time > 9)$('startHint').hidden = true;
@@ -1056,7 +1136,17 @@ function frame(ms) {
       swayY: gunMotion.swayY,
       landDrop: gunMotion.land,
       blowback: gunMotion.blowback,
-      heat: gunMotion.heat
+      heat: gunMotion.heat,
+      rdX: gunMotion.rdX,
+      rdY: gunMotion.rdY,
+      rdZ: gunMotion.rdZ,
+      rdPitch: gunMotion.rdPitch,
+      rdYaw: gunMotion.rdYaw,
+      rdRoll: gunMotion.rdRoll,
+      rdLock: gunMotion.rdLock,
+      rdD01: gunMotion.rdD01,
+      rdLockPulse: gunMotion.rdLockPulse,
+      rdBarrelPhase: gunMotion.rdBarrelPhase
     }
   });
   equipment.draw(renderer, match, cam, timeNow, screen === 'game', !!settings.lightMode);
