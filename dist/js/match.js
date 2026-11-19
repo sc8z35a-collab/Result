@@ -2,14 +2,14 @@ import {clamp, forward, dot, sub, add, scale, random, cross, unit} from './geome
 import {teams, tankers, walkable, moveActor, floorAt, obstruction, raycastMaterial} from './yard.js';
 import {NV2} from './nv2.js';
 import {eyeOf, torso, bodyCenter, postureStep} from './posture.js';
-import {DF, initialDF, assist, scheduleDF, directionDF, spendP1, updateDF} from './df1.js';
+import {DF, initialDF, assist, scheduleDF, bulletGuidanceDF, steerGuidedShot, spendP1, updateDF} from './df1.js';
 const baseSpeed = 360, baseInterval = .24;
 export const weapons = {
   'SW T': {capacity: 10, damage: 9, rate: 100, velocity: 100, speed: baseSpeed, interval: baseInterval, burst: 1, reload: 1.4},
   SRA: {capacity: 30, damage: 6, rate: 120, velocity: 80, speed: baseSpeed * .8, interval: baseInterval / 1.2, burst: 1, reload: 1.65},
   D1: {capacity: 40, damage: 5, rate: 100, velocity: 60, speed: baseSpeed * .6, interval: baseInterval, burst: 2, reload: 1.85},
   MS10: {capacity: 24, damage: 9, rate: 130, velocity: 180, speed: baseSpeed * 1.8, interval: baseInterval / 1.3, burst: 1, reload: 1.55, auto: true},
-  [DF]: {capacity: 50, damage: 2.8, rate: 150, velocity: 65, speed: baseSpeed * .65, interval: baseInterval / 1.5, burst: 3, reload: 1.85, auto: true, playerOnly: true}
+  [DF]: {capacity: 95, damage: 2.8, rate: 300, velocity: 65, speed: baseSpeed * .65, interval: baseInterval / 3, burst: 3, reload: 1.85, auto: true, playerOnly: true}
 };
 export const modes = {'3v3': [3, 3], '1v2': [1, 2], '1v1': [1, 1]};
 const names = [['YOU', 'NAGI', 'KAI'], ['RIN', 'SORA', 'AO']];
@@ -58,6 +58,7 @@ export class Match {
     this.shots = [];
     this.effects = [];
     this.casings = [];
+    this.scorches = [];
     this.tankers = tankers.map(t => ({...t, cooldown: 0, maxCooldown: 25, pulse: 0, lastTeam: -1}));
     this.rng = random(1939);
     this.seq = 0;
@@ -186,7 +187,8 @@ export class Match {
     a.recoil = 1;
     a.recoilSide = (this.rng() - .5) * 2;
     a.shotCount = (a.shotCount || 0) + 1;
-    const dir = a.df ? directionDF(a) : forward(a.yaw, a.pitch), p = eyeOf(a);
+    const guidedInfo = a.df ? bulletGuidanceDF(this, a) : null;
+    const dir = guidedInfo ? guidedInfo.dir : forward(a.yaw, a.pitch), p = eyeOf(a);
     const right = unit(cross(dir, [0, 1, 0]));
     const up = cross(right, dir);
     const barrelLen = a.gun === 'MS10' ? .92 : a.gun === 'D1' ? .78 : a.gun === 'SW T' ? .60 : .74;
@@ -201,6 +203,13 @@ export class Match {
       p,
       old: p,
       origin: [...muzzle],
+      trail: [[...muzzle]],
+      trailClock: 0,
+      guided: !!guidedInfo?.guided,
+      homingTargetId: guidedInfo ? guidedInfo.targetId : -1,
+      homingBudget: guidedInfo ? guidedInfo.homingBudget : 0,
+      homingRate: guidedInfo ? guidedInfo.homingRate : 0,
+      homingTurned: 0,
       damage: w.damage,
       speed: w.speed,
       life: 1.35,
@@ -370,9 +379,9 @@ export class Match {
     } else a.shieldClock = 0;
     if (a.stock < 100) {
       a.ammoClock += dt * (a.ammoRate || 1);
-      if (a.ammoClock + 1e-8 >= 3) {
+      if (a.ammoClock + 1e-8 >= 1) {
         a.stock = Math.min(100, a.stock + 1);
-        a.ammoClock = Math.max(0, a.ammoClock - 3)
+        a.ammoClock = Math.max(0, a.ammoClock - 1)
       }
     } else a.ammoClock = 0;
     if (a.df)updateDF(this, a, dt);
@@ -396,6 +405,7 @@ export class Match {
     }
   }
   projectile(s, dt) {
+    if (s.guided)steerGuidedShot(this, s, dt);
     const a = s.p, b = add(a, scale(s.dir, s.speed * dt));
     let at = obstruction(a, b), target = null;
     for (const v of this.actors) {
@@ -465,17 +475,29 @@ export class Match {
     s.p = b;
     s.life -= dt;
     s.age = (s.age || 0) + dt;
+    s.trailClock = (s.trailClock || 0) + dt;
+    if (s.trail && s.trailClock >= .0055) {
+      s.trailClock = 0;
+      s.trail.push([b[0], b[1], b[2]]);
+      if (s.trail.length > 8)s.trail.shift()
+    }
     if (at <= 1) {
       const p = add(a, scale(sub(b, a), at));
       if (target) {
         const res = this.damage(target, s.owner, s.damage, s.dir);
         const kind = res?.kill ? 'kill' : res?.shieldBreak ? 'break' : res?.shield ? 'shield' : 'hit';
-        const dur = kind === 'kill' ? .62 : kind === 'break' ? .48 : kind === 'shield' ? .34 : .28;
+        const dur = kind === 'kill' ? .78 : kind === 'break' ? .58 : kind === 'shield' ? .42 : .36;
+        const bc = bodyCenter(target);
+        const outN = unit([p[0] - bc[0] - s.dir[0] * .25, (p[1] - (target.y + .95)) * .35 - s.dir[1] * .25, p[2] - bc[1] - s.dir[2] * .25]);
         this.effects.push({
           kind,
           p,
           dir: [...s.dir],
+          normal: outN,
           gun: s.gun,
+          source: s.source,
+          guided: !!s.guided,
+          damage: s.damage,
           team: s.team,
           life: dur,
           max: dur,
@@ -486,22 +508,38 @@ export class Match {
       } else {
         const hitInfo = raycastMaterial(a, b);
         const mat = hitInfo?.mat || (p[1] >= .08 ? 'steel' : 'concrete');
+        const normal = hitInfo?.normal || [0, 1, 0];
         const metal = mat === 'steel';
-        const dur = s.gun === 'MS10' ? .34 : .26;
+        const dur = (s.gun === 'MS10' || s.source === 'p1') ? .48 : .40;
         this.effects.push({
           kind: 'wall',
           p,
           dir: [...s.dir],
+          normal,
           gun: s.gun,
+          source: s.source,
+          guided: !!s.guided,
           team: s.team,
           metal,
+          mat,
           life: dur,
           max: dur,
           actor: s.owner.id,
           target: false,
           seed: ++this.seq
         });
-        this.event('impact', {point: p, dir: s.dir, normal: hitInfo?.normal || [0, 1, 0], gun: s.gun, metal, mat, actor: s.owner})
+        this.scorches.push({
+          p: [p[0] + normal[0] * .014, p[1] + normal[1] * .014, p[2] + normal[2] * .014],
+          normal,
+          mat,
+          gun: s.gun,
+          source: s.source,
+          life: 1.85,
+          max: 1.85,
+          seed: this.seq
+        });
+        if (this.scorches.length > 26)this.scorches.shift();
+        this.event('impact', {point: p, dir: s.dir, normal, gun: s.gun, metal, mat, actor: s.owner})
       }
       return false
     }
@@ -548,6 +586,8 @@ export class Match {
     this.casings.length = cw;
     for (const e of this.effects)e.life -= dt;
     this.effects = this.effects.filter(e => e.life > 0);
-    if (this.effects.length > 130)this.effects = this.effects.slice(-130)
+    if (this.effects.length > 130)this.effects = this.effects.slice(-130);
+    for (const sc of this.scorches)sc.life -= dt;
+    this.scorches = this.scorches.filter(sc => sc.life > 0)
   }
 }

@@ -1,12 +1,15 @@
 import assert from 'node:assert/strict';
 import {createRequire} from 'node:module';
 import {Match,modes,weapons} from '../dist/js/match.js';
+import {ARV1_VERSION,ARV1_ASSIST_STRENGTH,ARV1_LAUNCH_GAIN,ARV1_LAUNCH_STEP} from '../dist/js/df1.js';
 import {PilotWallet} from '../dist/js/wallet.js';
 import {ThermalOptic} from '../dist/js/optic.js';
 import {eyeOf,targetPoint} from '../dist/js/posture.js';
 import {obstruction,surfaceAt,raycastMaterial} from '../dist/js/yard.js';
-import {perspective,lookAt,multiply,invert4,STRIDE,random} from '../dist/js/geometry.js';
-import {character} from '../dist/js/models.js';
+import {perspective,lookAt,multiply,invert4,STRIDE,random,forward as forwardVec,dot,unit,sub} from '../dist/js/geometry.js';
+import {buildHarbor} from '../dist/js/harbor.js';
+import {character,movingDetails,muzzleFlashMesh} from '../dist/js/models.js';
+import {effectiveSize} from '../dist/js/renderer.js';
 import {shadowModes,SHADOW_FLAME_WORLD_GLSL,sfScreenFS,sfBilateralFS} from '../dist/js/shadowflame.js';
 import {KHDR_TONE_GLSL} from '../dist/js/khdr.js';
 import {BONE,ARTICULATED_RIG_GLSL} from '../dist/js/rig.js';
@@ -22,9 +25,9 @@ function duel(loadout='DF1 OUT',limit='unlimited',multiplier=2,events=[]) {
   return new Match({mode:'1v1', limit, multiplier,loadout},event=>events.push(event));
 }
 function forward(m,actor,frames) {for(let i=0;i<frames;i++){m.time+=h;m.systems(actor,h)}}
-function arrange(m,x,z1,z2){const a=m.player,b=m.actors[1];Object.assign(a,{x,y:0,z:z1,yaw:.025,pitch:Math.atan2(-.38,z1-z2)});Object.assign(b,{x,y:0,z:z2});return [a,b]}
+function arrange(m,x,z1,z2){const a=m.player,b=m.actors[1];Object.assign(a,{x,y:0,z:z1,yaw:.025,pitch:Math.atan2(-.38,z1-z2)});Object.assign(b,{x,y:0,z:z2,vx:0,vy:0,vz:0});return [a,b]}
 function burst(m) {const a=m.player;assert(m.trigger(a));while(a.burstLeft||a.cooldown>1e-7)forward(m,a,1)}
-for(const [id,cap,damage,rate,velocity,burstSize] of [['SW T',10,9,100,100,1],['SRA',30,6,120,80,1],['D1',40,5,100,60,2],['MS10',24,9,130,180,1],['DF1 OUT',50,2.8,150,65,3]]) {
+for(const [id,cap,damage,rate,velocity,burstSize] of [['SW T',10,9,100,100,1],['SRA',30,6,120,80,1],['D1',40,5,100,60,2],['MS10',24,9,130,180,1],['DF1 OUT',95,2.8,300,65,3]]) {
  const w=weapons[id];assert.deepEqual([w.capacity,w.damage,w.rate,w.velocity,w.burst],[cap,damage,rate,velocity,burstSize]);const m=duel(id);burst(m);assert.equal(m.shots.length,burstSize);assert.equal(m.player.mag,cap-burstSize);
 }
 {
@@ -33,17 +36,18 @@ for(const [id,cap,damage,rate,velocity,burstSize] of [['SW T',10,9,100,100,1],['
  assert(Object.entries(weapons).every(([k,w])=>k==='MS10'||ms10.speed>w.speed),'MS10 must have fastest bullet speed');
  assert(Math.abs(ms10.speed/weapons['SW T'].speed-1.8)<1e-6,'MS10 speed ratio 180 relative to SW T 100');
  assert(Math.abs((1/ms10.interval)/(1/weapons['SW T'].interval)-1.3)<1e-6,'MS10 fire rate ratio 130 relative to SW T 100');
- // DF1 OUT full-auto 3-round burst: holding trigger chains consecutive 3-round bursts automatically
+ // DF1 OUT full-auto 3-round burst at 2x fire rate (rate=300, interval=0.08s) and 95-round magazine
  const df=weapons['DF1 OUT'];
- assert(df.auto===true&&df.burst===3,'DF1 OUT must be full-auto 3-round burst');
+ assert(df.auto===true&&df.burst===3&&df.capacity===95&&df.rate===300,'DF1 OUT must be 95-round full-auto 3-round burst at 2x rate');
+ assert(Math.abs(df.interval-0.08)<1e-6,'DF1 OUT shot interval must be 0.08s (exact 2x rate)');
  const m=duel('DF1 OUT');
  const p=m.player;
- // Hold fire for 1.05s at 360Hz -> fires 2 full 3-round bursts (6 shots) + starts 3rd burst (>=7 shots)
+ // Hold fire for 1.05s at 360Hz -> 2x fire rate chains >=12 shots from 95-round mag
  for(let i=0;i<380;i++){if(df.auto)m.trigger(p);m.time+=h;m.systems(p,h)}
- assert(m.shots.length>=6&&p.mag<=44,'Holding fire on DF1 OUT must chain full-auto 3-round bursts');
+ assert(m.shots.length>=12&&p.mag<=83,`Holding fire on DF1 OUT 2x must chain >=12 shots (got ${m.shots.length}, mag=${p.mag})`);
 }
 {
- // Supply tanker: +100 rounds immediately and 1.5x ammo refinement speed (2.0s/round vs 3.0s/round, plus DF1 P1 1.5x), cooldown enforced, reset on respawn.
+ // Supply tanker: +100 rounds immediately and 1.5x ammo refinement speed (0.6667s/round vs 1.0s/round, plus DF1 P1 1.5x), cooldown enforced, reset on respawn.
  const ev=[],m=duel('DF1 OUT','unlimited',2,ev),p=m.player,tk=m.tankers[0];
  assert(m.tankers.length>=3,'Map should place supply tankers');
  const stockBefore=p.stock;
@@ -53,9 +57,9 @@ for(const [id,cap,damage,rate,velocity,burstSize] of [['SW T',10,9,100,100,1],['
  assert.equal(p.ammoRate,1.5,'Tanker boosts ammo refinement to 1.5x');
  assert(tk.cooldown>20,'Tanker enters recharge cooldown');
  assert(ev.some(e=>e.type==='tanker'&&e.actor===p),'Tanker emits event');
- // Verify 1.5x ammo refinement: 3.0s / 1.5 = 2.0s (720 frames at 360Hz)
+ // Verify 1.5x ammo refinement on 1s/round base: 1.0s / 1.5 = 2/3 s = 240 frames at 360Hz
  p.stock=90;p.ammoClock=0;
- forward(m,p,719);assert.equal(p.stock,90);
+ forward(m,p,239);assert.equal(p.stock,90);
  forward(m,p,1);assert.equal(p.stock,91);
  // Verify DF1 P1 also refines at 1.5x: 8.0s / 1.5 = 5.3333s (1920 frames at 360Hz)
  p.df.p1=15;p.df.p1Clock=0;
@@ -74,15 +78,55 @@ for(const [id,cap,damage,rate,velocity,burstSize] of [['SW T',10,9,100,100,1],['
  assert(whiz&&whiz.dist<6&&whiz.gun==='MS10'&&Number.isFinite(whiz.pan),'Near-miss shot emits spatial whiz event');
 }
 {
- const m=duel(),[p,t]=arrange(m,2,85,75);assert(obstruction(eyeOf(p),targetPoint(t))>1);forward(m,p,129);assert(!p.df.locked);forward(m,p,27);assert(p.df.locked);const yaw=p.yaw;burst(m);assert(Math.abs(p.yaw)<Math.abs(yaw)&&Math.abs(yaw-p.yaw)<=.0131);
- arrange(m,-7.8,13,2);assert(obstruction(eyeOf(p),targetPoint(t))<=1);const before=p.yaw;assert(m.trigger(p));assert.equal(before,p.yaw);forward(m,p,204);assert(!p.df.locked);
+ // DF1 OUT ARV1.1 bullet-side auto-aim (1.6x * 1.1 = 1.76x, ZERO camera mutation, kinematic lead prediction, 360Hz homing & occlusion safety)
+ assert.equal(ARV1_VERSION,'1.1');
+ assert(Math.abs(ARV1_ASSIST_STRENGTH-1.76)<1e-6,'ARV1.1 strength must be 1.6 * 1.1 = 1.76');
+ assert(Math.abs(ARV1_LAUNCH_GAIN-0.4928)<1e-6&&Math.abs(ARV1_LAUNCH_STEP-0.02288)<1e-6);
+ const m=duel(),[p,t]=arrange(m,2,85,75);
+ assert(obstruction(eyeOf(p),targetPoint(t))>1);
+ forward(m,p,118);assert(!p.df.locked,'ARV1.1 focus should still be locking before 0.36s');
+ forward(m,p,20);assert(p.df.locked,'ARV1.1 must acquire focus lock cleanly');
+ const yaw0=p.yaw,pitch0=p.pitch;
+ const rawDir=forwardVec(yaw0,pitch0);
+ const toTarget=unit(sub(targetPoint(t),eyeOf(p)));
+ assert(m.trigger(p));
+ assert.equal(p.yaw,yaw0,'ARV1.1 bullet-side auto-aim must NOT mutate player camera yaw');
+ assert.equal(p.pitch,pitch0,'ARV1.1 bullet-side auto-aim must NOT mutate player camera pitch');
+ const s0=m.shots[0];
+ assert(s0&&s0.guided&&s0.homingTargetId===t.id,'Locked DF1 OUT shot must be bullet-guided toward target');
+ assert(dot(s0.dir,toTarget)>dot(rawDir,toTarget)+1e-4,'Bullet launch vector must deflect closer to target than raw camera aim');
+ // Step bullet in flight: verify 360Hz geodesic homing curve + curved trail recording
+ for(let i=0;i<14&&m.shots.includes(s0);i++){m.time+=h;m.projectile(s0,h)}
+ assert(s0.homingTurned>0&&s0.trail.length>=2,'Guided DF1 OUT bullet must curve smoothly in flight and record curved trail');
+ // Verify ARV1.1 kinematic velocity lead prediction shifts launch direction toward moving enemy trajectory
+ const mLead=duel(),[pL,tL]=arrange(mLead,2,85,72);
+ assert(obstruction(eyeOf(pL),targetPoint(tL))>1);
+ forward(mLead,pL,145);assert(pL.df.locked);
+ assert(mLead.trigger(pL));const staticDirX=mLead.shots[0].dir[0];
+ const mLead2=duel(),[pL2,tL2]=arrange(mLead2,2,85,72);
+ forward(mLead2,pL2,145);assert(pL2.df.locked);
+ tL2.vx=5.5;
+ assert(mLead2.trigger(pL2));const movingDirX=mLead2.shots[0].dir[0];
+ assert(movingDirX>staticDirX+0.002,'ARV1.1 velocity lead prediction must bias guided shot ahead of strafing enemy');
+ // Verify occlusion behind steel container cancels bullet guidance and drops focus lock
+ arrange(m,-7.8,13,2);assert(obstruction(eyeOf(p),targetPoint(t))<=1);
+ m.shots.length=0;p.cooldown=0;p.burstLeft=0;
+ const before=p.yaw;assert(m.trigger(p));assert.equal(before,p.yaw);
+ assert(!m.shots[0].guided,'Occluded DF1 OUT shot must NOT be guided');
+ forward(m,p,180);assert(!p.df.locked);
 }
 {
- const m=duel(),p=m.player;p.df.pattern='spread';p.df.boost=true;burst(m);assert.equal(m.shots.length,4);assert.equal(p.mag,47);assert.equal(p.df.p1,19);assert(new Set(m.shots.map(s=>s.dir.join(','))).size>=3);
- burst(m);assert.equal(m.shots.length,9);assert.equal(p.df.p1,17);assert.equal(p.mag,44);burst(m);burst(m);assert(!p.df.boost&&p.df.cooling>0);const left=p.df.p1,main=p.mag;burst(m);assert.equal(p.df.p1,left);assert.equal(p.mag,main-3);forward(m,p,1830);assert.equal(p.df.cooling,0);
+ const m=duel(),p=m.player;p.df.pattern='spread';p.df.boost=true;burst(m);assert.equal(m.shots.length,4);assert.equal(p.mag,92);assert.equal(p.df.p1,19);assert(new Set(m.shots.map(s=>s.dir.join(','))).size>=3);
+ burst(m);assert.equal(m.shots.length,9);assert.equal(p.df.p1,17);assert.equal(p.mag,89);burst(m);burst(m);assert(!p.df.boost&&p.df.cooling>0);const left=p.df.p1,main=p.mag;burst(m);assert.equal(p.df.p1,left);assert.equal(p.mag,main-3);forward(m,p,1830);assert.equal(p.df.cooling,0);
 }
 {
- const m=duel(),p=m.player;p.stock=97;p.shield=7;p.hp=44;p.df.p1=17;forward(m,p,1079);assert.equal(p.stock,97);forward(m,p,1);assert.equal(p.stock,98);forward(m,p,719);assert.equal(p.shield,7);forward(m,p,1);assert.equal(p.shield,8);forward(m,p,1079);assert.equal(p.df.p1,17);forward(m,p,1);assert.equal(p.df.p1,18);forward(m,p,9000);assert.deepEqual([p.stock,p.shield,p.df.p1,p.hp],[100,10,20,44]);p.mag=46;assert(m.reload(p));forward(m,p,666);assert.deepEqual([p.mag,p.stock],[50,96]);
+ // Separate regeneration timers: 1.0s/round ammo stock, 5.0s/shield, 8.0s/P1, and 95-round DF1 OUT reload
+ const m=duel(),p=m.player;p.stock=97;p.shield=7;p.hp=44;p.df.p1=17;
+ forward(m,p,359);assert.equal(p.stock,97);forward(m,p,1);assert.equal(p.stock,98);
+ forward(m,p,1439);assert.equal(p.shield,7);forward(m,p,1);assert.equal(p.shield,8);
+ forward(m,p,1079);assert.equal(p.df.p1,17);forward(m,p,1);assert.equal(p.df.p1,18);
+ forward(m,p,9000);assert.deepEqual([p.stock,p.shield,p.df.p1,p.hp],[100,10,20,44]);
+ p.mag=91;assert(m.reload(p));forward(m,p,666);assert.deepEqual([p.mag,p.stock],[95,96]);
 }
 {
  const ev=[],m=duel('DF1 OUT','points',2,ev),[p,t]=arrange(m,2,85,75);const target=targetPoint(t);p.yaw=0;p.pitch=Math.atan2(target[1]-eyeOf(p)[1],10);const until=(fn)=>{for(let i=0;i<24000&&!fn();i++){m.time+=h;m.systems(p,h);if(!p.cooldown&&!p.burstLeft)m.trigger(p);m.shots=m.shots.filter(s=>m.projectile(s,h));}};until(()=>!t.alive);assert(!t.alive&&p.kills===1);m.damage(t,p,1000);assert.deepEqual(m.scores,[1,0]);assert.equal(p.earned,10);assert.equal(t.earned,0);m.spawn(t);m.damage(t,p,111);assert(m.ended&&m.winner===0);assert.deepEqual(m.scores,[2,0]);assert.equal(p.earned,20);assert.equal(new Set(ev.filter(e=>e.type==='point').map(e=>e.receipt)).size,2);
@@ -105,8 +149,8 @@ for (const [mode,counts] of Object.entries(modes)) {
  } else console.log('Thermal canvas check skipped in Node (no @napi-rs/canvas); verified in Chromium.');
 }
 {
- // Verify invert4 precision (VP * invVP = I) for Shadow Flame 1.0 Pro world-position depth reconstruction
- const vp=multiply(perspective(24.7*Math.PI/180,16/9),lookAt([2.5,2.35,73.5],[0.5,1.55,42.0]));
+ // Verify invert4 precision (VP * invVP = I) for Shadow Flame 1.0 Pro world-position depth reconstruction at widened 40.1° FOV
+ const vp=multiply(perspective(40.1*Math.PI/180,16/9),lookAt([2.5,2.35,73.5],[0.5,1.55,42.0]));
  const inv=invert4(vp);
  const prod=multiply(vp,inv);
  for(let r=0;r<4;r++)for(let c=0;c<4;c++){
@@ -253,14 +297,18 @@ for (const [mode,counts] of Object.entries(modes)) {
  });
 }
 {
- // High-detail 16-joint sculpted humanoid geometry verification (standard & NV2.1 spy, high & low detail)
+ // High-detail & Lightweight Mode 16-joint humanoid geometry verification
  const stdHi=character(0,'SRA','standard','high');
  const stdLo=character(0,'SRA','standard','low');
+ const stdLite=character(0,'SRA','standard','lite');
  const spyHi=character(0,'SRA','spy','high');
  const spyLo=character(0,'SRA','spy','low');
+ const spyLite=character(0,'SRA','spy','lite');
  assert(stdHi.count>stdLo.count*1.25,`High-detail sculpted mesh (${stdHi.count} verts) must be richer than low-detail (${stdLo.count} verts)`);
  assert(spyHi.count>spyLo.count*1.25,'Spy high-detail sculpted mesh must be richer than low-detail');
- for (const [label,mesh] of [['stdHi',stdHi],['stdLo',stdLo],['spyHi',spyHi],['spyLo',spyLo]]) {
+ assert(stdLite.count<stdHi.count*0.25,`Lightweight character (${stdLite.count}) must reduce vertices >75% vs high (${stdHi.count})`);
+ assert(spyLite.count<spyHi.count*0.25,`Lightweight spy (${spyLite.count}) must reduce vertices >75% vs high (${spyHi.count})`);
+ for (const [label,mesh] of [['stdHi',stdHi],['stdLo',stdLo],['stdLite',stdLite],['spyHi',spyHi],['spyLo',spyLo],['spyLite',spyLite]]) {
   const bones=new Set();
   let minY=Infinity,maxY=-Infinity,emissiveVerts=0;
   for (let i=0;i<mesh.data.length;i+=STRIDE) {
@@ -282,7 +330,47 @@ for (const [mode,counts] of Object.entries(modes)) {
  }
  assert(spyHi.count!==stdHi.count,'NV2.1 Spy variant must feature distinct sculpted NVG/stealth geometry');
  assert(ARTICULATED_RIG_GLSL.includes('isPatella'),'rig.js must include bisector floating patella knee-cap motion');
- console.log('Sculpted 16-joint meshes OK:',{stdHiVerts:stdHi.count,stdLoVerts:stdLo.count,spyHiVerts:spyHi.count,spyLoVerts:spyLo.count});
+
+ // Lightweight Mode harbor LOD, resolution scaling, and enhanced vs lite VFX mesh verification
+ const hFull=buildHarbor('full'),hLite=buildHarbor('lite');
+ assert(hLite.count<hFull.count*0.60,`Lightweight harbor (${hLite.count}) must significantly reduce geometry vs full (${hFull.count})`);
+ for (let i=0;i<hLite.data.length;i+=STRIDE) {
+  assert(Number.isFinite(hLite.data[i])&&Number.isFinite(hLite.data[i+1])&&Number.isFinite(hLite.data[i+2]),'Lite harbor vertices must be finite');
+ }
+ assert.deepEqual(effectiveSize({resolution:'HD',lightMode:false}),[1280,720]);
+ assert.deepEqual(effectiveSize({resolution:'FHD',lightMode:false}),[1920,1080]);
+ assert.deepEqual(effectiveSize({resolution:'2K',lightMode:false}),[2560,1440]);
+ assert.deepEqual(effectiveSize({resolution:'HD',lightMode:true}),[854,480]);
+ assert.deepEqual(effectiveSize({resolution:'FHD',lightMode:true}),[960,540]);
+ assert.deepEqual(effectiveSize({resolution:'2K',lightMode:true}),[1280,720]);
+
+ const mFx=duel('DF1 OUT');
+ const [pFx,tFx]=arrange(mFx,2,85,75);
+ forward(mFx,pFx,145);assert(mFx.trigger(pFx));
+ for(let i=0;i<10;i++){mFx.time+=h;mFx.shots=mFx.shots.filter(s=>mFx.projectile(s,h))}
+ mFx.effects.push(
+  {kind:'shield',p:[2,1.3,75],dir:[0,0,-1],normal:[0,0,1],gun:'DF1 OUT',guided:true,life:0.18,max:0.24,seed:2},
+  {kind:'break',p:[2,1.3,75],dir:[0,0,-1],normal:[0,0,1],gun:'MS10',life:0.26,max:0.36,seed:3},
+  {kind:'hit',p:[2,1.2,75],dir:[0,0,-1],normal:[0,0,1],gun:'DF1 OUT',guided:true,life:0.18,max:0.26,seed:4},
+  {kind:'kill',p:[2,1.2,75],dir:[0,0,-1],normal:[0,0,1],team:1,life:0.35,max:0.54,seed:5},
+  {kind:'wall',p:[-8,1.4,60],dir:[-1,0,0],normal:[1,0,0],mat:'steel',metal:true,gun:'MS10',life:0.18,max:0.26,seed:6}
+ );
+ mFx.scorches.push({p:[-8,1.4,60],normal:[1,0,0],mat:'steel',gun:'MS10',life:1.5,max:1.8});
+ const fxFull=movingDetails(mFx,1.2,true,false);
+ const fxLite=movingDetails(mFx,1.2,false,true);
+ const mfFull=muzzleFlashMesh('MS10',1,1,true,false);
+ const mfLite=muzzleFlashMesh('MS10',1,1,false,true);
+ assert(fxFull.count>fxLite.count*2.5,`Deluxe VFX (${fxFull.count}) must be dramatically richer than Lightweight VFX (${fxLite.count})`);
+ assert(mfFull.count>mfLite.count,'Full muzzle flash must have more detail than lite muzzle flash');
+ for (const mesh of [fxFull,fxLite,mfFull,mfLite]) {
+  for (let i=0;i<mesh.data.length;i+=STRIDE) assert(Number.isFinite(mesh.data[i])&&Number.isFinite(mesh.data[i+1])&&Number.isFinite(mesh.data[i+2]),'VFX mesh vertices must be finite');
+ }
+ console.log('Sculpted 16-joint & Lightweight LOD OK:',{
+  stdHiVerts:stdHi.count,stdLiteVerts:stdLite.count,
+  harborFullVerts:hFull.count,harborLiteVerts:hLite.count,
+  fxFullVerts:fxFull.count,fxLiteVerts:fxLite.count
+ });
 }
-console.log('360Hz sim, weapon specs (incl. MS10 & DF1 OUT full-auto 3-round burst), supply tankers, bullet whiz, focus and occlusion, credits, EVR1, separate regeneration timers, P1 heat, scoring, 16-joint sculpted rig, KHDR, Shadow Flame 1.0 Flash/Pro, Sound Engin 1.0, Human-Realistic Aiming, NV2.1 Spy Engine, and all matches passed.');
+console.log('360Hz sim, weapon specs (DF1 OUT 95-mag 2x rate, MS10), 1s/round ammo regen, supply tankers, ARV1.1 1.76x bullet-side lead auto-aim, 40.1° FOV, deluxe bullet/impact VFX, Lightweight Mode LOD, 16-joint sculpted rig, KHDR, Shadow Flame 1.0 Flash/Pro, Sound Engin 1.0, Human-Realistic Aiming, NV2.1 Spy Engine, and all matches passed.');
+
 

@@ -1,16 +1,16 @@
 import {PilotEquipment} from './df-hud.js';
 import {eyeOf} from './posture.js';
-import {Renderer, sizes, qualityLevels, shadowModes} from './renderer.js';
+import {Renderer, sizes, effectiveSize, qualityLevels, shadowModes} from './renderer.js';
 import {titleCamera} from './harbor.js';
 import {Match, modes, weapons} from './match.js';
 import {forward, add, clamp} from './geometry.js';
 import {SoundEngin, AUDIO_MODES, SOUND_ENGIN_VERSION} from './audio.js';
 const $ = s => document.getElementById(s),
   views = {title: 'titleView', lobby: 'lobby', settings: 'settings', game: 'hud', pause: 'pause', results: 'results'};
-// Optically exact further 2/3 view width relative to 36.4° / 19.4° FOV:
-// 2 * atan((2/3) * tan(36.4°/2)) = 24.7°, 2 * atan((2/3) * tan(19.4°/2)) = 13.0°.
-const BASE_FOV = 24.7, ADS_FOV = 13.0;
-const defaults = {resolution: 'HD', graphics: 'high', rate: 360, rateV2: true, hdr: true, khdr: true, shadowMode: 'pro', shadows: true, audioMode: 'hrtf', sensitivity: 1, volume: 55, sound: false};
+// Optically exact +2/3 wider view width relative to 24.7° / 13.0° FOV:
+// 2 * atan((5/3) * tan(24.7°/2)) = 40.1°, 2 * atan((5/3) * tan(13.0°/2)) = 21.5°.
+const BASE_FOV = 40.1, ADS_FOV = 21.5;
+const defaults = {lightMode: false, resolution: 'HD', graphics: 'high', rate: 360, rateV2: true, hdr: true, khdr: true, shadowMode: 'pro', shadows: true, audioMode: 'hrtf', sensitivity: 1, volume: 55, sound: false};
 const graphicsHints = {
   standard: '軽量描画 · 基本ライト · 標準反射',
   high: '高精細質感 · 動的ライト · 標準水面反射',
@@ -58,10 +58,11 @@ if (!sizes[settings.resolution])settings.resolution = 'HD';
 if (!(settings.graphics in qualityLevels))settings.graphics = 'high';
 if (!(settings.shadowMode in shadowModes))settings.shadowMode = 'pro';
 if (!(settings.audioMode in AUDIO_MODES))settings.audioMode = 'hrtf';
+settings.lightMode = !!settings.lightMode;
 settings.shadows = settings.shadowMode !== 'off';
 settings.khdr = !!settings.khdr;
 if (settings.khdr) settings.hdr = true;
-if (![0, 120, 360].includes(settings.rate))settings.rate = 360;
+if (![0, 60, 120, 360].includes(settings.rate))settings.rate = 360;
 if (!modes[rules.mode])rules.mode = '3v3';
 if (!weapons[rules.loadout])rules.loadout = 'SW T';
 rules.allyNv21 = [0, 1, 2].includes(Number(rules.allyNv21)) ? Number(rules.allyNv21) : 0;
@@ -463,43 +464,74 @@ function lobby() {
   $('start').disabled = !ready || starting;
   equipment.lobby(rules.loadout)
 }
+const effectiveAudioMode = () => settings.lightMode ? 'stereo' : settings.audioMode;
+function applyLightModeChrome() {
+  const lite = !!settings.lightMode;
+  document.body.classList.toggle('light-mode', lite);
+  const chip = $('liteChip');
+  if (chip) chip.hidden = !lite;
+  const appEl = $('app');
+  if (appEl) {
+    appEl.dataset.lightMode = String(lite);
+    appEl.dataset.audioMode = effectiveAudioMode();
+  }
+  audio.setMode(effectiveAudioMode());
+}
 function setGraphics(key, value) {
   settings[key] = value;
   if (key === 'khdr' && value) settings.hdr = true;
   if (key === 'hdr' && !value) settings.khdr = false;
   if (key === 'shadowMode') settings.shadows = value !== 'off';
+  applyLightModeChrome();
   save();
   renderer?.settings(settings);
   drawSettings()
 }
 function drawSettings() {
+  const lite = !!settings.lightMode;
   group('resolution', settings.resolution, k => setGraphics('resolution', k));
   group('graphics', settings.graphics, k => setGraphics('graphics', k));
   group('rate', settings.rate, k => setGraphics('rate', Number(k)));
   group('shadowMode', settings.shadowMode, k => setGraphics('shadowMode', k));
   group('audioMode', settings.audioMode, k => {
     settings.audioMode = k;
-    audio.setMode(k);
+    applyLightModeChrome();
     save();
     drawSettings()
   });
-  const [w, h] = sizes[settings.resolution];
-  $('resolutionHint').textContent = `${w.toLocaleString('en-US')} × ${h.toLocaleString('en-US')} px`;
-  $('graphicsHint').textContent = !renderer?.native && settings.graphics === 'extra' ? '互換描画 · エフェクト・パーティクル強化' : graphicsHints[settings.graphics];
+  $('lightModeSwitch').setAttribute('aria-checked', String(lite));
+  $('lightModeHint').textContent = lite
+    ? 'オン · 低ポリ地形/NPC · 影/反射/KHDR/Bloom省略 · 低解像度 · 軽量ステレオ音響'
+    : 'オフ · 通常/高精細描画（詳細度・影・KHDR・立体音響をそのまま適用）';
+  const [w, h] = effectiveSize(settings);
+  $('resolutionHint').textContent = lite
+    ? `${w.toLocaleString('en-US')} × ${h.toLocaleString('en-US')} px（軽量スケール）`
+    : `${w.toLocaleString('en-US')} × ${h.toLocaleString('en-US')} px`;
+  $('graphicsHint').textContent = lite
+    ? '軽量モードで超軽量シェーダー・低ポリLODを適用中（解除で復帰）'
+    : !renderer?.native && settings.graphics === 'extra' ? '互換描画 · エフェクト・パーティクル強化' : graphicsHints[settings.graphics];
   $('hdrSwitch').setAttribute('aria-checked', String(settings.hdr));
   $('khdrSwitch').setAttribute('aria-checked', String(settings.khdr));
-  $('hdrHint').textContent = settings.hdr ? (renderer?.hdrDisplay?.active ? 'HDRディスプレイ出力' : '標準HDR (ACES トーンマッピング)') : '標準レンジ (SDR)';
+  $('hdrHint').textContent = lite
+    ? '軽量モードで標準SDRへ自動切替（解除で復帰）'
+    : settings.hdr ? (renderer?.hdrDisplay?.active ? 'HDRディスプレイ出力' : '標準HDR (ACES トーンマッピング)') : '標準レンジ (SDR)';
   const bitTag = renderer?.floatHDR ? '16bit FP16' : '14-Stop Log-K';
-  $('khdrHint').textContent = settings.khdr
-    ? (renderer?.hdrDisplay?.active ? `KHDR 16×広域HDR出力 · ${bitTag} · K-Filmic · K-Adapt · K-LCE` : `${bitTag} · K-Filmic色相保全 · K-Adapt自動露出 · K-LCE · K-Halo`)
-    : 'オフ · 標準HDR/SDR描画';
-  $('shadowHint').textContent = !renderer?.native && settings.shadowMode !== 'off' ? '互換ソフト影描画' : shadowHints[settings.shadowMode];
-  $('audioHint').textContent = audioHints[settings.audioMode];
+  $('khdrHint').textContent = lite
+    ? '軽量モードでオフスクリーンKHDR/Bloomを省略中（解除で復帰）'
+    : settings.khdr
+      ? (renderer?.hdrDisplay?.active ? `KHDR 16×広域HDR出力 · ${bitTag} · K-Filmic · K-Adapt · K-LCE` : `${bitTag} · K-Filmic色相保全 · K-Adapt自動露出 · K-LCE · K-Halo`)
+      : 'オフ · 標準HDR/SDR描画';
+  $('shadowHint').textContent = lite
+    ? '軽量モードで影描画を自動省略中（解除で復帰）'
+    : !renderer?.native && settings.shadowMode !== 'off' ? '互換ソフト影描画' : shadowHints[settings.shadowMode];
+  $('audioHint').textContent = lite
+    ? '軽量モードで軽量ステレオ3Dへ自動切替（解除で復帰）'
+    : audioHints[settings.audioMode];
   $('sensitivity').value = settings.sensitivity;
   $('sensVal').value = settings.sensitivity.toFixed(1) + '×';
   $('volume').value = settings.volume;
   $('volumeVal').value = settings.volume + '%';
-  $('settingStatus').textContent = '設定は自動保存されます'
+  $('settingStatus').textContent = lite ? '軽量モード有効 · 設定は自動保存されます' : '設定は自動保存されます'
 }
 $('play').onclick = () => {
   if (settings.sound)audio.enable(true).then(soundButton);
@@ -518,12 +550,13 @@ $('pauseSettings').onclick = () => {
 $('sound').onclick = async() => {
   settings.sound = !(settings.sound && audio.on && settings.volume);
   if (settings.sound && !settings.volume)settings.volume = 55;
-  audio.setMode(settings.audioMode);
+  audio.setMode(effectiveAudioMode());
   audio.set(settings.volume / 100);
   await audio.enable(settings.sound);
   save();
   soundButton()
 };
+$('lightModeSwitch').onclick = () => setGraphics('lightMode', !settings.lightMode);
 $('hdrSwitch').onclick = () => setGraphics('hdr', !settings.hdr);
 $('khdrSwitch').onclick = () => setGraphics('khdr', !settings.khdr);
 $('sensitivity').oninput = e => {
@@ -534,7 +567,7 @@ $('sensitivity').oninput = e => {
 $('volume').oninput = e => {
   settings.volume = Number(e.target.value);
   settings.sound = settings.volume > 0;
-  audio.setMode(settings.audioMode);
+  audio.setMode(effectiveAudioMode());
   audio.set(settings.volume / 100);
   audio.enable(settings.sound);
   $('volumeVal').value = settings.volume + '%';
@@ -578,11 +611,11 @@ function startMatch() {
   equipment.prepare(match.player);
   show('game');
   pointer();
-  audio.setMode(settings.audioMode);
+  audio.setMode(effectiveAudioMode());
   if (settings.sound)audio.enable(true);
   audio.set(settings.volume / 100);
   $('startHint').hidden = false;
-  $('startHint').textContent = touch ? '左スティック強前傾でダッシュ · 射撃長押しドラッグで撃ちながら視点移動 · 補給タンカーで +100発' : 'WASD 移動 / Shift・コントローラー強前傾 ダッシュ · 補給タンカーで +100発 / 精製1.5×';
+  $('startHint').textContent = touch ? '左強傾ダッシュ · 射撃ドラッグ視点 · タンカー+100発' : 'WASD 移動 / Shift・コントローラー強前傾 ダッシュ · 補給タンカーで +100発 / 精製1.5×';
   $('combatNotice').textContent = '';
   $('feed').replaceChildren();
   starting = false;
@@ -641,21 +674,6 @@ function hud() {
   $('scoreA').textContent = match.scores[0];
   $('scoreB').textContent = match.scores[1];
   $('hudRule').textContent = Number.isFinite(match.goals[0]) ? (match.goals[0] === match.goals[1] ? `${match.goals[0]} 点先取` : `${match.goals[0]} / ${match.goals[1]} 点先取`) : '無制限';
-  const spy = match.nv.getSpyStatus?.();
-  const spyEl = $('spyStatus');
-  if (spy?.active) {
-    spyEl.hidden = false;
-    $('spyTag').textContent = `NV2.1 ${spy.name}`;
-    $('spyMode').textContent = !spy.alive
-      ? '再出撃待機'
-      : spy.markName && spy.mode === 'SPY_INFILTRATE'
-        ? `${spy.label} · ${spy.markName}`
-        : spy.label;
-    spyEl.classList.toggle('is-strike', spy.alive && spy.mode === 'SPY_STRIKE');
-    spyEl.classList.toggle('is-dodge', spy.alive && spy.dodging);
-  } else {
-    spyEl.hidden = true;
-  }
   $('hpVal').textContent = a.hp;
   $('shieldVal').textContent = a.shield;
   $('hpBar').style.width = a.hp + '%';
@@ -697,7 +715,7 @@ function resultUI() {
 }
 function turn(dx, dy) {
   if (screen !== 'game' || !match?.player.alive)return;
-  const a = match.player, fovScale = a.df?.ads ? .26 : .38, k = .00215 * settings.sensitivity * fovScale;
+  const a = match.player, fovScale = a.df?.ads ? .43 : .63, k = .00215 * settings.sensitivity * fovScale;
   const dYaw = dx * k, dPitch = -dy * k;
   a.yaw += dYaw;
   a.pitch = clamp(a.pitch + dPitch, -1.31, 1.31);
@@ -966,7 +984,7 @@ function frame(ms) {
   if (screen === 'game' && match) {
     accum = Math.min(accum + dt, 1 / 15);
     while (accum + 1e-9 >= fixed && screen === 'game') {
-      const fovScale = match.player.df?.ads ? .26 : .38;
+      const fovScale = match.player.df?.ads ? .43 : .63;
       const yaw = (Number(keys.has('ArrowRight')) - Number(keys.has('ArrowLeft'))) * 1.75 * fixed * settings.sensitivity * fovScale,
         pitch = (Number(keys.has('ArrowUp')) - Number(keys.has('ArrowDown'))) * 1.25 * fixed * settings.sensitivity * fovScale;
       if (match.player.alive) {
@@ -1000,7 +1018,7 @@ function frame(ms) {
     $('damageVeil').style.opacity = hurt;
     if (timeNow >= hudAt) {
       hud();
-      hudAt = timeNow + .065
+      hudAt = timeNow + (settings.lightMode ? .10 : .065)
     }
   }
   if (match) {
@@ -1016,7 +1034,7 @@ function frame(ms) {
     $('cinema-veil').style.opacity = cam.fade
   }
   audio.update(dt, match, cam);
-  const cinematic = !match && !renderer.native && settings.shadows && settings.hdr;
+  const cinematic = !match && !renderer.native && !settings.lightMode && settings.shadows && settings.hdr;
   $('app').classList.toggle('cinematic', cinematic);
   if (cinematic)$('cinema-veil').style.opacity = 0; else renderer.render(cam, timeNow, match, {
     firstPerson: !!match?.player.alive && !match?.player.df?.ads,
@@ -1036,21 +1054,22 @@ function frame(ms) {
       heat: gunMotion.heat
     }
   });
-  equipment.draw(renderer, match, cam, timeNow, screen === 'game');
+  equipment.draw(renderer, match, cam, timeNow, screen === 'game', !!settings.lightMode);
   if (resetView) {
     resetView = false;
     $('loading').hidden = true
   }
   const appEl = $('app');
   appEl.dataset.renderer = renderer.native ? 'webgl2' : 'software';
+  appEl.dataset.lightMode = String(!!settings.lightMode);
   appEl.dataset.audioEngine = SOUND_ENGIN_VERSION;
-  appEl.dataset.audioMode = settings.audioMode;
+  appEl.dataset.audioMode = effectiveAudioMode();
   appEl.dataset.audioState = audio.ctx?.state || (audio.on ? 'ready' : 'off');
 }
 async function init() {
   controls();
+  applyLightModeChrome();
   soundButton();
-  audio.setMode(settings.audioMode);
   audio.set(settings.volume / 100);
   $('start').disabled = true;
   try {

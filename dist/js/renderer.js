@@ -10,6 +10,11 @@ import {KHDRPipeline} from './khdr.js';
 
 const I = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
 export const sizes = {HD: [1280, 720], FHD: [1920, 1080], '2K': [2560, 1440]};
+export const liteSizes = {HD: [854, 480], FHD: [960, 540], '2K': [1280, 720]};
+export function effectiveSize(config) {
+  const table = config?.lightMode ? liteSizes : sizes;
+  return table[config?.resolution] || table.HD;
+}
 export const qualityLevels = {standard: 0, high: 1, extra: 2};
 export {shadowModes};
 
@@ -173,27 +178,45 @@ export class Renderer {
     this.gl.useProgram(p.obj);
     for (const [k, v] of Object.entries(pairs)) if (p[k] != null) this.gl.uniform1i(p[k], v);
   }
+  isLite() {
+    return !!this.config?.lightMode;
+  }
+  ensureLiteMeshes() {
+    if (this.terrainLite) return;
+    const gl = this.gl;
+    this.terrainLite = gpuMesh(gl, buildHarbor('lite'));
+    this.actorsLite = {};
+    for (const g of npcWeapons) for (const team of [0, 1]) {
+      this.actorsLite[team + g] = gpuMesh(gl, character(team, g, 'standard', 'lite'));
+      this.actorsLite['spy_' + team + g] = gpuMesh(gl, character(team, g, 'spy', 'lite'));
+    }
+  }
   quality() {
+    if (this.isLite()) return -1;
     return qualityLevels[this.config?.graphics] ?? 1;
   }
   shadowMode() {
+    if (this.isLite()) return 0;
     if (this.config?.shadowMode in shadowModes) return shadowModes[this.config.shadowMode];
     return this.config?.shadows ? 2 : 0;
   }
   useOffscreen() {
+    if (this.isLite()) return false;
     return this.quality() >= 2 || !!this.config?.khdr || this.shadowMode() >= 2;
   }
   settings(config) {
-    const prevKHDR = !!this.config?.khdr;
+    const prevKHDR = !this.config?.lightMode && !!this.config?.khdr;
     this.config = {...config};
-    this.hdrDisplay.choose(config.hdr, config.khdr);
-    if (config.khdr && !prevKHDR) this.khdr?.resetAdaptation();
+    const lite = this.isLite();
+    if (lite) this.ensureLiteMeshes();
+    this.hdrDisplay.choose(!lite && config.hdr, !lite && config.khdr);
+    if (!lite && config.khdr && !prevKHDR) this.khdr?.resetAdaptation();
     this.resize();
     this.mirrorAt = -10;
   }
   resize() {
     if (!this.config) return;
-    let [w, h] = sizes[this.config.resolution] || sizes.HD;
+    let [w, h] = effectiveSize(this.config);
     if (innerHeight > innerWidth) [w, h] = [h, w];
     if (this.canvas.width !== w || this.canvas.height !== h) {
       this.canvas.width = w;
@@ -201,8 +224,10 @@ export class Renderer {
     }
     this.aspect = this.canvas.clientWidth / Math.max(1, this.canvas.clientHeight);
     if (this.useOffscreen() && this.khdr) this.khdr.ensure(w, h);
-    if (this.quality() >= 2) this.ensureMirror(1024, 576);
-    else this.ensureMirror(512, 288);
+    if (!this.isLite()) {
+      if (this.quality() >= 2) this.ensureMirror(1024, 576);
+      else this.ensureMirror(512, 288);
+    }
   }
   draw(mesh) {
     const gl = this.gl;
@@ -226,18 +251,21 @@ export class Renderer {
       const d = Math.hypot(e.p[0] - eye[0], e.p[1] - eye[1], e.p[2] - eye[2]);
       if (d > 48) continue;
       const frac = clamp(e.life / (e.max || .2), 0, 1);
-      if (e.kind === 'kill') list.push({p: e.p, i: frac * 5.2, c: [1.8, 1.25, .48], pri: 90 - d});
-      else if (e.kind === 'break') list.push({p: e.p, i: frac * 4.5, c: [.45, 1.65, 1.9], pri: 85 - d});
-      else if (e.kind === 'tanker') list.push({p: e.p, i: frac * 6.0, c: [.55, 1.8, 1.55], pri: 88 - d});
-      else if (e.kind === 'muzzle' && !e.human) list.push({p: e.p, i: frac * 3.0, c: e.gun === 'MS10' ? [.42, 1.4, 1.8] : [1.7, 1.05, .42], pri: 70 - d});
-      else if (e.kind === 'shield') list.push({p: e.p, i: frac * 2.5, c: [.45, 1.5, 1.65], pri: 65 - d});
-      else if (e.kind === 'hit' || e.kind === 'wall') list.push({p: e.p, i: frac * 2.0, c: e.gun === 'MS10' ? [.48, 1.4, 1.7] : [1.5, .95, .42], pri: 50 - d});
+      if (e.kind === 'kill') list.push({p: e.p, i: frac * 6.4, c: [2.0, 1.35, .52], pri: 94 - d});
+      else if (e.kind === 'break') list.push({p: e.p, i: frac * 5.6, c: [.42, 1.85, 2.15], pri: 88 - d});
+      else if (e.kind === 'tanker') list.push({p: e.p, i: frac * 6.0, c: [.55, 1.8, 1.55], pri: 86 - d});
+      else if (e.kind === 'muzzle' && !e.human) list.push({p: e.p, i: frac * 3.4, c: e.gun === 'MS10' ? [.42, 1.5, 1.95] : e.source === 'p1' ? [1.45, .65, 1.95] : [1.85, 1.15, .44], pri: 70 - d});
+      else if (e.kind === 'shield') list.push({p: e.p, i: frac * 3.4, c: [.42, 1.7, 1.95], pri: 68 - d});
+      else if (e.kind === 'hit' || e.kind === 'wall') {
+        const ic = e.source === 'p1' ? [1.45, .65, 1.95] : e.gun === 'MS10' ? [.46, 1.6, 1.95] : e.kind === 'hit' ? [1.85, 1.15, .45] : [1.65, 1.05, .45];
+        list.push({p: e.p, i: frac * (e.kind === 'hit' ? 3.1 : 2.5), c: ic, pri: (e.kind === 'hit' ? 62 : 52) - d});
+      }
     }
     for (const s of match.shots) {
       const d = Math.hypot(s.p[0] - eye[0], s.p[2] - eye[2]);
-      if (d > 38) continue;
-      const c = s.gun === 'MS10' ? [.42, 1.5, 1.9] : s.team ? [1.5, .82, .38] : [.55, 1.5, 1.25];
-      list.push({p: s.p, i: s.gun === 'MS10' ? 2.4 : 1.35, c, pri: 55 - d});
+      if (d > 42) continue;
+      const c = s.source === 'p1' ? [1.45, .68, 2.05] : s.gun === 'MS10' ? [.38, 1.65, 2.1] : s.guided ? [.38, 1.85, 1.65] : s.team ? [1.65, .86, .38] : [.58, 1.55, 1.28];
+      list.push({p: s.p, i: s.gun === 'MS10' ? 2.9 : (s.source === 'p1' || s.guided) ? 2.2 : 1.6, c, pri: 58 - d});
     }
     if (match.tankers) {
       for (const tk of match.tankers) {
@@ -255,7 +283,7 @@ export class Renderer {
       this.lightCol.set(L.c, k * 3);
     }
   }
-  worldPass(vp, eye, output, khdrOn, sfMode, quality, time) {
+  worldPass(vp, eye, output, khdrOn, sfMode, quality, time, terrainMesh = this.terrain) {
     const gl = this.gl, p = this.world;
     gl.useProgram(p.obj);
     gl.uniformMatrix4fv(p.uVP, false, vp);
@@ -278,14 +306,15 @@ export class Renderer {
     gl.uniform4fv(p.uActors, this.actorData);
     gl.uniform4fv(p.uLights, this.lightPos);
     gl.uniform3fv(p.uLightCol, this.lightCol);
-    this.draw(this.terrain);
+    this.draw(terrainMesh);
   }
   render(cam, time, match = null, view = {}) {
     const gl = this.gl,
       cfg = this.config || {},
+      lite = this.isLite(),
       quality = this.quality(),
-      extra = quality >= 2,
-      khdrOn = !!cfg.khdr,
+      extra = !lite && quality >= 2,
+      khdrOn = !lite && !!cfg.khdr,
       sfMode = this.shadowMode(),
       offscreen = this.useOffscreen(),
       eye = cam.pos,
@@ -297,6 +326,10 @@ export class Renderer {
       proj = perspective(cam.fov * Math.PI / 180, this.aspect),
       vp = multiply(proj, lookAt(eye, cam.target));
 
+    if (lite) this.ensureLiteMeshes();
+    const activeTerrain = lite ? this.terrainLite : this.terrain;
+    const activeActors = lite ? this.actorsLite : this.actors;
+
     const dt = this.lastRenderTime === null ? (1 / 60) : clamp(time - this.lastRenderTime, .001, .15);
     this.lastRenderTime = time;
 
@@ -305,11 +338,16 @@ export class Renderer {
 
     // Pack live actor positions + crouch factor (w = 1.0 + crouch) for Shadow Flame contact shadows
     this.actorData.fill(0);
-    if (match) match.actors.forEach((a, i) => this.actorData.set([a.x, a.y, a.z, a.alive ? 1 + (a.crouch || 0) : 0], i * 4));
-    this.collectLights(match, eye, fwd, right, up, time);
+    if (match && !lite) match.actors.forEach((a, i) => this.actorData.set([a.x, a.y, a.z, a.alive ? 1 + (a.crouch || 0) : 0], i * 4));
+    if (lite) {
+      this.lightPos.fill(0);
+      this.lightCol.fill(0);
+    } else {
+      this.collectLights(match, eye, fwd, right, up, time);
+    }
 
-    // 1. Shadow Flame 1.0 Depth Pass (Off / 1.0 Flash Dual-Cache / 1.0 Pro Focus-Snapped Dual-Cascade)
-    this.sf.prepare(sfMode, eye, fwd, match, this.terrain, this.actors, m => this.draw(m), time);
+    // 1. Shadow Flame 1.0 Depth Pass (Off in Lightweight Mode / 1.0 Flash Dual-Cache / 1.0 Pro Focus-Snapped Dual-Cascade)
+    this.sf.prepare(sfMode, eye, fwd, match, activeTerrain, activeActors, m => this.draw(m), time);
     this.sf.bindTextures(sfMode);
 
     for (const [i, type, tex] of [
@@ -321,8 +359,8 @@ export class Renderer {
       gl.bindTexture(type, tex);
     }
 
-    // 2. Planar Harbor Water Reflection Pass
-    const seeWater = !match || eye[0] < 1 || fwd[0] < -.16;
+    // 2. Planar Harbor Water Reflection Pass (skipped in Lightweight Mode)
+    const seeWater = !lite && (!match || eye[0] < 1 || fwd[0] < -.16);
     const mirrorInterval = extra ? .045 : .18;
     if (seeWater && (time - this.mirrorAt > mirrorInterval || time < this.mirrorAt)) {
       this.mirrorAt = time;
@@ -334,14 +372,14 @@ export class Renderer {
       gl.viewport(0, 0, this.mirrorDim[0], this.mirrorDim[1]);
       gl.clearColor(0, 0, 0, 0);
       gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-      this.worldPass(this.mirrorVP, re, 3, khdrOn, sfMode, Math.min(1, quality), time);
+      this.worldPass(this.mirrorVP, re, 3, khdrOn, sfMode, Math.min(1, quality), time, activeTerrain);
     }
     gl.activeTexture(gl.TEXTURE4);
     gl.bindTexture(gl.TEXTURE_2D, this.mirrorTex);
 
     // 3. Main World + Actors + Moving Effects + Sky/Sea Pass
     const targetFB = offscreen && this.khdr.targets ? this.khdr.targets.scene.fb : null;
-    const finalOutput = this.hdrDisplay.active ? 2 : (cfg.hdr || khdrOn) ? 1 : 0;
+    const finalOutput = lite ? 0 : (this.hdrDisplay.active ? 2 : (cfg.hdr || khdrOn) ? 1 : 0);
     const sceneOutput = targetFB ? (this.khdr.floatHDR ? 5 : 4) : finalOutput;
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, targetFB);
@@ -349,7 +387,7 @@ export class Renderer {
     gl.clearColor(.24, .35, .39, 1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
-    this.worldPass(vp, eye, sceneOutput, khdrOn, sfMode, quality, time);
+    this.worldPass(vp, eye, sceneOutput, khdrOn, sfMode, quality, time, activeTerrain);
 
     const p = this.world;
     if (match) {
@@ -371,7 +409,7 @@ export class Renderer {
         if (p.uAnim) gl.uniform4f(p.uAnim, a.fwdVel || 0, a.sideVel || 0, a.airBlend || 0, a.landCompress || 0);
         if (p.uAnim2) gl.uniform4f(p.uAnim2, a.pitch || 0, time + a.id * 1.13, a.sprintAmt || 0, a.reloadFrac || 0);
         gl.uniform2f(p.uHitFX, a.hitFlash || 0, a.shieldFlash || 0);
-        this.draw(this.actors[(a.isSpy ? 'spy_' : '') + a.team + a.gun] || this.actors[a.team + a.gun]);
+        this.draw(activeActors[(a.isSpy ? 'spy_' : '') + a.team + a.gun] || activeActors[a.team + a.gun]);
       }
     }
 
@@ -380,7 +418,7 @@ export class Renderer {
     gl.uniform3f(p.uHit, 0, 0, 0);
     gl.uniform2f(p.uRecoil, 0, 0);
     gl.uniform2f(p.uHitFX, 0, 0);
-    const fxMesh = movingDetails(match, time, extra || khdrOn);
+    const fxMesh = movingDetails(match, time, !lite && (extra || khdrOn), lite);
     this.effects.count = fxMesh.count;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.effects.buf);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(fxMesh.data), gl.DYNAMIC_DRAW);
@@ -466,12 +504,12 @@ export class Renderer {
       gl.uniform1i(p.uOutput, sceneOutput);
       gl.uniform1i(p.uKHDR, khdrOn ? 1 : 0);
       gl.uniform2f(p.uRecoil, blowback, a.recoilSide || 0);
-      gl.uniform1f(p.uGunHeat, gunHeat);
+      gl.uniform1f(p.uGunHeat, lite ? 0 : gunHeat);
       gl.uniformMatrix4fv(p.uModel, false, modelM);
       this.draw(this.devices[a.gun]);
 
       if (a.flash > .005) {
-        const mf = muzzleFlashMesh(a.gun, clamp(a.flash / .11, 0, 1), a.shotCount || 1, extra || khdrOn);
+        const mf = muzzleFlashMesh(a.gun, clamp(a.flash / .11, 0, 1), a.shotCount || 1, !lite && (extra || khdrOn), lite);
         this.fpFlash.count = mf.count;
         gl.bindBuffer(gl.ARRAY_BUFFER, this.fpFlash.buf);
         gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(mf.data), gl.DYNAMIC_DRAW);

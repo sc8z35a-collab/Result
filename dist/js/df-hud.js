@@ -94,7 +94,7 @@ export class PilotEquipment {
     $('pauseCredits').hidden = !a?.df;
     this.accountView()
   }
-  draw(renderer, match, cam, t, play) {
+  draw(renderer, match, cam, t, play, lite = false) {
     const a = match?.player,
       d = a?.df,
       on = !!(play && d && a.alive),
@@ -108,8 +108,11 @@ export class PilotEquipment {
     $('lockDot').hidden = true;
     if (!on)return;
     $('reticle').hidden = ads;
-    if (thermal)this.thermal.draw(renderer, match, cam, t);
-    $('focusText').textContent = d.locked ? 'ARV1  •  LOCK' : d.focus ? 'ARV1  ·  焦点 ' + Math.round(d.focus * 100) + '%' : 'ARV1  ·  待機';
+    if (thermal && (!lite || this.lastThermal === undefined || t - this.lastThermal >= .05 || t < this.lastThermal)) {
+      this.lastThermal = t;
+      this.thermal.draw(renderer, match, cam, t);
+    }
+    $('focusText').textContent = d.locked ? 'ARV1.1  •  弾道誘導 1.76× LOCK' : d.focus ? 'ARV1.1  ·  焦点 ' + Math.round(d.focus * 100) + '%' : 'ARV1.1  ·  待機';
     $('dfMode').textContent = (d.pattern === 'central' ? '中央集中' : '散弾') + '  /  ' + (d.scope === 'thermal' ? 'EVR1' : 'プラスチック');
     $('p1Text').textContent = `P1 ${d.p1} / 20　${d.cooling>0?'冷却 '+d.cooling.toFixed(1)+' s':d.boost?'BOOST':'待機'}　${Math.round(d.heat)}%`;
     $('heatBar').style.width = d.heat + '%';

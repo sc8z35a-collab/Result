@@ -3,7 +3,7 @@
 import {buildHarbor} from './harbor.js';
 import {character, viewModel, movingDetails, muzzleFlashMesh} from './models.js';
 import {weapons, npcWeapons} from './match.js';
-import {sizes} from './renderer.js';
+import {effectiveSize} from './renderer.js';
 import {layers, unit, sub, cross, add, scale, dot, clamp} from './geometry.js';
 import {imageFrom, labelNames, makeLabel} from './materials.js';
 const STR = 13, SUN = unit([-.66, .28, -.70]);
@@ -139,13 +139,24 @@ export class SoftwareRenderer {
       this.devices[g] = chunk(viewModel(g))
     }
   }
+  ensureLiteMeshes() {
+    if (this.terrainLite) return;
+    this.terrainLite = chunk(buildHarbor('lite'));
+    this.actorsLite = {};
+    for (const g of npcWeapons) for (const team of [0, 1]) {
+      this.actorsLite[team + g] = chunk(character(team, g, 'standard', 'lite'));
+      this.actorsLite['spy_' + team + g] = chunk(character(team, g, 'spy', 'lite'));
+    }
+  }
   settings(config) {
     this.config = {...config};
-    this.tone = config.khdr ? this.tones.khdr : config.hdr ? this.tones.hdr : this.tones.sdr;
+    if (config.lightMode) this.ensureLiteMeshes();
+    this.tone = config.lightMode ? this.tones.sdr : config.khdr ? this.tones.khdr : config.hdr ? this.tones.hdr : this.tones.sdr;
     this.resize()
   }
   resize() {
-    let [w, h] = sizes[this.config.resolution] || sizes.HD;
+    if (!this.config) return;
+    let [w, h] = effectiveSize(this.config);
     if (innerHeight > innerWidth)[w, h] = [h, w];
     this.aspect = this.input.clientWidth / Math.max(1, this.input.clientHeight);
     if (w === this.w && h === this.h)return;
@@ -209,6 +220,11 @@ export class SoftwareRenderer {
               b += 58 * gain
             }
           }
+        } else if (this.config?.lightMode) {
+          const c = sky[sy + a];
+          r = (c & 255) * fr + 43 * fInv;
+          g = (c >> 8 & 255) * fr + 94 * fInv;
+          b = (c >> 16 & 255) * fr + 99 * fInv;
         } else {
           const wx = eye[0] + plane * this.rayX[x], wz = eye[2] + plane * this.rayZ[x];
           const t = sample[(((wz * 5 + waveOff) | 0) & 255) * 256 + (((wx * 6 + waveOff * .6) | 0) & 255)], u = (t & 255) - 128, v = (t >> 8 & 255) - 128;
@@ -263,7 +279,7 @@ export class SoftwareRenderer {
       fg = fog * 200,
       fb = fog * 197,
       shadow = this.shadow,
-      sfMode = this.config.shadowMode || (this.config.shadows ? 'pro' : 'off'),
+      sfMode = this.config?.lightMode ? 'off' : (this.config.shadowMode || (this.config.shadows ? 'pro' : 'off')),
       doShadow = ground && sfMode !== 'off';
     const A = a[5] * izA,
       B = b[5] * izB,
@@ -435,7 +451,11 @@ export class SoftwareRenderer {
     }
   }
   render(cam, time, match, view = {}) {
-    const extra = this.config?.graphics === 'extra';
+    const lite = !!this.config?.lightMode;
+    if (lite) this.ensureLiteMeshes();
+    const extra = !lite && this.config?.graphics === 'extra';
+    const activeTerrain = lite ? this.terrainLite : this.terrain;
+    const activeActors = lite ? this.actorsLite : this.actors;
     this.tanY = Math.tan(cam.fov * Math.PI / 360);
     this.tanX = this.tanY * this.aspect;
     this.fy = this.h * .5 / this.tanY;
@@ -444,15 +464,15 @@ export class SoftwareRenderer {
     this.cam = {eye, dir, right, up};
     this.background(time);
     this.depth.fill(0);
-    this.mesh(this.terrain);
+    this.mesh(activeTerrain);
     if (match) {
       for (const a of match.actors) {
         if (a.human || !a.alive)continue;
         const cy = Math.cos(a.yaw), sy = Math.sin(a.yaw);
-        this.mesh(this.actors[(a.isSpy ? 'spy_' : '') + a.team + a.gun] || this.actors[a.team + a.gun], {pose: a, p: [a.x, a.y, a.z], r: [cy, 0, sy], u: [0, 1, 0], b: [-sy, 0, cy]}, Math.sin(a.stride * 2.75) * Math.min(1, Math.hypot(a.vx, a.vz) / 4))
+        this.mesh(activeActors[(a.isSpy ? 'spy_' : '') + a.team + a.gun] || activeActors[a.team + a.gun], {pose: a, p: [a.x, a.y, a.z], r: [cy, 0, sy], u: [0, 1, 0], b: [-sy, 0, cy]}, Math.sin(a.stride * 2.75) * Math.min(1, Math.hypot(a.vx, a.vz) / 4))
       }
     }
-    this.mesh(chunk(movingDetails(match, time, extra)));
+    this.mesh(chunk(movingDetails(match, time, extra, lite)));
     if (match?.player.alive && view.firstPerson) {
       const a = match.player,
         m = view.motion || {},
@@ -465,7 +485,7 @@ export class SoftwareRenderer {
       const p = add(eye, add(scale(right, .205 + (m.swayX || 0)), add(scale(up, -.205 - drop * .14 + (m.kickY || 0) + (m.swayY || 0)), scale(dir, .54 - (m.kickZ ?? (view.kick || 0) * .062)))));
       const tr = {p, r: right, u: up, b: scale(dir, -1)};
       this.mesh(this.devices[a.gun], tr, null, true);
-      if (a.flash > .005) this.mesh(chunk(muzzleFlashMesh(a.gun, clamp(a.flash / .11, 0, 1), a.shotCount || 1, extra)), tr, null, true)
+      if (a.flash > .005) this.mesh(chunk(muzzleFlashMesh(a.gun, clamp(a.flash / .11, 0, 1), a.shotCount || 1, extra, lite)), tr, null, true)
     }
     this.ctx.putImageData(this.img, 0, 0)
   }

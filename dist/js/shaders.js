@@ -182,11 +182,13 @@ void main(){
   vec3 light=ambient*umbraDepth*umbraTint*(1.-edge)+direct+bounceGI;
   vec3 c=base*light;
 
-  vec3 H=normalize(V+SUN);
-  float specPow=mix(26.,uQuality>=2?84.:62.,metal);
-  float spec=pow(max(dot(N,H),0.),specPow);
-  float specGain=uKHDR==1?1.18:1.;
-  c+=vec3(1.,.88,.66)*spec*vis*(.045+(uQuality>=2?.28:.20)*metal)*(.4+.6*detail)*specGain;
+  if(uQuality>=0){
+    vec3 H=normalize(V+SUN);
+    float specPow=mix(26.,uQuality>=2?84.:62.,metal);
+    float spec=pow(max(dot(N,H),0.),specPow);
+    float specGain=uKHDR==1?1.18:1.;
+    c+=vec3(1.,.88,.66)*spec*vis*(.045+(uQuality>=2?.28:.20)*metal)*(.4+.6*detail)*specGain;
+  }
 
   // High & Extra (and KHDR): sky environment fresnel reflection on metals
   if((uQuality>=1 || uKHDR==1) && kind<2.5){
@@ -199,8 +201,8 @@ void main(){
     }
   }
 
-  // Dynamic point lights + Shadow Flame DynamicFlame occlusion & warm wrap
-  if(kind<2.5){
+  // Dynamic point lights + Shadow Flame DynamicFlame occlusion & warm wrap (skipped in Lightweight Mode)
+  if(kind<2.5 && uQuality>=0){
     int maxL=(uQuality>=2 || sfMode>=2)?6:uQuality==1?4:2;
     for(int i=0;i<6;i++){
       if(i>=maxL)break;
@@ -234,7 +236,7 @@ void main(){
     }
   }
 
-  if(ground>.5){
+  if(ground>.5 && uQuality>=0){
     float wet=smoothstep(.46,.77,noise(wPos.xz*vec2(.34,.23))*.62+noise(wPos.xz*.92)*.38);
     float fres=pow(1.-max(V.y,0.),4.);
     vec3 wetReflect=(uQuality>=2||uKHDR==1)?sky(reflect(-V,normalize(vec3(0.,1.,0.)+N*.12)))*(uKHDR==1?.58:.52):vec3(.30,.38,.39)*.62;
@@ -242,12 +244,30 @@ void main(){
     c*=.97+.06*noise(wPos.xz*.08);
   }
 
-  // 3D character hit flash & energy shield discharge rim effect
+  // 3D character hit flash & procedural hexagonal energy shield discharge rim effect
   if(uMode==1 && (uHitFX.x>.01 || uHitFX.y>.01)){
-    float rim=pow(1.-max(dot(N,V),0.),2.2);
-    float scan=.6+.4*sin(wPos.y*42.-uTime*36.);
-    if(uHitFX.y>.01)c+=vec3(.32,1.65,1.85)*uHitFX.y*(.35+1.35*rim)*scan;
-    if(uHitFX.x>.01)c+=vec3(1.55,.95,.42)*uHitFX.x*(.28+1.15*rim);
+    if(uQuality<0){
+      c+=vec3(.30,1.45,1.75)*uHitFX.y*.85+vec3(1.50,.85,.35)*uHitFX.x*.85;
+    } else {
+      float rim=pow(1.-max(dot(N,V),0.),2.0);
+      if(uHitFX.y>.01){
+        // Animated hexagonal plasma energy grid rippling over armored silhouette on shield hit
+        vec2 hp=vec2(atan(lPos.x,lPos.z)*3.8, lPos.y*12.5-uTime*6.5);
+        vec2 r=vec2(1.,1.73205);
+        vec2 h=r*.5;
+        vec2 a=mod(hp,r)-h;
+        vec2 b=mod(hp-h,r)-h;
+        vec2 gv=dot(a,a)<dot(b,b)?a:b;
+        float hexD=max(abs(gv.x),dot(abs(gv),normalize(r)));
+        float hexLine=smoothstep(.41,.48,hexD);
+        float pulse=.65+.35*sin(wPos.y*34.-uTime*32.);
+        c+=vec3(.30,1.85,2.15)*uHitFX.y*(.32+1.48*rim+hexLine*1.35)*pulse;
+      }
+      if(uHitFX.x>.01){
+        float shock=.62+.38*sin(wPos.y*28.+uTime*26.);
+        c+=vec3(1.85,1.02,.38)*uHitFX.x*(.34+1.35*rim)*shock;
+      }
+    }
   }
 
   // First-person weapon muzzle barrel heat glow on rapid fire
@@ -257,17 +277,22 @@ void main(){
   }
 
   if(kind>2.5&&kind<3.5){
-    float boost=(uQuality>=2?2.85:uQuality==1?2.15:1.8)*(uKHDR==1?1.24:1.);
-    c=base*(boost+.35*detail);
+    float boost=(uQuality>=2?3.15:uQuality==1?2.45:uQuality==0?2.05:1.75)*(uKHDR==1?1.26:1.);
+    c=base*(boost+.38*detail);
   }
   if(kind>4.5)c=mix(c,base*1.2,.6);
 
   if(uMode!=2){
-    float sunScatter=pow(max(dot(-V,SUN),0.),(uQuality>=2||uKHDR==1)?3.0:4.0);
-    vec3 fcol=mix(vec3(.58,.68,.70),vec3(.95,.77,.52),sunScatter);
-    float fg=fog(d);
-    c=mix(c,fcol,fg);
-    if(uQuality>=2 || uKHDR==1)c+=vec3(1.,.78,.46)*sunScatter*fg*(uKHDR==1?.28:.24);
+    if(uQuality<0){
+      float fg=clamp((d-18.)/360.,0.,.86);
+      c=mix(c,vec3(.62,.71,.72),fg);
+    } else {
+      float sunScatter=pow(max(dot(-V,SUN),0.),(uQuality>=2||uKHDR==1)?3.0:4.0);
+      vec3 fcol=mix(vec3(.58,.68,.70),vec3(.95,.77,.52),sunScatter);
+      float fg=fog(d);
+      c=mix(c,fcol,fg);
+      if(uQuality>=2 || uKHDR==1)c+=vec3(1.,.78,.46)*sunScatter*fg*(uKHDR==1?.28:.24);
+    }
   }
   // Alpha channel carries world mask (1.0=world/actor, 0.0=first-person viewmodel) for Shadow Flame Pro screen-space pass!
   frag=vec4(displayColor(c),uMode==2?0.:1.);
@@ -303,6 +328,17 @@ void main(){
       float mu=max(0.,dot(ray,SUN));
       c+=vec3(1.,.72,.38)*(.12*pow(mu,12.)+.38*pow(mu,90.))*(uKHDR==1?1.22:1.);
     }
+  } else if(uQuality<0){
+    // Ultra-lightweight 1-tap marine sea shader (zero mirror projection, zero multi-octave wave fetch)
+    float dist=(-1.68-uEye.y)/ray.y;
+    vec3 p=uEye+ray*dist;
+    vec2 a=texture(uWaves,p.xz*vec2(.042,.055)+vec2(uTime*.014,uTime*.009)).rg*2.-1.;
+    float farFade=1./(1.+dist*.003);
+    vec3 N=normalize(vec3(a.x*.09*farFade,1.,a.y*.09*farFade));
+    float fr=.16+.72*pow(1.-max(0.,-ray.y),3.);
+    vec3 sea=mix(vec3(.032,.11,.115),vec3(.075,.19,.195),.5+.5*a.y);
+    c=mix(sea,vec3(.42,.54,.58),fr);
+    c=mix(c,vec3(.58,.66,.66),clamp((dist-120.)/1100.,0.,.90));
   } else {
     float dist=(-1.68-uEye.y)/ray.y;
     vec3 p=uEye+ray*dist;
