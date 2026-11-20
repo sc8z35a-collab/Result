@@ -1,16 +1,16 @@
 import {PilotEquipment} from './df-hud.js';
 import {eyeOf} from './posture.js';
-import {Renderer, sizes, effectiveSize, qualityLevels, shadowModes} from './renderer.js';
+import {Renderer, effectiveSize} from './renderer.js';
 import {titleCamera} from './harbor.js';
 import {Match, modes, weapons} from './match.js';
 import {forward, add, clamp} from './geometry.js';
-import {SoundEngin, AUDIO_MODES, SOUND_ENGIN_VERSION} from './audio.js';
+import {SoundEngin, SOUND_ENGIN_VERSION} from './audio.js';
+import {readPreferences, scoreMultiplier} from './preferences.js';
 const $ = s => document.getElementById(s),
   views = {title: 'titleView', lobby: 'lobby', settings: 'settings', game: 'hud', pause: 'pause', results: 'results'};
 // Optically exact +2/3 wider view width relative to 24.7° / 13.0° FOV:
 // 2 * atan((5/3) * tan(24.7°/2)) = 40.1°, 2 * atan((5/3) * tan(13.0°/2)) = 21.5°.
 const BASE_FOV = 40.1, ADS_FOV = 21.5;
-const defaults = {lightMode: false, resolution: 'HD', graphics: 'high', rate: 360, rateV2: true, hdr: true, khdr: true, shadowMode: 'pro', shadows: true, fluxGI: true, schlieren: true, aeroVortex: true, thermoFlux: true, resonance: true, chronoTrace: true, fermatCore: true, spectraField: true, echoPulse: true, audioMode: 'ultra300', audioV2: true, sensitivity: 1, volume: 55, sound: false};
 const graphicsHints = {
   standard: '軽量描画 · 基本ライト · 標準反射',
   high: '高精細質感 · 動的ライト · 標準水面反射',
@@ -48,46 +48,11 @@ const aimRecoil = {
   RD30: {pitch: .0018, yaw: .00055, recoverRate: 16.5, recoverRatio: .94, climb: .007},
   RD40: {pitch: .0015, yaw: .00045, recoverRate: 18.0, recoverRatio: .95, climb: .005}
 };
-let settings = {...defaults};
-let rules = {mode: '3v3', limit: 'points', multiplier: 5, loadout: 'SW T', allyNv21: 0, aiModel: 'human'};
+let saved;
 try {
-  const c = JSON.parse(localStorage.getItem('result.harbor.v1') || '{}');
-  if (c.settings) {
-    Object.assign(settings, c.settings);
-    if (!('shadowMode' in c.settings) && 'shadows' in c.settings) settings.shadowMode = c.settings.shadows ? 'pro' : 'off';
-    if (!('khdr' in c.settings)) settings.khdr = !!settings.hdr;
-    if (!c.settings.rateV2 && settings.rate === 120) settings.rate = 360;
-    if (!c.settings.audioV2 && settings.audioMode === 'hrtf') settings.audioMode = 'ultra300';
-    settings.rateV2 = true;
-    settings.audioV2 = true;
-  }
-  if (c.rules)Object.assign(rules, c.rules)
+  saved = JSON.parse(localStorage.getItem('result.harbor.v1'));
 } catch {}
-if (!sizes[settings.resolution])settings.resolution = 'HD';
-if (!(settings.graphics in qualityLevels))settings.graphics = 'high';
-if (!(settings.shadowMode in shadowModes))settings.shadowMode = 'pro';
-if (!(settings.audioMode in AUDIO_MODES))settings.audioMode = 'ultra300';
-settings.lightMode = !!settings.lightMode;
-settings.shadows = settings.shadowMode !== 'off';
-settings.khdr = !!settings.khdr;
-if (settings.khdr) settings.hdr = true;
-settings.fluxGI = settings.fluxGI !== false;
-settings.schlieren = settings.schlieren !== false;
-settings.aeroVortex = settings.aeroVortex !== false;
-settings.thermoFlux = settings.thermoFlux !== false;
-settings.resonance = settings.resonance !== false;
-settings.chronoTrace = settings.chronoTrace !== false;
-settings.fermatCore = settings.fermatCore !== false;
-settings.spectraField = settings.spectraField !== false;
-settings.echoPulse = settings.echoPulse !== false;
-if (![0, 60, 120, 360].includes(settings.rate))settings.rate = 360;
-if (!modes[rules.mode])rules.mode = '3v3';
-if (!weapons[rules.loadout])rules.loadout = 'SW T';
-rules.allyNv21 = [0, 1, 2].includes(Number(rules.allyNv21)) ? Number(rules.allyNv21) : 0;
-rules.aiModel = rules.aiModel === 'classic' ? 'classic' : 'human';
-rules.multiplier = clamp(Math.round(rules.multiplier) || 5, 1, 99);
-settings.sensitivity = clamp(Number(settings.sensitivity) || 1, .4, 2);
-settings.volume = clamp(Number(settings.volume) || 0, 0, 100);
+const {settings, rules} = readPreferences(saved);
 const save = () => {
   try {
     localStorage.setItem('result.harbor.v1', JSON.stringify({settings, rules}))
@@ -97,7 +62,6 @@ let screen = 'title',
   previous = 'title',
   renderer = null,
   match = null,
-  starting = false,
   ready = false,
   gameKick = 0,
   hurt = 0,
@@ -110,6 +74,7 @@ let screen = 'title',
   flirActive = false,
   chronoActive = false,
   nextFrame = 0,
+  currentRate = null,
   lastTime = null,
   accum = 0,
   simJump = false,
@@ -123,11 +88,14 @@ let screen = 'title',
   gpCrouch = false,
   holdFirePad = false,
   lockPending = false,
+  gamepadIndex = null,
+  padFireArmed = false,
   lookTouch = null,
   moveTouch = null,
   fireTouch = null,
   fireTouchLast = null,
   dragID = null,
+  mousePointer = null,
   aimTouchLast = null,
   holdFireMouse = false,
   holdFireKey = false,
@@ -136,6 +104,7 @@ const gpPrev = new Uint8Array(18);
 const keys = new Set(), audio = new SoundEngin();
 let feed = [];
 const fixed = 1 / 360;
+const maxStepBudget = 1 / 8;
 
 // Second-order spring-damper kinematic model for crisp weapon blowback, sway & RD40 lock/track choreography (zero camera shake).
 const gunMotion = {
@@ -180,7 +149,7 @@ function resetMotion() {
     swayX: 0, swayY: 0, land: 0, vland: 0, blowback: 0, heat: 0, spread: 0,
     camPitch: 0, vcamPitch: 0, camRoll: 0, vcamRoll: 0, shake: 0, fovPunch: 0, wasOnGround: true,
     rdSnap: 0, vrdSnap: 0, rdX: 0, rdY: 0, rdZ: 0, rdPitch: 0, rdYaw: 0, rdRoll: 0,
-    rdLock: 0, rdD01: 0, rdLockPulse: 0, rdBarrelPhase: 0
+    rdLock: 0, rdD01: 0, rdLockPulse: 0, rdBarrelPhase: 0, shotSide: 1
   });
   Object.assign(recoilState, {pitch: 0, yaw: 0, holdUntil: 0, shotsInBurst: 0, lastShotAt: -10});
   Object.assign(hitState, {age: 1, dur: .28, kind: 'hit', rot: 45, bannerAge: 1, bannerDur: 0});
@@ -449,44 +418,65 @@ function updateCombatUI(dt, p) {
 const equipment = new PilotEquipment(() => match, msg => {
   if (match) {
     $('combatNotice').textContent = msg;
-    noticeUntil = match.time + 1.6
+    noticeUntil = match.time + 1.6;
   }
+  const status = {lobby: 'lobbyNotice', pause: 'pauseNotice', results: 'resultNotice'}[screen];
+  if (status) $(status).textContent = msg;
 });
 function group(id, value, change) {
   const node = $(id);
   for (const b of node.querySelectorAll('button[data-value]')) {
     b.setAttribute('aria-pressed', String(b.dataset.value === String(value)));
-    b.onclick = () => change(b.dataset.value)
+    b.onclick = () => {
+      if (b.getAttribute('aria-pressed') !== 'true') change(b.dataset.value);
+    };
   }
 }
-const touch = matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0;
+const coarsePointer = matchMedia('(pointer: coarse)');
+let touch = coarsePointer.matches || navigator.maxTouchPoints > 0;
 document.body.classList.toggle('touch', touch);
+const setInputType = isTouch => {
+  if (touch === isTouch) return;
+  touch = isTouch;
+  document.body.classList.toggle('touch', touch);
+};
+document.addEventListener('pointerdown', e => {
+  if (e.pointerType === 'touch') setInputType(true);
+  if (e.pointerType === 'mouse') setInputType(false);
+}, true);
+coarsePointer.addEventListener?.('change', e => setInputType(e.matches));
 function controls() {
-  const rows = touch ? [['移動 / ダッシュ', '左スティック（強く前傾でダッシュ）'], ['視点', '右側スワイプ / 射撃長押しドラッグ / 右スティック'], ['発射 / 再装填', '射撃(長押し連射＋視点移動)・R2 / R・X'], ['ジャンプ / しゃがみ', '↑・A / しゃがみ・B'], ['FLIR / 煙幕 / 解析', '左下 FLIR・煙幕・解析ボタン']] : [['移動 / ダッシュ', 'WASD / Shift · 左スティック強前傾'], ['視点', 'マウス / 矢印キー / 右スティック'], ['発射 / 再装填', '左クリック(長押し連射＋視点移動)・F・R2 / R'], ['ジャンプ / しゃがむ', 'Space・A / Ctrl・B'], ['熱視界 / 煙幕 / 解析', 'T (FLIR) · G (流体煙幕) · L (4D弾道解析) · M (波動図)'], ['一時停止', 'Esc / P / Start']];
+  const rows = touch ? [['移動 / ダッシュ', '左スティック（強く前傾でダッシュ）'], ['視点', '右側スワイプ / 射撃長押しドラッグ / 右スティック'], ['発射 / 再装填', '射撃(長押しで連射)・R2 / R・X'], ['ジャンプ / しゃがみ', '↑・A / しゃがみ・B'], ['FLIR / 煙幕 / 解析', '左下 FLIR・煙幕・解析ボタン']] : [['移動 / ダッシュ', 'WASD / Shift · 左スティック強前傾'], ['視点', 'マウス / 矢印キー / 右スティック'], ['発射 / 再装填', '左クリック(長押しで連射)・F・R2 / R・X'], ['ジャンプ / しゃがむ', 'Space・A / Ctrl・B'], ['熱視界 / 煙幕 / 解析', 'T (FLIR) · G (煙幕) · L (弾道解析) · K (跳弾) · M (波動図)'], ['一時停止', 'Esc / P / Start']];
   if (match?.player.df)rows.push(...(touch ? [['DF1 OUT', '画面右の専用ボタン / L2・Y・LB・RB']] : [['中央集中 / 散弾', 'Q / Y'], ['P1 ブースト', 'X / LB'], ['照準 / レンズ切替', '右クリック・C・L2 / V・RB'], ['EVR1 購入', 'B']]));
   $('controls').innerHTML = rows.map(([a, b]) => `<span>${a}</span><b>${b}</b>`).join('')
 }
 function show(s) {
+  if (s === 'game' && (!ready || !match || match.ended)) return;
   screen = s;
   document.body.dataset.screen = s;
   for (const [k, id] of Object.entries(views))$(id).hidden = k !== s;
   keys.clear();
   simJump = false;
   holdFireMouse = holdFireKey = holdFireTouch = holdFirePad = false;
+  padFireArmed = false;
   stickX = stickZ = gpMoveX = gpMoveZ = 0;
   stickSprint = gpSprint = false;
   setTouchCrouch(false);
   gpCrouch = false;
-  moveTouch = lookTouch = fireTouch = fireTouchLast = dragID = null;
+  moveTouch = lookTouch = fireTouch = fireTouchLast = dragID = mousePointer = aimTouchLast = null;
   $('touchFire')?.classList.remove('is-active');
   $('pad').classList.remove('is-sprint');
   $('pad').firstElementChild.style.transform = '';
   accum = 0;
-  if (s !== 'game' && document.pointerLockElement)document.exitPointerLock();
+  lastTime = null;
+  if (s !== 'game' && document.pointerLockElement === $('scene')) document.exitPointerLock?.();
+  const status = {lobby: 'lobbyNotice', pause: 'pauseNotice', results: 'resultNotice'}[s];
+  if (status) $(status).textContent = '';
   if (s === 'lobby') {
     flirActive = false;
     chronoActive = false;
     if (match?.ended) {
+      audio.resetMatch();
       match = null;
       tourTime = 0
     }
@@ -503,6 +493,7 @@ function show(s) {
     soundButton()
   }
   if (s === 'pause') {
+    audio.stopMatchSounds();
     controls();
     equipment.pause(match?.player)
   }
@@ -562,7 +553,7 @@ function lobby() {
     save();
     lobby()
   });
-  $('mult').value = rules.multiplier;
+  if (document.activeElement !== $('mult')) $('mult').value = rules.multiplier;
   $('multWrap').hidden = rules.limit === 'unlimited';
   const [a, b] = modes[rules.mode], v = rules.multiplier;
   $('targets').textContent = rules.limit === 'unlimited' ? '時間・得点ともに無制限' : `味方 ${a*v} 点先取　/　敵 ${b*v} 点先取　·　時間無制限`;
@@ -576,7 +567,7 @@ function lobby() {
   if (rules.loadout === 'RD40')tags.push('オートエイム 1.2 + D01 SENSOR');
   if (w.playerOnly)tags.push('プレイヤー専用');
   $('weaponStats').innerHTML = tags.map(s => `<span>${s}</span>`).join('');
-  $('start').disabled = !ready || starting;
+  $('start').disabled = !ready;
   equipment.lobby(rules.loadout)
 }
 const effectiveAudioMode = () => settings.lightMode ? 'stereo' : settings.audioMode;
@@ -597,9 +588,12 @@ function setGraphics(key, value) {
   if (key === 'khdr' && value) settings.hdr = true;
   if (key === 'hdr' && !value) settings.khdr = false;
   if (key === 'shadowMode') settings.shadows = value !== 'off';
+  if (settings.lightMode || !settings.thermoFlux) flirActive = false;
   applyLightModeChrome();
   save();
-  renderer?.settings(settings);
+  if (renderer && ready) {
+    try { renderer.settings(settings); } catch (error) { recoverRenderer(error); }
+  }
   drawSettings()
 }
 function drawSettings() {
@@ -618,7 +612,7 @@ function drawSettings() {
   $('lightModeHint').textContent = lite
     ? 'オン · 低ポリ地形/NPC · 影/反射/KHDR/Bloom省略 · 低解像度 · 軽量ステレオ音響'
     : 'オフ · 通常/高精細描画（詳細度・影・KHDR・立体音響をそのまま適用）';
-  const [w, h] = effectiveSize(settings);
+  const [w, h] = ready && renderer ? [renderer.canvas.width, renderer.canvas.height] : effectiveSize(settings);
   $('resolutionHint').textContent = lite
     ? `${w.toLocaleString('en-US')} × ${h.toLocaleString('en-US')} px（軽量スケール）`
     : `${w.toLocaleString('en-US')} × ${h.toLocaleString('en-US')} px`;
@@ -754,10 +748,10 @@ $('sensitivity').oninput = e => {
 };
 $('volume').oninput = e => {
   settings.volume = Number(e.target.value);
-  settings.sound = settings.volume > 0;
   audio.setMode(effectiveAudioMode());
   audio.set(settings.volume / 100);
-  audio.enable(settings.sound);
+  if (settings.sound && settings.volume > 0) audio.enable(true).then(soundButton);
+  else soundButton();
   $('volumeVal').value = settings.volume + '%';
   save()
 };
@@ -769,15 +763,16 @@ $('mult').oninput = e => {
   lobby()
 };
 $('mult').onchange = e => {
-  rules.multiplier = clamp(Math.round(Number(e.target.value)) || 5, 1, 99);
+  rules.multiplier = scoreMultiplier(e.target.value);
+  e.target.value = rules.multiplier;
   save();
   lobby()
 };
 function pointer() {
-  if (touch || document.pointerLockElement || lockPending || screen !== 'game')return;
+  if (document.pointerLockElement || lockPending || screen !== 'game' || !scene.requestPointerLock) return;
   try {
     lockPending = true;
-    const p = $('scene').requestPointerLock?.();
+    const p = scene.requestPointerLock();
     if (p?.catch)p.catch (() => {}).finally(() => {
       lockPending = false;
     }); else setTimeout(() => {
@@ -788,7 +783,12 @@ function pointer() {
   }
 }
 function toggleFlir() {
-  if (!match?.player.alive) return;
+  if (screen !== 'game' || !match?.player.alive) return;
+  if (!renderer?.native) {
+    $('combatNotice').textContent = '現在の互換描画では FLIR を使用できません';
+    noticeUntil = match.time + 2;
+    return;
+  }
   if (settings.lightMode || !settings.thermoFlux) {
     $('combatNotice').textContent = '軽量モード／ThermoFlux オフ時は FLIR を使用できません';
     noticeUntil = match.time + 2.0;
@@ -801,7 +801,7 @@ function toggleFlir() {
   hud();
 }
 function triggerSmokeVent() {
-  if (!match?.player.alive) return;
+  if (screen !== 'game' || !match?.player.alive) return;
   if (!match.deploySmokeVent(match.player)) {
     const cd = Math.ceil(match.smokeCooldown || 0);
     $('combatNotice').textContent = `流体煙幕リチャージ中（残り ${cd}s）`;
@@ -809,7 +809,7 @@ function triggerSmokeVent() {
   }
 }
 function toggleChrono() {
-  if (!match) return;
+  if (screen !== 'game' || !match) return;
   if (!settings.chronoTrace) {
     $('combatNotice').textContent = 'ChronoTrace 1.0 がオフになっています（設定から有効化）';
     noticeUntil = match.time + 1.8;
@@ -822,8 +822,7 @@ function toggleChrono() {
   hud();
 }
 function startMatch() {
-  if (!ready || starting)return;
-  starting = true;
+  if (!ready || screen !== 'lobby') return;
   feed = [];
   gameKick = hurt = 0;
   noticeUntil = 0;
@@ -835,7 +834,7 @@ function startMatch() {
   match = new Match(rules, event);
   equipment.prepare(match.player);
   show('game');
-  pointer();
+  if (!touch) pointer();
   audio.setMode(effectiveAudioMode());
   if (settings.sound)audio.enable(true);
   audio.set(settings.volume / 100);
@@ -843,7 +842,7 @@ function startMatch() {
   $('startHint').textContent = touch ? '左強傾ダッシュ · FLIR熱視界 · 煙幕 · 4D弾道解析 · 鋼鉄ノック探知' : 'WASD 移動 / Shift ダッシュ · T FLIR · G 流体煙幕 · L 4D弾道解析 · M 波動図';
   $('combatNotice').textContent = '';
   $('feed').replaceChildren();
-  starting = false;
+  delete $('feed').dataset.stamp;
   hud();
 }
 function doPause() {
@@ -853,13 +852,11 @@ $('start').onclick = startMatch;
 $('pauseButton').onclick = doPause;
 $('resume').onclick = () => {
   show('game');
-  pointer()
+  if (!touch) pointer();
 };
 $('endMatch').onclick = () => {
-  if (match) {
-    match.ended = true;
-    match.synapse?.save();
-    show('results')
+  if (screen === 'pause' && match) {
+    match.end();
   }
 };
 $('rematch').onclick = () => show('lobby');
@@ -881,7 +878,9 @@ function event(e) {
     gunMotion.vy += .12;
   }
   if (e.type === 'smoke' && e.actor === p) {
-    $('combatNotice').textContent = 'AeroVortex 流体煙幕展開　·　T キー熱視界で貫煙探知';
+    $('combatNotice').textContent = settings.aeroVortex && !settings.lightMode && renderer.native
+      ? 'AeroVortex 流体煙幕展開'
+      : '流体煙幕展開 · 現在の描画設定では煙幕を表示しません';
     noticeUntil = match.time + 2.2;
   }
   if (e.type === 'resonate' && e.actor === p && e.knockedEnemy) {
@@ -895,9 +894,12 @@ function event(e) {
     noticeUntil = match.time + 2.2;
   }
   if (e.type === 'spawn' && e.actor === p) {
-    recoilState.pitch = recoilState.yaw = recoilState.shotsInBurst = 0;
-    setTouchCrouch(false);
-    gpCrouch = false;
+    resetMotion();
+    gameKick = hurt = 0;
+    holdFireMouse = holdFireKey = holdFireTouch = holdFirePad = false;
+    padFireArmed = false;
+    flirActive = false;
+    simJump = false;
   }
   if (e.type === 'hit') {
     if (e.actor === p)triggerHitUI(e);
@@ -917,7 +919,7 @@ function event(e) {
     $('combatNotice').textContent = p.stock ? 'R で再装填' : '弾丸を生成中';
     noticeUntil = match.time + .8
   }
-  if (e.type === 'end')show('results')
+  if (e.type === 'end') show('results');
 }
 function hud() {
   if (!match)return;
@@ -932,7 +934,7 @@ function hud() {
   $('gunName').textContent = a.gun;
   $('magVal').textContent = a.mag;
   $('stockVal').textContent = a.stock;
-  $('reloadLabel').textContent = a.reload > 0 ? `再装填 ${a.reload.toFixed(1)} s` : a.mag === 0 ? 'R · 再装填' : '予備弾';
+  $('reloadLabel').textContent = a.reload > 0 ? `再装填 ${a.reload.toFixed(1)} s` : a.mag > 0 ? '予備弾' : a.stock ? 'R · 再装填' : '予備弾を生成中';
   $('ammoBoost').hidden = !((a.ammoRate || 1) > 1.01);
   let nearestTk = null, nearestDist = 18;
   for (const tk of match.tankers || []) {
@@ -951,7 +953,7 @@ function hud() {
   $('reticle').classList.toggle('is-rd40', a.gun === 'RD40');
   $('spawnCounter').textContent = Math.max(0, a.respawn).toFixed(1) + ' s';
   // Update AeroVortex wind meter, ThermoFlux FLIR status & SpectraField Bayeisan hologram!
-  const flirOn = flirActive && !settings.lightMode && settings.thermoFlux && a.alive;
+  const flirOn = flirActive && renderer.native && !settings.lightMode && settings.thermoFlux && a.alive;
   $('flirFrame').hidden = !flirOn;
   $('tacFlir')?.classList.toggle('is-on', flirOn);
   $('touchFlir')?.classList.toggle('is-active', flirOn);
@@ -1004,9 +1006,9 @@ function hud() {
     }
   }
   if (match.time > 9)$('startHint').hidden = true;
-  if (noticeUntil < match.time)$('combatNotice').textContent = '';
+  if (noticeUntil <= match.time)$('combatNotice').textContent = '';
   feed = feed.filter(x => x.until > match.time).slice(-3);
-  const stamp = feed.map(x => x.line).join('/');
+  const stamp = feed.map(x => x.team + ':' + x.line).join('/');
   if ($('feed').dataset.stamp !== stamp) {
     $('feed').dataset.stamp = stamp;
     $('feed').innerHTML = feed.map(x => `<div class="feed-line ${x.team?'orange':'cyan'}">${x.line}</div>`).join('')
@@ -1084,18 +1086,21 @@ function fire() {
   if (screen === 'game' && match)match.trigger(match.player)
 }
 document.addEventListener('keydown', e => {
+  if (e.defaultPrevented || e.isComposing || e.altKey || e.metaKey) return;
   if (e.code === 'Escape') {
-    if (screen === 'game')doPause(); else if (screen === 'settings')show(previous); else if (screen === 'lobby')show('title'); else if (screen === 'pause') {
-      show('game');
-      pointer()
-    }
-    return
+    if (e.repeat) return;
+    if (screen === 'game') doPause();
+    else if (screen === 'settings') show(previous);
+    else if (screen === 'lobby') show('title');
+    else if (screen === 'pause') $('resume').click();
+    return;
   }
-  if (screen !== 'game')return;
+  if (screen !== 'game' || !match || document.hidden || e.target?.closest?.('input, textarea, select, [contenteditable=true]')) return;
+  if (e.code === 'Space' && e.target?.closest?.('button')) return;
   if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyF', 'KeyR', 'KeyT', 'KeyG', 'KeyL', 'KeyK', 'KeyM'].includes(e.code))e.preventDefault();
   keys.add(e.code);
-  if (e.code === 'KeyF')holdFireKey = true;
-  if (e.repeat)return;
+  if (e.repeat) return;
+  if (e.code === 'KeyF' && match.player.alive) holdFireKey = true;
   if (e.code === 'KeyR')match.reload(match.player);
   if (e.code === 'KeyF')fire();
   if (e.code === 'KeyT')toggleFlir();
@@ -1112,8 +1117,8 @@ document.addEventListener('keydown', e => {
     save();
     hud();
   }
-  if (e.code === 'Space')simJump = true;
-  if (e.code === 'KeyP')doPause();
+  if (e.code === 'Space' && match.player.alive) simJump = true;
+  if (e.code === 'KeyP') doPause();
   const extra = {KeyQ: 'pattern', KeyX: 'boost', KeyC: 'ads', KeyV: 'scope', KeyB: 'buy'}[e.code];
   if (extra)equipment.action(extra)
 });
@@ -1124,8 +1129,9 @@ document.addEventListener('keyup', e => {
 let wasLocked = false;
 document.addEventListener('pointerlockchange', () => {
   const locked = document.pointerLockElement === $('scene');
-  if (wasLocked && !locked && screen === 'game')doPause();
-  wasLocked = locked;
+  if (wasLocked && !locked && screen === 'game') doPause();
+  if (locked && screen !== 'game') document.exitPointerLock?.();
+  wasLocked = locked && screen === 'game';
   lockPending = false;
 });
 document.addEventListener('pointerlockerror', () => {
@@ -1135,7 +1141,7 @@ document.addEventListener('mousemove', e => {
   if (document.pointerLockElement === $('scene'))turn(e.movementX, e.movementY)
 });
 window.addEventListener('mouseup', e => {
-  if (e.button === 0)holdFireMouse = false
+  if (e.button === 0) { holdFireMouse = false; mousePointer = null; }
 });
 window.addEventListener('blur', () => {
   holdFireMouse = holdFireKey = holdFireTouch = holdFirePad = false;
@@ -1154,9 +1160,12 @@ document.addEventListener('visibilitychange', () => {
   nextFrame = 0
 });
 const scene = $('scene');
+function capturePointer(element, id) {
+  try { element.setPointerCapture(id); } catch {}
+}
 scene.oncontextmenu = e => e.preventDefault();
 scene.addEventListener('pointerdown', e => {
-  if (screen !== 'game')return;
+  if (screen !== 'game' || document.hidden) return;
   if (e.pointerType !== 'touch' && e.button === 2) {
     equipment.action('ads');
     return
@@ -1165,16 +1174,15 @@ scene.addEventListener('pointerdown', e => {
     if (lookTouch !== null)return;
     lookTouch = e.pointerId;
     aimTouchLast = [e.clientX, e.clientY];
-    scene.setPointerCapture(e.pointerId)
-  } else if (e.button === 0) {
+    capturePointer(scene, e.pointerId)
+  } else if (e.button === 0 && mousePointer === null) {
+    mousePointer = e.pointerId;
     holdFireMouse = true;
     fire();
     if (!document.pointerLockElement) {
       dragID = e.pointerId;
       aimTouchLast = [e.clientX, e.clientY];
-      try {
-        scene.setPointerCapture(e.pointerId)
-      } catch {}
+      capturePointer(scene, e.pointerId);
       pointer()
     }
   }
@@ -1186,11 +1194,18 @@ scene.addEventListener('pointermove', e => {
 });
 function releaseLook(e) {
   if (lookTouch === e.pointerId)lookTouch = null;
-  if (dragID === e.pointerId)dragID = null;
-  if (e.pointerType !== 'touch' && e.button === 0)holdFireMouse = false
+  if (dragID === e.pointerId) dragID = null;
+  if (mousePointer === e.pointerId && (e.type !== 'pointerup' || e.button === 0)) {
+    mousePointer = null;
+    holdFireMouse = false;
+  }
 }
 scene.addEventListener('pointerup', releaseLook);
 scene.addEventListener('pointercancel', releaseLook);
+scene.addEventListener('lostpointercapture', e => {
+  // Pointer lock can itself release mouse capture while the button is held.
+  if (e.pointerType === 'touch' || document.pointerLockElement !== scene) releaseLook(e);
+});
 const pad = $('pad');
 function stick(e) {
   const r = pad.getBoundingClientRect(),
@@ -1208,15 +1223,15 @@ function stick(e) {
   pad.firstElementChild.style.transform = `translate(${stickX * travel}px,${-stickZ * travel}px)`
 }
 pad.onpointerdown = e => {
-  if (moveTouch !== null)return;
+  if (screen !== 'game' || moveTouch !== null || e.button !== 0) return;
   moveTouch = e.pointerId;
-  pad.setPointerCapture(e.pointerId);
+  capturePointer(pad, e.pointerId);
   stick(e)
 };
 pad.onpointermove = e => {
   if (moveTouch === e.pointerId)stick(e)
 };
-pad.onpointerup = pad.onpointercancel = e => {
+pad.onpointerup = pad.onpointercancel = pad.onlostpointercapture = e => {
   if (moveTouch === e.pointerId) {
     moveTouch = null;
     stickX = stickZ = 0;
@@ -1228,15 +1243,12 @@ pad.onpointerup = pad.onpointercancel = e => {
 // Aim-while-firing: holding the fire button and dragging rotates camera seamlessly without stopping fire.
 const touchFire = $('touchFire');
 touchFire.onpointerdown = e => {
+  if (screen !== 'game' || fireTouch !== null || e.button !== 0) return;
   e.preventDefault();
   holdFireTouch = true;
-  if (fireTouch === null) {
-    fireTouch = e.pointerId;
-    fireTouchLast = [e.clientX, e.clientY];
-    try {
-      touchFire.setPointerCapture(e.pointerId)
-    } catch {}
-  }
+  fireTouch = e.pointerId;
+  fireTouchLast = [e.clientX, e.clientY];
+  capturePointer(touchFire, e.pointerId);
   touchFire.classList.add('is-active');
   fire()
 };
@@ -1254,35 +1266,39 @@ function releaseFireTouch(e) {
   touchFire.classList.remove('is-active')
 }
 touchFire.onpointerup = touchFire.onpointercancel = touchFire.onlostpointercapture = releaseFireTouch;
+touchFire.onclick = e => { if (e.detail === 0) fire(); };
+for (const type of ['pointerup', 'pointercancel']) {
+  window.addEventListener(type, e => {
+    releaseLook(e);
+    pad.onpointerup(e);
+    releaseFireTouch(e);
+  });
+}
 for (const [id, action] of [
   ['touchReload', () => match?.reload(match.player)],
-  ['touchJump', () => { simJump = true; }],
+  ['touchJump', () => { if (match?.player.alive) simJump = true; }],
   ['touchCrouch', () => { setTouchCrouch(!touchCrouch); }],
   ['touchFlir', () => toggleFlir()],
   ['touchSmoke', () => triggerSmokeVent()],
   ['touchChrono', () => toggleChrono()]
-])$(id).onpointerdown = e => {
-  e.preventDefault();
-  action()
-};
+]) $(id).onclick = () => { if (screen === 'game') action(); };
 
 // Hardware Gamepad API support (Xbox / PlayStation / Mobile Controllers): strong left-stick forward tilt auto-dashes!
 function pollGamepad(dt) {
-  const pads = navigator.getGamepads?.();
-  if (!pads) {
+  let gp;
+  try {
+    gp = Array.from(navigator.getGamepads?.() || []).find(pad => pad?.connected);
+  } catch {
+    // An iframe can deny the Gamepad API through Permissions Policy.
+  }
+  if (!gp || gp.index !== gamepadIndex) {
     gpMoveX = gpMoveZ = 0;
-    gpSprint = holdFirePad = false;
-    return
+    gpCrouch = gpSprint = holdFirePad = false;
+    gpPrev.fill(0);
+    padFireArmed = false;
+    gamepadIndex = gp?.index ?? null;
   }
-  let gp = null;
-  for (let i = 0; i < pads.length; i++) {
-    if (pads[i]?.connected) { gp = pads[i]; break; }
-  }
-  if (!gp) {
-    gpMoveX = gpMoveZ = 0;
-    gpSprint = holdFirePad = false;
-    return
-  }
+  if (!gp) return;
   const btn = i => {
     const b = gp.buttons[i];
     return !!(b && (b.pressed || b.value > .35));
@@ -1294,7 +1310,7 @@ function pollGamepad(dt) {
   };
   if (edge(9)) {
     if (screen === 'game') doPause();
-    else if (screen === 'pause') { show('game'); pointer(); }
+    else if (screen === 'pause') $('resume').click();
     return;
   }
   if (screen !== 'game' || !match) {
@@ -1325,11 +1341,12 @@ function pollGamepad(dt) {
 
   // Triggers & face buttons
   const r2 = btn(7);
-  if (r2 && !gpPrev[7]) fire();
+  if (!r2) padFireArmed = true;
+  holdFirePad = r2 && padFireArmed && match.player.alive;
+  if (holdFirePad && !gpPrev[7]) fire();
   gpPrev[7] = r2 ? 1 : 0;
-  holdFirePad = r2;
   if (edge(6)) equipment.action('ads');
-  if (edge(0)) simJump = true;
+  if (edge(0) && match.player.alive) simJump = true;
   if (edge(1)) gpCrouch = !gpCrouch;
   if (edge(2)) match.reload(match.player);
   if (edge(3)) equipment.action('pattern');
@@ -1341,19 +1358,24 @@ function frame(ms) {
   requestAnimationFrame(frame);
   if (document.hidden || !ready)return;
   const limit = settings.rate ? 1000 / settings.rate : 0;
+  if (currentRate !== settings.rate) {
+    currentRate = settings.rate;
+    nextFrame = 0;
+  }
   if (limit) {
-    if (ms + .17 < nextFrame)return;
-    nextFrame = nextFrame ? nextFrame + Math.max(1, Math.floor((ms - nextFrame) / limit) + 1) * limit : ms + limit;
-    if (nextFrame < ms + .1)nextFrame += limit
-  } else nextFrame = 0;
+    const scheduled = ms + .5;
+    if (scheduled < nextFrame) return;
+    nextFrame = nextFrame ? nextFrame + (Math.floor((scheduled - nextFrame) / limit) + 1) * limit : ms + limit;
+  }
   const dt = lastTime === null ? 0 : Math.min(.25, (ms - lastTime) / 1000);
   lastTime = ms;
   timeNow += dt;
   pollGamepad(dt);
   let cam;
   if (screen === 'game' && match) {
-    accum = Math.min(accum + dt, 1 / 15);
-    while (accum + 1e-9 >= fixed && screen === 'game') {
+    accum = Math.min(accum + dt, .25);
+    const steps = Math.floor((Math.min(accum, maxStepBudget) + 1e-9) / fixed);
+    for (let i = 0; i < steps && screen === 'game'; i++) {
       const fovScale = match.player.df?.ads ? .43 : .63;
       const yaw = (Number(keys.has('ArrowRight')) - Number(keys.has('ArrowLeft'))) * 1.75 * fixed * settings.sensitivity * fovScale,
         pitch = (Number(keys.has('ArrowUp')) - Number(keys.has('ArrowDown'))) * 1.25 * fixed * settings.sensitivity * fovScale;
@@ -1379,7 +1401,7 @@ function frame(ms) {
         crouch: crouchNow
       });
       simJump = false;
-      accum -= fixed
+      if (screen === 'game') accum = Math.max(0, accum - fixed);
     }
     gameKick *= Math.exp(-13 * dt);
     hurt = Math.max(0, hurt - dt * 1.9);
@@ -1403,13 +1425,15 @@ function frame(ms) {
     cam = titleCamera(tourTime);
     $('cinema-veil').style.opacity = cam.fade
   }
-  audio.update(dt, match, cam);
+  audio.update(dt, screen === 'game' ? match : null, cam);
   const cinematic = !match && !renderer.native && !settings.lightMode && settings.shadows && settings.hdr;
   $('app').classList.toggle('cinematic', cinematic);
-  if (cinematic)$('cinema-veil').style.opacity = 0; else renderer.render(cam, timeNow, match, {
+  if (cinematic) $('cinema-veil').style.opacity = 0;
+  else try { renderer.render(cam, timeNow, match, {
     firstPerson: !!match?.player.alive && !match?.player.df?.ads,
-    flir: !!(flirActive && !settings.lightMode && settings.thermoFlux && match?.player.alive),
+    flir: !!(renderer.native && flirActive && !settings.lightMode && settings.thermoFlux && match?.player.alive),
     chrono: !!(chronoActive && settings.chronoTrace),
+    paused: !!match && screen !== 'game',
     kick: gameKick,
     shake: 0,
     hurt,
@@ -1435,8 +1459,12 @@ function frame(ms) {
       rdLockPulse: gunMotion.rdLockPulse,
       rdBarrelPhase: gunMotion.rdBarrelPhase
     }
-  });
-  equipment.draw(renderer, match, cam, timeNow, screen === 'game', !!settings.lightMode, !!settings.echoPulse, !!settings.fermatCore);
+  }); } catch (error) {
+    if (renderer.native) recoverRenderer(error);
+    else { ready = false; rendererError(error); }
+    return;
+  }
+  equipment.draw(renderer, match, cam, timeNow, screen === 'game', !!settings.echoPulse, !!settings.fermatCore);
   if (resetView) {
     resetView = false;
     $('loading').hidden = true
@@ -1444,16 +1472,16 @@ function frame(ms) {
   const appEl = $('app');
   appEl.dataset.renderer = renderer.native ? 'webgl2' : 'software';
   appEl.dataset.lightMode = String(!!settings.lightMode);
-  appEl.dataset.fluxGi = String(!!(settings.fluxGI && !settings.lightMode));
-  appEl.dataset.schlieren = String(!!(settings.schlieren && !settings.lightMode));
-  appEl.dataset.aeroVortex = String(!!(settings.aeroVortex && !settings.lightMode));
-  appEl.dataset.thermoFlux = String(!!(settings.thermoFlux && !settings.lightMode));
-  appEl.dataset.resonance = String(!!(settings.resonance && !settings.lightMode));
+  appEl.dataset.fluxGi = String(!!(renderer.native && settings.fluxGI && !settings.lightMode));
+  appEl.dataset.schlieren = String(!!(renderer.native && settings.schlieren && !settings.lightMode));
+  appEl.dataset.aeroVortex = String(!!(renderer.native && settings.aeroVortex && !settings.lightMode));
+  appEl.dataset.thermoFlux = String(!!(renderer.native && settings.thermoFlux && !settings.lightMode));
+  appEl.dataset.resonance = String(!!(renderer.native && settings.resonance && !settings.lightMode));
   appEl.dataset.chronoTrace = String(!!settings.chronoTrace);
   appEl.dataset.chronoActive = String(!!(chronoActive && settings.chronoTrace));
   appEl.dataset.fermatCore = String(!!settings.fermatCore);
   appEl.dataset.spectraField = String(!!settings.spectraField);
-  appEl.dataset.flirActive = String(!!(flirActive && !settings.lightMode && settings.thermoFlux));
+  appEl.dataset.flirActive = String(!!(renderer.native && flirActive && !settings.lightMode && settings.thermoFlux && match?.player.alive));
   appEl.dataset.echoPulse = String(!!settings.echoPulse);
   appEl.dataset.aiModel = match?.aiModel || rules.aiModel;
   appEl.dataset.audioEngine = SOUND_ENGIN_VERSION;
@@ -1461,6 +1489,41 @@ function frame(ms) {
   appEl.dataset.audioMode = effectiveAudioMode();
   appEl.dataset.audioState = audio.ctx?.state || (audio.on ? 'ready' : 'off');
 }
+function rendererError(error) {
+  console.error(error);
+  $('loading').hidden = false;
+  $('loading').querySelector('i').hidden = true;
+  $('loading').querySelector('span').textContent = '3D描画を開始できません。ページを再読み込みしてください。';
+}
+
+async function recoverRenderer(error) {
+  ready = false;
+  doPause();
+  flirActive = false;
+  if (screen === 'lobby') lobby();
+  $('resume').disabled = true;
+  $('hdr').hidden = true;
+  const prior = renderer;
+  prior?.hdrDisplay?.dispose?.();
+  if (prior?.native && !prior.gl.isContextLost()) prior.gl.getExtension('WEBGL_lose_context')?.loseContext();
+  try {
+    console.info('互換描画を使用します', error.message || error);
+    const {SoftwareRenderer} = await import('./software.js');
+    const fallback = new SoftwareRenderer(scene);
+    await fallback.init();
+    fallback.settings(settings);
+    renderer = fallback;
+    ready = true;
+    lastTime = null;
+    $('app').classList.add('render-ready');
+    if (screen === 'lobby') lobby();
+    if (screen === 'settings') drawSettings();
+    $('resume').disabled = false;
+  } catch (fallbackError) {
+    rendererError(fallbackError);
+  }
+}
+
 async function init() {
   controls();
   applyLightModeChrome();
@@ -1468,25 +1531,26 @@ async function init() {
   audio.set(settings.volume / 100);
   $('start').disabled = true;
   try {
-    try {
-      renderer = new Renderer(scene, $('hdr'));
-      await renderer.init()
-    } catch (error) {
-      console.info('互換描画を使用します', error.message);
-      const {SoftwareRenderer} = await import('./software.js');
-      renderer = new SoftwareRenderer(scene);
-      await renderer.init()
-    }
+    renderer = new Renderer(scene, $('hdr'));
+    await renderer.init();
     renderer.settings(settings);
-    $('app').classList.add('render-ready');
     ready = true;
-    if (screen === 'lobby')lobby();
-    window.addEventListener('resize', () => renderer.resize());
-    requestAnimationFrame(frame)
-  } catch (e) {
-    console.error(e);
-    $('loading').querySelector('i').hidden = true;
-    $('loading').querySelector('span').textContent = '3D描画を開始できません。ブラウザのグラフィック アクセラレーションを確認してください。'
+    $('app').classList.add('render-ready');
+    if (screen === 'lobby') lobby();
+    if (screen === 'settings') drawSettings();
+  } catch (error) {
+    await recoverRenderer(error);
   }
+  scene.addEventListener('webglcontextlost', () => {
+    if (ready && renderer.native) recoverRenderer(new Error('WebGL コンテキストが失われました'));
+  });
+  window.addEventListener('resize', () => {
+    if (!ready) return;
+    try {
+      renderer.resize();
+      if (screen === 'settings') drawSettings();
+    } catch (error) { recoverRenderer(error); }
+  });
+  if (ready) requestAnimationFrame(frame);
 }
 init();

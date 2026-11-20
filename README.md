@@ -22,3 +22,9 @@ node tools/verify.mjs
 ```
 
 ブラウザでの購入・保存の検証には、リポジトリ直下を `python -m http.server 8000` で配信し、http://localhost:8000/tools/verify-browser.html を開きます。テストは専用の一時データベースを使用します。
+
+## 回帰テスト
+
+Node.js 24 を使用して、`npm install --prefix tools` の後に `npm test --prefix tools` を実行します。Linux で OpenGL ES 3 の環境があれば、`python tools/test_gpu.py` でシェーダーも検証できます。
+
+[重大度順の不具合修正一覧](docs/BUGFIX_AUDIT.md)

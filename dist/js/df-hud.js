@@ -11,12 +11,13 @@ export class PilotEquipment {
     this.thermal = new ThermalOptic($('thermal'));
     this.wallet = new PilotWallet(() => this.accountView());
     this.buying = false;
+    this.pendingAwards = new Map();
+    this.failedAwards = new Set();
+    this.savingAwards = false;
+    $('retryCredits').onclick = () => this.saveAwards();
     for (const id of ['buyLobby', 'buyPause'])$(id).onclick = () => this.buy();
-    for (const [id, code] of [['mobileADS', 'ads'], ['mobilePattern', 'pattern'], ['mobileBoost', 'boost'], ['mobileOptic', 'scope']])$(id).onpointerdown = e => {
-      e.preventDefault();
-      this.action(code)
-    };
-    this.camera = null
+    for (const [id, code] of [['mobileADS', 'ads'], ['mobilePattern', 'pattern'], ['mobileBoost', 'boost'], ['mobileOptic', 'scope']])$(id).onclick = () => this.action(code);
+    this.wasThermal = false
   }
   accountView() {
     if (!this.wallet)return;
@@ -31,7 +32,11 @@ export class PilotEquipment {
       b.title = s.evr ? '両方のレンズを使用できます' : s.units < 5 ? '撃破で 0.10 CR 獲得' : ''
     }
     const m = this.getMatch();
-    if (m?.ended)this.result(m)
+    if (m?.ended) this.result(m);
+    if ($('retryCredits')) {
+      $('retryCredits').hidden = this.failedAwards.size === 0;
+      $('retryCredits').disabled = this.savingAwards;
+    }
   }
   async buy() {
     if (this.buying)return;
@@ -53,11 +58,33 @@ export class PilotEquipment {
   }
   award(e) {
     if (!e.actor.human)return;
-    this.wallet.change(e.receipt).catch (() => this.notice('クレジットを保存できませんでした'));
-    this.notice('＋1 POINT　/　＋0.10 CR')
+    this.pendingAwards.set(e.receipt, this.getMatch()?.receiptId);
+    this.notice('＋1 POINT　/　＋0.10 CR');
+    this.saveAwards(e.receipt);
+  }
+
+  async saveAwards(newReceipt) {
+    if (this.savingAwards) return;
+    this.savingAwards = true;
+    this.accountView();
+    for (const receipt of this.pendingAwards.keys()) {
+      if (newReceipt && this.failedAwards.has(receipt)) continue;
+      try {
+        await this.wallet.change(receipt);
+        this.pendingAwards.delete(receipt);
+        this.failedAwards.delete(receipt);
+      } catch {
+        this.failedAwards.add(receipt);
+      }
+    }
+    this.savingAwards = false;
+    if (this.failedAwards.size) this.notice('未保存のクレジットがあります。試合結果から保存を再試行できます');
+    this.accountView();
   }
   result(match) {
-    $('creditResult').innerHTML = `<span>今回の獲得 <strong>＋${money(match.player.earned)} CR</strong></span><span>所持 ${money(this.wallet.state.units)} CR</span>`
+    const pending = [...this.pendingAwards.values()].filter(id => id === match.receiptId).length;
+    const status = pending ? ` · 保存待ち ${money(pending * 10)} CR` : '';
+    $('creditResult').innerHTML = `<span>今回の獲得 <strong>＋${money(match.player.earned)} CR</strong>${status}</span><span>所持 ${money(this.wallet.state.units)} CR</span>`
   }
   action(code) {
     const m = this.getMatch(), a = m?.player, d = a?.df;
@@ -108,13 +135,17 @@ export class PilotEquipment {
     this.accountView()
   }
   prepare(a) {
-    if (a.df && this.wallet.state.evr)a.df.scope = 'thermal'
+    if (!a.df) return;
+    if (this.wallet.state.evr) a.df.scope = 'thermal';
+    else this.wallet.ready.then(() => {
+      if (this.getMatch()?.player === a && a.df && this.wallet.state.evr) a.df.scope = 'thermal';
+    });
   }
   pause(a) {
     $('pauseCredits').hidden = !a?.df;
     this.accountView()
   }
-  draw(renderer, match, cam, t, play, lite = false, echoOn = true, fermatOn = true) {
+  draw(renderer, match, cam, t, play, echoOn = true, fermatOn = true) {
     const a = match?.player,
       d = a?.df,
       rd = a?.rd,
@@ -127,7 +158,7 @@ export class PilotEquipment {
       thermal = ads && d.scope === 'thermal' && this.wallet.state.evr;
 
     // FermatCore 1.0: Ultra-Light Smartphone-Safe 2D Vector Projection (0 GPU passes, 0 textures, works in Lightweight Mode!)
-    this._drawFermat(renderer, match, cam, t, play && !ads, fermatOn);
+    this._drawFermat(renderer, match, cam, play && !ads, fermatOn);
 
     // EchoPulse 1.0 Peripheral Sound-to-Sight Tactical Acoustic Compass (works even when muted!)
     const compass = $('echoCompass');
@@ -184,10 +215,10 @@ export class PilotEquipment {
     }
 
     let lockTargetId = -1, lockStyle = 'df', isD01 = false, isAcquiring = false;
+    if (reticle) reticle.hidden = !!(play && (!a?.alive || ads));
     if (on) {
-      $('reticle').hidden = ads;
-      if (thermal && (!lite || this.lastThermal === undefined || t - this.lastThermal >= .05 || t < this.lastThermal)) {
-        this.lastThermal = t;
+      if (thermal) {
+        if (!this.wasThermal) this.thermal.reset();
         this.thermal.draw(renderer, match, cam, t);
       }
       $('focusText').textContent = d.locked ? 'ARV1.1  •  弾道誘導 1.76× LOCK' : d.focus ? 'ARV1.1  ·  焦点 ' + Math.round(d.focus * 100) + '%' : 'ARV1.1  ·  待機';
@@ -233,7 +264,8 @@ export class PilotEquipment {
         }
       }
     }
-    if (lockTargetId < 0)return;
+    this.wasThermal = thermal;
+    if (lockTargetId < 0) return;
     const e = match.actors[lockTargetId];
     if (!e?.alive)return;
     const f = unit(sub(cam.target, cam.pos)),
@@ -311,7 +343,7 @@ export class PilotEquipment {
    * FermatCore 1.0 Ultra-Light Vector Optics Overlay (0 GPU passes, 0 textures, 0 3D vertices!).
    * Runs identically in full WebGL2, Lightweight Mode, and SoftwareRenderer with < 0.05 ms CPU cost.
    */
-  _drawFermat(renderer, match, cam, t, active, enabled) {
+  _drawFermat(renderer, match, cam, active, enabled) {
     const ov = $('fermatOverlay'), node = $('fermatNode'), node2 = $('fermatNode2'), tag = $('fermatTag');
     const l1 = $('fermatLeg1'), l2 = $('fermatLeg2'), l3 = $('fermatLeg3');
     if (!ov || !node) return;
@@ -319,10 +351,11 @@ export class PilotEquipment {
       setSvgHidden(ov, true);
       node.hidden = true;
       if (node2) node2.hidden = true;
+      match?.fermat?.updatePlayerOracle(match, match.time, false);
       return;
     }
 
-    const {forward: fwd, bank} = match.fermat.updatePlayerOracle(match, t, true);
+    const {forward: fwd, bank} = match.fermat.updatePlayerOracle(match, match.time, true);
     if (!bank && !fwd) {
       setSvgHidden(ov, true);
       node.hidden = true;

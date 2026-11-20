@@ -1320,7 +1320,7 @@ export function movingDetails(match, time, extra = false, lite = false, opts = n
 
   // ChronoTrace 1.0: 3D world-space holographic ballistic crime-scene & death reconstruction ribbons (0 extra draw calls!)
   if (opts && match.chronoTrace && (opts.showChrono || opts.deathTrace)) {
-    match.chronoTrace.appendForensicGeometry(m, time, {
+    match.chronoTrace.appendForensicGeometry(m, match.time ?? time, {
       showAll: !!opts.showChrono,
       highlightTrace: opts.deathTrace || null,
       lite

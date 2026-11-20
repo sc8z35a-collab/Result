@@ -56,7 +56,7 @@ void schlierenEvaluate(vec2 uv, float worldMask, float time, out vec2 uvOff, out
     float heatMask=smoothstep(.20,1.0,uGunHeat);
     // Localized rising convective plume right above right-hand first-person muzzle area
     vec2 hp=uv-vec2(.64,.36);
-    float plume=exp(-(hp.x*hp.x*22.+hp.y*hp.y*12.))*smoothstep(.12,.30,uv.y)*smoothstep(.76,.46,uv.y);
+    float plume=exp(-(hp.x*hp.x*22.+hp.y*hp.y*12.))*smoothstep(.12,.30,uv.y)*(1.-smoothstep(.46,.76,uv.y));
     if(plume>.02){
       float w1=sin(uv.y*92.-time*24.+uv.x*28.);
       float w2=cos(uv.y*145.-time*33.-uv.x*41.);
@@ -119,7 +119,7 @@ export class SchlierenOptics {
 
   /** Advances 3D pressure waves and ingests new high-energy events from Match.effects. */
   step(match, dt) {
-    const stepDt = clamp(dt || 0.016, 0, 0.1);
+    const stepDt = clamp(dt ?? 0.016, 0, 0.1);
     for (let i = this.waves.length - 1; i >= 0; i--) {
       this.waves[i].age += stepDt;
       if (this.waves[i].age >= this.waves[i].dur) this.waves.splice(i, 1);
@@ -127,7 +127,7 @@ export class SchlierenOptics {
     if (!match) return;
     if (match.effects) {
       for (const e of match.effects) {
-        if (!e.seed || this.seenEffects.has(e.seed)) continue;
+        if (e.seed == null || this.seenEffects.has(e.seed)) continue;
         if (e.kind === 'kill' || e.kind === 'break' || e.kind === 'tanker' || e.kind === 'ricochet' || e.kind === 'penetrate') {
           this.seenEffects.add(e.seed);
           this.emit(e.kind, e.p);

@@ -1,7 +1,10 @@
 {
   "name": "result-development-tools",
   "private": true,
+  "scripts": {"test": "node --test *.test.mjs"},
   "devDependencies": {
-    "@napi-rs/canvas": "0.1.100"
+    "@napi-rs/canvas": "0.1.100",
+    "fake-indexeddb": "6.2.8",
+    "jsdom": "27.4.0"
   }
 }

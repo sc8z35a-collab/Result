@@ -158,7 +158,7 @@ export class SoftwareRenderer {
     if (!this.config) return;
     let [w, h] = effectiveSize(this.config);
     if (innerHeight > innerWidth)[w, h] = [h, w];
-    this.aspect = this.input.clientWidth / Math.max(1, this.input.clientHeight);
+    this.aspect = this.input.clientWidth && this.input.clientHeight ? this.input.clientWidth / this.input.clientHeight : w / h;
     if (w === this.w && h === this.h)return;
     this.w = w;
     this.h = h;

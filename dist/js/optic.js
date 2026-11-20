@@ -1,6 +1,6 @@
 import {sub, unit, dot, cross} from './geometry.js';
 import {bodyHit} from './match.js';
-import {obstacles, rayBox} from './yard.js';
+import {obstacles, rayBox, obstruction} from './yard.js';
 import {torso, bodyCenter} from './posture.js';
 const W = 256, H = 192, halfX = Math.tan(6 * Math.PI / 180), halfY = halfX * H / W;
 // The EVR1 sensor samples a 4:3 image. Cover is depth-tested for each warm
@@ -11,11 +11,16 @@ export class ThermalOptic {
     surface.width = W;
     surface.height = H;
     this.ctx = surface.getContext('2d', {willReadFrequently: true, alpha: false});
-    this.next = 0;
+    this.reset();
+    this.zbuf = new Float32Array(W * H);
     this.seed = 83
   }
+  reset() {
+    this.next = -Infinity;
+  }
+
   draw(renderer, match, cam, t) {
-    if (t + .001 < this.next)return;
+    if (!this.ctx || !renderer.canvas.width || !renderer.canvas.height || !(renderer.aspect > 0) || t + .001 < this.next) return;
     this.next = t + 1 / 18;
     const ctx = this.ctx, src = renderer.canvas, aspect = renderer.aspect, fy = Math.tan(cam.fov * Math.PI / 360);
     const sw = src.width * halfX / (fy * aspect), sh = src.height * halfY / fy;
@@ -48,7 +53,7 @@ export class ThermalOptic {
           const gx = origin[0] + rx * tGround;
           const gz = origin[2] + rz * tGround;
           const samp = tf.sampleTemp(gx, gz);
-          if (samp.dyn < 0.06) continue;
+          if (samp.dyn < 0.06 || obstruction(origin, [gx, .015, gz]) <= 1) continue;
           const boost = Math.min(185, samp.dyn * 165);
           for (let oy = 0; oy < 2 && py + oy < H; oy++) {
             for (let ox = 0; ox < 2 && px + ox < W; ox++) {
@@ -61,7 +66,7 @@ export class ThermalOptic {
         }
       }
     }
-    const zbuf = new Float32Array(W * H);
+    const zbuf = this.zbuf;
     zbuf.fill(130);
     for (const a of match.actors) {
       if (!a.alive || a === match.player)continue;

@@ -251,6 +251,7 @@ export class ResonanceCore {
           // Physical concussive rattle through steel plate (no magic HP damage, pure tactile stance/aim rattle + fair-play seismic ping!)
           e.hitRecoil = Math.min(1, (e.hitRecoil || 0) + 0.36);
           e.seismicRattle = Math.max(e.seismicRattle || 0, 0.85);
+          e.seismicKnockTeam = actor.team;
           match.nv?.brains?.get(e.id)?.humanAim?.onHitShock(1.6);
           c.knockPing = 1.0;
           if (c.coupledIdx >= 0) this.containers[c.coupledIdx].knockPing = 0.85;

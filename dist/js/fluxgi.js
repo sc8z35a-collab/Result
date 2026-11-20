@@ -242,13 +242,13 @@ export class FluxGI {
 
   /** Per-frame real-time dynamic flux injection, temporal persistence decay & GPU stream upload. */
   update(match, dt, uploadToGPU = true) {
-    const decay = Math.exp(-9.5 * clamp(dt || 0.016, 0.001, 0.1));
+    const decay = Math.exp(-9.5 * clamp(dt ?? 1 / 60, 0, 0.15));
+    const injection = (1 - decay) / (1 - Math.exp(-9.5 / 60));
+    const inject = (x, z, r, g, b, intensity, radius) => this.injectPoint(x, z, r, g, b, intensity * injection, radius);
     const dyn = this.dynamicFlux;
-    let energySum = 0;
     for (let i = 0; i < dyn.length; i++) {
       dyn[i] *= decay;
       if (dyn[i] < 0.0015) dyn[i] = 0;
-      else energySum += dyn[i];
     }
 
     if (match) {
@@ -256,38 +256,39 @@ export class FluxGI {
       if (match.tankers) {
         for (const tk of match.tankers) {
           if (tk.cooldown <= 0) {
-            this.injectPoint(tk.x, tk.z, 0.24, 0.92, 0.84, 0.45, 2);
+            inject(tk.x, tk.z, 0.24, 0.92, 0.84, 0.45, 2);
           } else {
-            this.injectPoint(tk.x, tk.z, 0.65, 0.40, 0.16, 0.20, 1);
+            inject(tk.x, tk.z, 0.65, 0.40, 0.16, 0.20, 1);
           }
         }
       }
       // 2. Flying high-energy projectiles paint moving indirect bounce light down container alleys!
       for (const s of match.shots) {
-        if (s.gun === 'MS10') this.injectPoint(s.p[0], s.p[2], 0.22, 1.15, 1.45, 0.42, 1);
-        else if (s.gun === 'RD40') this.injectPoint(s.p[0], s.p[2], 1.38, 0.36, 0.34, 0.32, 1);
-        else if (s.gun === 'RD30') this.injectPoint(s.p[0], s.p[2], 1.28, 0.78, 0.26, 0.24, 1);
-        else if (s.gun === 'RD20') this.injectPoint(s.p[0], s.p[2], 0.26, 1.05, 1.32, 0.24, 1);
-        else if (s.source === 'p1') this.injectPoint(s.p[0], s.p[2], 1.02, 0.42, 1.45, 0.36, 1);
-        else if (s.guided) this.injectPoint(s.p[0], s.p[2], 0.22, 1.20, 1.05, 0.28, 1);
+        if (s.gun === 'MS10') inject(s.p[0], s.p[2], 0.22, 1.15, 1.45, 0.42, 1);
+        else if (s.gun === 'RD40') inject(s.p[0], s.p[2], 1.38, 0.36, 0.34, 0.32, 1);
+        else if (s.gun === 'RD30') inject(s.p[0], s.p[2], 1.28, 0.78, 0.26, 0.24, 1);
+        else if (s.gun === 'RD20') inject(s.p[0], s.p[2], 0.26, 1.05, 1.32, 0.24, 1);
+        else if (s.source === 'p1') inject(s.p[0], s.p[2], 1.02, 0.42, 1.45, 0.36, 1);
+        else if (s.guided) inject(s.p[0], s.p[2], 0.22, 1.20, 1.05, 0.28, 1);
       }
       // 3. Explosive impacts, kills, shield breaks, muzzle flashes & ricochet molten sparks
       for (const e of match.effects) {
         const frac = clamp(e.life / (e.max || 0.2), 0, 1);
         if (frac < 0.05) continue;
-        if (e.kind === 'kill') this.injectPoint(e.p[0], e.p[2], 1.65, 0.92, 0.32, frac * 1.45, 3);
-        else if (e.kind === 'break') this.injectPoint(e.p[0], e.p[2], 0.28, 1.35, 1.65, frac * 1.25, 3);
-        else if (e.kind === 'tanker') this.injectPoint(e.p[0], e.p[2], 0.36, 1.35, 1.12, frac * 1.35, 3);
-        else if (e.kind === 'ricochet') this.injectPoint(e.p[0], e.p[2], 1.55, 1.12, 0.44, frac * 0.95, 2);
-        else if (e.kind === 'penetrate') this.injectPoint(e.p[0], e.p[2], 1.35, 0.85, 0.36, frac * 0.75, 2);
+        if (e.kind === 'kill') inject(e.p[0], e.p[2], 1.65, 0.92, 0.32, frac * 1.45, 3);
+        else if (e.kind === 'break') inject(e.p[0], e.p[2], 0.28, 1.35, 1.65, frac * 1.25, 3);
+        else if (e.kind === 'tanker') inject(e.p[0], e.p[2], 0.36, 1.35, 1.12, frac * 1.35, 3);
+        else if (e.kind === 'ricochet') inject(e.p[0], e.p[2], 1.55, 1.12, 0.44, frac * 0.95, 2);
+        else if (e.kind === 'penetrate') inject(e.p[0], e.p[2], 1.35, 0.85, 0.36, frac * 0.75, 2);
         else if (e.kind === 'muzzle') {
           const c = e.gun === 'MS10' ? [0.3, 1.2, 1.5] : e.gun === 'RD40' ? [1.45, 0.45, 0.38] : [1.35, 0.88, 0.35];
-          this.injectPoint(e.p[0], e.p[2], c[0], c[1], c[2], frac * 0.62, 2);
+          inject(e.p[0], e.p[2], c[0], c[1], c[2], frac * 0.62, 2);
         }
       }
-      for (let i = 0; i < dyn.length; i++) energySum += dyn[i];
     }
 
+    let energySum = 0;
+    for (const value of dyn) energySum += value;
     this.lastDynamicEnergy = energySum;
     this._packTextureData();
     if (uploadToGPU && this.gl && this.tex) {

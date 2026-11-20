@@ -15,14 +15,19 @@ export function targetPoint(a) {
   return [x, a.y + 1.23 * torso(a), z]
 }
 export function vertical(a, dt, floorAt) {
-  const floor = floorAt(a.x, a.z, a.y);
+  const before = a.y;
   a.vy -= 14 * dt;
-  a.y += a.vy * dt;
-  if (a.y <= floor) {
+  const next = before + a.vy * dt;
+  const floor = a.vy <= 0 ? floorAt(a.x, a.z, before) : -Infinity;
+  if (next <= floor) {
+    if (!a.onGround && a.vy < -1.2) a.landCompress = clamp(-a.vy / 7.5, .25, 1);
     a.y = floor;
     a.vy = 0;
-    a.onGround = true
-  } else a.onGround = false
+    a.onGround = true;
+  } else {
+    a.y = next;
+    a.onGround = false;
+  }
 }
 export function postureStep(a, dt, crouch, lean, ads) {
   const k = 1 - Math.exp(-7 * dt);

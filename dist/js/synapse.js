@@ -101,11 +101,14 @@ export class SynapseProfiler {
   }
 
   save() {
+    if (this.saved || this.observations === 0) return;
+    this.saved = true;
+    this.matchesLearned++;
     try {
       globalThis.localStorage?.setItem(SYNAPSE_STORAGE_KEY, JSON.stringify({
         fp: this.fp,
         markov: Array.from(this.markov, v => Number(v.toFixed(3))),
-        matchesLearned: this.matchesLearned + 1
+        matchesLearned: this.matchesLearned
       }));
     } catch {}
   }

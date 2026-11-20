@@ -3,14 +3,16 @@ export class HDRDisplay {
   constructor(canvas) {
     this.canvas = canvas;
     this.active = false;
-    this.ready = false;
     this.available = false;
     this.media = matchMedia('(dynamic-range: high)');
     this.pending = null;
     this.want = false;
-    this.khdr = false
+    this.khdr = false;
+    this.onModeChange = () => this.choose(this.want, this.khdr);
+    this.media.addEventListener?.('change', this.onModeChange);
   }
   async choose(on, khdr = false) {
+    if (this.disposed) return;
     this.want = !!(on || khdr);
     this.khdr = !!khdr;
     if (!this.want || !this.media.matches || !navigator.gpu) {
@@ -22,16 +24,27 @@ export class HDRDisplay {
       this.available = false;
     });
     await this.pending;
-    this.active = !!(this.want && this.available);
+    this.active = !!(this.want && this.available && this.media.matches);
     this.canvas.hidden = !this.active
   }
   async init() {
     const adapter = await navigator.gpu.requestAdapter();
     if (!adapter)return;
     const device = await adapter.requestDevice(), ctx = this.canvas.getContext('webgpu');
-    if (!ctx)return;
-    ctx.configure({device, format: 'rgba16float', toneMapping: {mode: 'extended'}, alphaMode: 'opaque', colorSpace: 'srgb'});
-    if (ctx.getConfiguration && ctx.getConfiguration()?.toneMapping?.mode !== 'extended')return;
+    if (!ctx || this.disposed) {
+      device.destroy();
+      return;
+    }
+    try {
+      ctx.configure({device, format: 'rgba16float', toneMapping: {mode: 'extended'}, alphaMode: 'opaque', colorSpace: 'srgb'});
+      if (ctx.getConfiguration && ctx.getConfiguration()?.toneMapping?.mode !== 'extended') {
+        device.destroy();
+        return;
+      }
+    } catch (error) {
+      device.destroy();
+      throw error;
+    }
     const makePipe = scalePow => {
       const mod = device.createShaderModule({code: `@group(0) @binding(0) var src:texture_2d<f32>; @vertex fn vs(@builtin(vertex_index) i:u32)->@builtin(position) vec4f {let p=vec2f(f32((i<<1u)&2u),f32(i&2u))*2.-1.;return vec4f(p,0.,1.);} @fragment fn fs(@builtin(position) p:vec4f)->@location(0) vec4f {let v=textureLoad(src,vec2i(p.xy),0).rgb;return vec4f(exp2(v*${scalePow})-1.,1.);}`});
       return device.createRenderPipelineAsync({
@@ -41,7 +54,18 @@ export class HDRDisplay {
         primitive: {topology: 'triangle-list'}
       });
     };
-    const [pipeline, pipelineKHDR] = await Promise.all([makePipe('3.'), makePipe('4.')]);
+    let pipelines;
+    try {
+      pipelines = await Promise.all([makePipe('3.'), makePipe('4.')]);
+    } catch (error) {
+      device.destroy();
+      throw error;
+    }
+    if (this.disposed) {
+      device.destroy();
+      return;
+    }
+    const [pipeline, pipelineKHDR] = pipelines;
     this.device = device;
     this.ctx = ctx;
     this.pipeline = pipeline;
@@ -49,8 +73,22 @@ export class HDRDisplay {
     this.available = true;
     device.lost.then(() => {
       this.active = this.available = false;
-      this.canvas.hidden = true
+      this.canvas.hidden = true;
+      this.src = null;
+      this.w = this.h = 0;
+      this.pending = null;
     })
+  }
+
+  dispose() {
+    this.disposed = true;
+    this.want = false;
+    this.active = false;
+    this.canvas.hidden = true;
+    this.media.removeEventListener?.('change', this.onModeChange);
+    this.src?.destroy();
+    this.ctx?.unconfigure();
+    this.device?.destroy();
   }
   present(source) {
     if (!this.active)return;

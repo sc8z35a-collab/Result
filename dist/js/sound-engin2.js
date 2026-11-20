@@ -1064,14 +1064,16 @@ export class SoundEngin2 {
 
     // Priority voice governor & rate limiters
     this.activeVoices = 0;
-    this.lastWhizAt = 0;
-    this.lastImpactAt = 0;
-    this.lastCasingAt = 0;
-    this.lastRdLockAt = 0;
-    this.lastD01At = 0;
-    this.lastFermatLockAt = 0;
-    this.lastResonateAt = 0;
-    this.lastWaterAt = 0;
+    this.voices = new Set();
+    this.enableGeneration = 0;
+    this.lastWhizAt = -Infinity;
+    this.lastImpactAt = -Infinity;
+    this.lastCasingAt = -Infinity;
+    this.lastRdLockAt = -Infinity;
+    this.lastD01At = -Infinity;
+    this.lastFermatLockAt = -Infinity;
+    this.lastResonateAt = -Infinity;
+    this.lastWaterAt = -Infinity;
     this.lastFootstepAt = new Map();
     this.actorState = new Map();
     this._lastFermatLocked = false;
@@ -1102,20 +1104,33 @@ export class SoundEngin2 {
   }
 
   setMode(mode) {
-    this.mode = mode === AUDIO_MODES.stereo ? AUDIO_MODES.stereo
-      : mode === AUDIO_MODES.hrtf ? AUDIO_MODES.hrtf
-      : AUDIO_MODES.ultra300;
-    if (this.tankerPanner?.is3D && this.tankerPanner.node) {
-      try {
-        this.tankerPanner.node.panningModel = this.isSpatial3D ? 'HRTF' : 'equalpower';
-      } catch {}
+    const next = Object.hasOwn(AUDIO_MODES, mode) ? mode : AUDIO_MODES.ultra300;
+    if (this.mode === next) return;
+    const was3D = this.isSpatial3D;
+    this.mode = next;
+    if (this.tankerPanner && this.ctx?.createPanner && was3D !== this.isSpatial3D) {
+      const previous = this.tankerPanner;
+      this.tankerGain.disconnect(previous.input);
+      previous.output.disconnect();
+      this.tankerPanner = this._createSpatialNode(this.tankerPos || this.listenerPos, 0, true);
+      this.tankerGain.connect(this.tankerPanner.input);
+      this.tankerPanner.output.connect(this.ambienceBus);
     }
     if (this.ctx && this.openRevReturn && this.alleyRevReturn) {
       this._applyEnclosureMix(this.ctx.currentTime);
     }
   }
 
+  stopMatchSounds() {
+    for (const voice of this.voices) {
+      try { voice.stop(); } catch {}
+      voice.onended?.();
+    }
+    if (this.tankerGain && this.ctx) this.tankerGain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.1);
+  }
+
   resetMatch() {
+    this.stopMatchSounds();
     this.actorState.clear();
     this.lastFootstepAt.clear();
     this.heartbeatTimer = 0;
@@ -1123,37 +1138,48 @@ export class SoundEngin2 {
     this.barrelHeat = 0;
     this.exertion = 0;
     this._lastFermatLocked = false;
-    if (this.tankerGain && this.ctx) {
-      this.tankerGain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.1);
-    }
+    this.listenerVel = [0, 0, 0];
+    this.listenerPrevPos = null;
+    this.breathTimer = 0.9;
+    this.controlAccum = 0;
+    this.envProbeTimer = 0;
   }
 
   async enable(on) {
+    const generation = ++this.enableGeneration;
     this.on = !!on;
     if (!this.on) {
-      if (this.master && this.ctx) {
-        this.master.gain.setTargetAtTime(0, this.ctx.currentTime, 0.06);
-      }
+      this.stopMatchSounds();
+      this.set(this.volume);
       return;
     }
     try {
-      if (!this.ctx) {
-        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!this.ctx || this.ctx.state === 'closed') {
+        const AudioCtx = globalThis.window?.AudioContext || globalThis.window?.webkitAudioContext;
         if (!AudioCtx) {
           this.on = false;
           return;
         }
-        this.ctx = new AudioCtx({latencyHint: 'interactive'});
-        this._buildGraph();
-        this._buildProceduralBuffers();
-        this._startAmbience();
+        const ctx = new AudioCtx({latencyHint: 'interactive'});
+        this.ctx = ctx;
+        try {
+          this._buildGraph();
+          this._buildProceduralBuffers();
+          this._startAmbience();
+        } catch (error) {
+          this.ctx = null;
+          this.master = this.tankerGain = null;
+          try { await ctx.close(); } catch {}
+          throw error;
+        }
       }
-      if (this.ctx.state !== 'running') {
-        await this.ctx.resume();
-      }
-      this.set(this.volume);
+      if (this.ctx.state !== 'running') await this.ctx.resume();
+      if (this.enableGeneration === generation) this.set(this.volume);
     } catch {
-      this.on = false;
+      if (this.enableGeneration === generation) {
+        this.on = false;
+        this.set(this.volume);
+      }
     }
   }
 
@@ -1565,11 +1591,15 @@ export class SoundEngin2 {
   }
 
   _trackVoice(sourceNode, cleanupNodes = []) {
-    this.activeVoices++;
+    this.voices.add(sourceNode);
+    this.activeVoices = this.voices.size;
     sourceNode.onended = () => {
-      this.activeVoices = Math.max(0, this.activeVoices - 1);
-      for (const n of cleanupNodes) {
-        try { n?.disconnect?.(); } catch {}
+      if (!this.voices.delete(sourceNode)) return;
+      this.activeVoices = this.voices.size;
+      sourceNode.onended = null;
+      try { sourceNode.disconnect(); } catch {}
+      for (const node of cleanupNodes) {
+        try { node?.disconnect?.(); } catch {}
       }
     };
   }
@@ -1746,7 +1776,8 @@ export class SoundEngin2 {
 
     this._trackVoice(src, nodes);
     const offset = opts.loop ? Math.random() * Math.max(0.1, opts.buffer.duration - 0.35) : 0;
-    src.start(start, offset, dur + 0.025);
+    src.start(start, offset);
+    src.stop(start + dur + .025);
   }
 
   // --------------------------------------------------------------------------
@@ -1782,8 +1813,12 @@ export class SoundEngin2 {
   }
 
   update(dt, match, cam) {
+    if (!this.ctx || !this.on || !this.volume || (this.ctx.state && this.ctx.state !== 'running')) {
+      this.listenerPrevPos = null;
+      this.listenerVel = [0, 0, 0];
+      return;
+    }
     this.step300Hz(dt, match);
-    if (!this.ctx || !this.on) return;
     const now = this.ctx.currentTime;
     const sr = this.ctx.sampleRate;
 
@@ -1798,14 +1833,14 @@ export class SoundEngin2 {
     // 1. Sync 3D AudioListener pose & velocity
     if (cam?.pos && cam?.target) {
       const px = finite(cam.pos[0], 0), py = finite(cam.pos[1], 1.65), pz = finite(cam.pos[2], 78);
-      if (dt > 0.001) {
+      if (dt > 0.001 && this.listenerPrevPos) {
         const inv = 1 / dt;
         this.listenerVel = [
           clamp((px - this.listenerPrevPos[0]) * inv, -18, 18),
           clamp((py - this.listenerPrevPos[1]) * inv, -18, 18),
           clamp((pz - this.listenerPrevPos[2]) * inv, -18, 18)
         ];
-      }
+      } else this.listenerVel = [0, 0, 0];
       this.listenerPrevPos = [px, py, pz];
 
       let fx = finite(cam.target[0], px) - px;
@@ -1898,7 +1933,11 @@ export class SoundEngin2 {
         if (d < bestD) { bestD = d; bestTk = tk; }
       }
       if (bestTk && bestTk.cooldown <= 0.1) {
-        const pos = [bestTk.x, 1.5, bestTk.z];
+        const dx = this.listenerPos[0] - bestTk.x, dz = this.listenerPos[2] - bestTk.z;
+        const face = Math.min(bestTk.w / (2 * Math.abs(dx)), bestTk.d / (2 * Math.abs(dz)));
+        const exterior = Math.min(1, face + .12 / Math.max(.12, bestD));
+        const pos = [bestTk.x + dx * exterior, 1.5, bestTk.z + dz * exterior];
+        this.tankerPos = pos;
         const prox = Math.pow(clamp(1 - bestD / 26, 0, 1), 1.65);
         const occ = obstruction(pos, this.listenerPos) <= 1 ? 0.45 : 1.0;
         this._setPannerPos(this.tankerPanner, pos, now);
@@ -1946,9 +1985,9 @@ export class SoundEngin2 {
       // Crouch & Stand tactical Kevlar gear transition foley
       const crouchNow = (a.crouch || 0) > 0.45;
       if (crouchNow !== st.prevCrouch && (isPlayer || dist < 12)) {
-        st.prevCrouch = crouchNow;
         this._playStanceFoley(a, isPlayer, crouchNow ? 'crouch' : 'stand', now);
       }
+      st.prevCrouch = crouchNow;
       // ADS / Optic raise mechanical click
       const adsNow = !!(a.df?.ads);
       if (isPlayer && adsNow !== st.prevAds) {
@@ -1983,18 +2022,17 @@ export class SoundEngin2 {
         } else if (speed < 0.25) {
           st.strideMark = a.stride;
         }
-      }
+      } else st.strideMark = a.stride;
 
       // 5-Stage weapon-specific reload choreography
-      if (a.reload > 0 && dist < 26) {
+      if (a.reload > 0) {
         const f = a.reloadFrac || 0;
-        if (f >= 0.05 && st.reloadStage < 1) { st.reloadStage = 1; this._playReloadStage(a, isPlayer, 1, now); }
-        else if (f >= 0.22 && st.reloadStage < 2) { st.reloadStage = 2; this._playReloadStage(a, isPlayer, 2, now); }
-        else if (f >= 0.50 && st.reloadStage < 3) { st.reloadStage = 3; this._playReloadStage(a, isPlayer, 3, now); }
-        else if (f >= 0.74 && st.reloadStage < 4) { st.reloadStage = 4; this._playReloadStage(a, isPlayer, 4, now); }
-      } else if (a.reload <= 0) {
-        st.reloadStage = 0;
-      }
+        const stage = f >= 0.74 ? 4 : f >= 0.50 ? 3 : f >= 0.22 ? 2 : f >= 0.05 ? 1 : 0;
+        if (stage > st.reloadStage) {
+          if (dist < 26) this._playReloadStage(a, isPlayer, stage, now);
+          st.reloadStage = stage;
+        }
+      } else st.reloadStage = 0;
     }
 
     // 6. Human Sprint Exertion Breath & Critical Low-HP Heartbeat
@@ -2473,8 +2511,9 @@ export class SoundEngin2 {
   }
 
   _playWaterSplash(p, start, v, lpf, rev) {
-    if (start - this.lastWaterAt < 0.04) return;
-    this.lastWaterAt = start;
+    const now = this.ctx?.currentTime ?? start;
+    if (now - this.lastWaterAt < 0.04) return;
+    this.lastWaterAt = now;
     this.stats.waterSplashes++;
     this._playBuffer({
       buffer: this.waterBuf,
@@ -2515,7 +2554,7 @@ export class SoundEngin2 {
     if (!this.ctx || !this.on || !this.volume || !e.point) return;
     const now = this.ctx.currentTime;
     if (now - this.lastCasingAt < 0.022) return;
-    const d = Math.hypot(e.point[0] - this.listenerPos[0], e.point[2] - this.listenerPos[2]);
+    const d = Math.hypot(...e.point.map((value, i) => value - this.listenerPos[i]));
     if (d > 15) return;
     this.lastCasingAt = now;
     this.stats.casings++;
@@ -2544,7 +2583,7 @@ export class SoundEngin2 {
   // Tactical Foley: 3-Phase Footsteps, Stances, ADS, Jumps, Landings, 5-Stage Reload
   // --------------------------------------------------------------------------
   _playFootstep(actor, isPlayer, parity, now) {
-    const last = this.lastFootstepAt.get(actor.id) || 0;
+    const last = this.lastFootstepAt.get(actor.id) ?? -Infinity;
     if (now - last < 0.165) return;
     this.lastFootstepAt.set(actor.id, now);
     this.stats.footsteps++;
@@ -2833,7 +2872,7 @@ export class SoundEngin2 {
       this._playTone({f0: 640, f1: 960, dur: 0.09, gain: 0.065, type: 'sine', bus: this.uiBus, priority: 3, start: now + 0.02});
       return;
     }
-    if (e.type === 'end') {
+    if (e.type === 'end' && e.winner != null) {
       const won = e.winner === player.team;
       const chord = won ? [440, 554.4, 659.3, 880] : [392, 349.2, 293.7];
       chord.forEach((f, idx) => {

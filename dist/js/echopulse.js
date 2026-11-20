@@ -37,6 +37,7 @@ export class EchoPulseField {
   reset() {
     this.queue.length = 0;
     this.playerWaves.length = 0;
+    for (const key of Object.keys(this.stats)) this.stats[key] = 0;
   }
 
   /**
@@ -52,13 +53,14 @@ export class EchoPulseField {
     for (const listener of match.actors) {
       if (!listener.alive) continue;
       if (actor && listener.id === actor.id) continue;
+      if (team === listener.team && !(listener.human && kind === 'tanker')) continue;
       const dst = eyeOf(listener);
       const dist = Math.hypot(pos[0] - dst[0], pos[1] - dst[1], pos[2] - dst[2]);
-      if (dist > maxRange || dist < 0.5) continue;
+      if (dist > maxRange) continue;
 
       const path = computeAcousticPath(pos, dst);
       const effectiveGain = path.directGain * loudness;
-      if (effectiveGain < 0.025 && !path.occluded) continue;
+      if (effectiveGain < 0.025) continue;
 
       let perceivedPos = [pos[0], pos[1], pos[2]];
       let isDecoy = false;
@@ -85,10 +87,12 @@ export class EchoPulseField {
 
       if (listener.human) {
         // Queue for player's peripheral Sound-to-Sight Acoustic Compass (enemy & neutral/tanker cues)
-        if (team === listener.team && kind !== 'tanker') continue;
         this.playerWaves.push({
           kind,
           actorId: actor?.id ?? -1,
+          actorSpawnId: actor?.spawnId,
+          listenerSpawnId: listener.spawnId,
+          team,
           pos: perceivedPos,
           arriveAt: tNow + arrivalDelay,
           expireAt: tNow + arrivalDelay + (kind === 'tanker' ? 1.55 : kind === 'fire' ? 0.92 : 0.72),
@@ -98,10 +102,12 @@ export class EchoPulseField {
           gun
         });
         if (this.playerWaves.length > MAX_PULSES) this.playerWaves.shift();
-      } else if (team !== listener.team && (kind === 'fire' || kind === 'ricochet' || kind === 'penetrate' || kind === 'tanker')) {
+      } else {
         // Queue physically delayed speed-of-sound acoustic arrival for NPC AI perception!
         this.queue.push({
           listenerId: listener.id,
+          listenerSpawnId: listener.spawnId,
+          sourceSpawnId: actor?.spawnId,
           sourceActor: actor,
           perceivedPos,
           truePos: [pos[0], pos[1], pos[2]],
@@ -125,15 +131,19 @@ export class EchoPulseField {
     const arrived = [];
     for (let i = this.queue.length - 1; i >= 0; i--) {
       if (this.queue[i].arriveAt <= tNow) {
-        arrived.push(this.queue[i]);
+        const report = this.queue[i];
         this.queue.splice(i, 1);
-        this.stats.delivered++;
+        const listener = match.actors[report.listenerId];
+        if (listener?.alive && listener.spawnId === report.listenerSpawnId) {
+          arrived.push(report);
+          this.stats.delivered++;
+        }
       }
     }
     for (let i = this.playerWaves.length - 1; i >= 0; i--) {
-      if (this.playerWaves[i].expireAt <= tNow) this.playerWaves.splice(i, 1);
+      if (this.playerWaves[i].expireAt <= tNow || this.playerWaves[i].listenerSpawnId !== match.player?.spawnId) this.playerWaves.splice(i, 1);
     }
-    return arrived;
+    return arrived.sort((a, b) => a.arriveAt - b.arriveAt);
   }
 
   /**

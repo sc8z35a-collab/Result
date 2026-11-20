@@ -74,13 +74,13 @@ void main(){
     float rdLockPulse=uAnim.z;
     float rdPhase=uAnim.w;
     if(uRecoil.x>.001){
-      float slide=smoothstep(.038,.075,p.y)*smoothstep(.12,-.16,p.z)*smoothstep(-.78,-.35,p.z);
+      float slide=smoothstep(.038,.075,p.y)*(1.-smoothstep(-.16,.12,p.z))*smoothstep(-.78,-.35,p.z);
       p.z+=uRecoil.x*.036*slide;
-      float tip=smoothstep(-.35,-.80,p.z);
+      float tip=(1.-smoothstep(-.80,-.35,p.z));
       p.x+=uRecoil.y*uRecoil.x*.003*tip;
       p.y+=uRecoil.x*.004*tip;
       // Alternating twin-barrel hydraulic servo recoil for twin-linked RD40/RD30
-      float barrelZone=smoothstep(-.26,-.36,p.z)*step(abs(p.x),.065)*step(.012,abs(p.x));
+      float barrelZone=(1.-smoothstep(-.36,-.26,p.z))*step(abs(p.x),.065)*step(.012,abs(p.x));
       float sideBias=p.x<0.?(1.0-rdPhase*.36):(0.64+rdPhase*.36);
       p.z+=uRecoil.x*.042*barrelZone*sideBias;
     }
@@ -268,7 +268,7 @@ void main(){
           if(proj>1.02 && proj<3.5){
             vec2 perp=toP-toA*proj;
             float r=length(perp);
-            flameOcc=min(flameOcc,mix(1.,.48,(1.-smoothstep(.16,.55*proj,r))*(1.-smoothstep(2.0,3.5,proj))));
+            flameOcc=min(flameOcc,mix(1.,.48,(1.-smoothstep(.16,max(.161,.55*proj),r))*(1.-smoothstep(2.0,3.5,proj))));
           }
         }
       }
@@ -316,7 +316,7 @@ void main(){
 
   // First-person weapon muzzle barrel heat glow on rapid fire
   if(uMode==2 && uGunHeat>.01){
-    float barrelMask=smoothstep(-.25,-.75,lPos.z);
+    float barrelMask=(1.-smoothstep(-.75,-.25,lPos.z));
     c+=vec3(1.1,.68,.35)*uGunHeat*barrelMask*.42;
   }
 
@@ -346,8 +346,8 @@ void main(){
       if(uQuality>=2 || uKHDR==1)c+=vec3(1.,.78,.46)*sunScatter*fg*(uKHDR==1?.28:.24);
     }
   }
-  // Alpha channel carries world mask (1.0=world/actor, 0.0=first-person viewmodel) for Shadow Flame Pro screen-space pass!
-  frag=vec4(displayColor(c),uMode==2?0.:1.);
+  // Offscreen alpha distinguishes world, actor surfaces, and the first-person viewmodel.
+  frag=vec4(displayColor(c),uMode==2?0.:uMode==1?.8:1.);
 }`;
 
 export const skyVS = `#version 300 es

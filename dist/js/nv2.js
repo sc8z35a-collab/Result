@@ -1304,76 +1304,18 @@ export class NV2 extends NV13Pro {
   perceive(a, b) {
     const hadTarget = b.seen;
     const prevTargetId = b.target?.id ?? -1;
-    super.perceive(a, b);
     const t = this.match.time;
-    const visDt = Math.max(0.02, Math.min(0.22, t - (b.lastSightStepAt || t - 0.08)));
+    const visDt = Math.max(0.02, Math.min(0.22, t - (b.lastSightStepAt ?? t - 0.08)));
     b.lastSightStepAt = t;
     const st = this.nv2Teams[a.team];
-    if (!b.visibleEnemies) b.visibleEnemies = [];
-    b.visibleEnemies.length = 0;
-
-    // NV2.1 agile peripheral visual scan (strictly direct LOS via obstruction() > 1 & smoke-clear — ZERO wallhack!)
     const av = this.match.aeroVortex;
     const eye = eyeOf(a);
     const smokeGate = b.spy ? 1.02 : 0.86;
-    if (av && av.stats.totalSmoke > 1.8) {
-      // Dense Navier-Stokes tactical smoke physically conceals optical LOS!
-      for (const e of this.match.actors) {
-        if (!e.alive || e.team === a.team) continue;
-        const rec = b.contacts.get(e.id);
-        if (rec?.seen && av.smokeOcclusion(eye, targetPoint(e)) > smokeGate) {
-          rec.seen = false;
-          if (b.target === e) {
-            b.seen = null;
-            b.target = null;
-            b.targetId = -1;
-          }
-        }
-      }
-    }
-    if (b.spy) {
-      for (const e of this.match.actors) {
-        if (!e.alive || e.team === a.team || b.contacts.get(e.id)?.seen) continue;
-        const dx = e.x - a.x, dz = e.z - a.z, d = Math.hypot(dx, dz);
-        const aimYaw = Math.atan2(dx, -dz);
-        const fovDiff = Math.abs(angleDiff(a.yaw, aimYaw));
-        const tp = targetPoint(e);
-        if ((d < 16 || (d < 86 && fovDiff < 1.72)) && obstruction(eye, tp) > 1 && (!av || av.stats.totalSmoke <= 1.8 || av.smokeOcclusion(eye, tp) <= smokeGate)) {
-          b.contacts.set(e.id, {
-            x: e.x, y: e.y, z: e.z, vx: e.vx || 0, vz: e.vz || 0,
-            t, seen: true, gun: e.gun, hp: e.hp + e.shield
-          });
-          if (!b.seen) {
-            b.target = e;
-            b.targetId = e.id;
-            b.seen = {x: e.x, y: e.y, z: e.z, vx: e.vx || 0, vz: e.vz || 0};
-            b.lastPos = [e.x, e.z];
-            b.lastSeenTargetPos = [e.x, e.y + 1.15, e.z];
-            b.lastSeenTargetAt = t;
-            b.seenAt = t;
-            if (b.exposedSince < 0) b.exposedSince = t;
-          }
-        }
-      }
-    }
-
-    // NV2 Human Foveal / Parafoveal / Peripheral Visual Psychophysics & Tunnel-Vision Filter (NV2.1 Spy keeps elite scan!)
-    if (this.humanMode && b.vision && !b.spy) {
-      for (const e of this.match.actors) {
-        if (!e.alive || e.team === a.team) continue;
-        const rec = b.contacts.get(e.id);
-        if (!rec?.seen) continue;
-        const vis = b.vision.evaluateSighting(a, e, visDt, t, b.mind, prevTargetId, this.metrics);
-        if (!vis.recognized) {
-          rec.seen = false;
-          if (b.target === e) {
-            b.seen = null;
-            b.target = null;
-            b.targetId = -1;
-          }
-        }
-      }
-    }
+    const obscured = target => av?.stats.totalSmoke > 1.8 && av.smokeOcclusion(eye, target) > smokeGate;
+    const recognize = enemy => !b.vision || b.spy || b.vision.evaluateSighting(a, enemy, visDt, t, b.mind, prevTargetId, this.metrics).recognized;
+    super.perceive(a, b, obscured, recognize);
+    if (!b.visibleEnemies) b.visibleEnemies = [];
+    b.visibleEnemies.length = 0;
 
     for (const e of this.match.actors) {
       if (e.alive && e.team !== a.team && b.contacts.get(e.id)?.seen) {
@@ -1453,7 +1395,7 @@ export class NV2 extends NV13Pro {
           b.gaze.onAcousticCue(listener, rep.perceivedPos, t, rep.kind === 'fire' || rep.kind === 'ricochet', this.metrics);
         }
       }
-      if (rep.sourceActor && cog?.beliefs) {
+      if (rep.sourceActor && rep.sourceActor.spawnId === rep.sourceSpawnId && cog?.beliefs) {
         const bf = cog.beliefs.get(rep.sourceActor.id);
         if (bf && t - bf.lastSightAt > 0.65) {
           bf.peakX = px;

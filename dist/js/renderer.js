@@ -12,13 +12,14 @@ import {FluxGI} from './fluxgi.js';
 import {SchlierenOptics} from './schlieren.js';
 import {AERO_W, AERO_H} from './aerovortex.js';
 import {THERMO_W, THERMO_H} from './thermoflux.js';
+import {WATER_HEIGHT} from './yard.js';
 
 const I = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
 export const sizes = {HD: [1280, 720], FHD: [1920, 1080], '2K': [2560, 1440]};
 export const liteSizes = {HD: [854, 480], FHD: [960, 540], '2K': [1280, 720]};
 export function effectiveSize(config) {
   const table = config?.lightMode ? liteSizes : sizes;
-  return table[config?.resolution] || table.HD;
+  return Object.hasOwn(table, config?.resolution) ? table[config.resolution] : table.HD;
 }
 export const qualityLevels = {standard: 0, high: 1, extra: 2};
 export {shadowModes};
@@ -76,7 +77,11 @@ function makeTarget(gl, w, h, withDepth = false) {
     gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, w, h);
     gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, rb);
   }
-  if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) throw Error('オフスクリーンバッファを作成できません');
+  if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    destroyTarget(gl, {tex, rb, fb});
+    throw Error('オフスクリーンバッファを作成できません');
+  }
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   return {fb, tex, rb, w, h};
 }
@@ -114,6 +119,9 @@ export class Renderer {
     this.native = true;
     this.floatHDR = false;
     this.mirrorDim = [512, 288];
+    const maxTarget = Math.min(this.gl.getParameter(this.gl.MAX_TEXTURE_SIZE), this.gl.getParameter(this.gl.MAX_RENDERBUFFER_SIZE));
+    this.maxWidth = Math.min(maxTarget, this.gl.getParameter(this.gl.MAX_VIEWPORT_DIMS)[0]);
+    this.maxHeight = Math.min(maxTarget, this.gl.getParameter(this.gl.MAX_VIEWPORT_DIMS)[1]);
   }
   async init() {
     const gl = this.gl;
@@ -218,11 +226,11 @@ export class Renderer {
   }
   quality() {
     if (this.isLite()) return -1;
-    return qualityLevels[this.config?.graphics] ?? 1;
+    return Object.hasOwn(qualityLevels, this.config?.graphics) ? qualityLevels[this.config.graphics] : 1;
   }
   shadowMode() {
     if (this.isLite()) return 0;
-    if (this.config?.shadowMode in shadowModes) return shadowModes[this.config.shadowMode];
+    if (Object.hasOwn(shadowModes, this.config?.shadowMode)) return shadowModes[this.config.shadowMode];
     return this.config?.shadows ? 2 : 0;
   }
   useOffscreen() {
@@ -243,12 +251,19 @@ export class Renderer {
     if (!this.config) return;
     let [w, h] = effectiveSize(this.config);
     if (innerHeight > innerWidth) [w, h] = [h, w];
+    const ratio = Math.min(1, this.maxWidth / w, this.maxHeight / h);
+    w = Math.max(1, Math.floor(w * ratio));
+    h = Math.max(1, Math.floor(h * ratio));
     if (this.canvas.width !== w || this.canvas.height !== h) {
       this.canvas.width = w;
       this.canvas.height = h;
     }
-    this.aspect = this.canvas.clientWidth / Math.max(1, this.canvas.clientHeight);
-    if (this.useOffscreen() && this.khdr) this.khdr.ensure(w, h);
+    this.aspect = this.canvas.clientWidth && this.canvas.clientHeight ? this.canvas.clientWidth / this.canvas.clientHeight : w / h;
+    if (this.useOffscreen()) {
+      this.khdr.ensure(w, h);
+      this.floatHDR = this.khdr.floatHDR;
+    } else this.khdr.releaseTargets();
+    if (this.shadowMode() < 2) this.sf.releaseScreen();
     if (!this.isLite()) {
       if (this.quality() >= 2) this.ensureMirror(1024, 576);
       else this.ensureMirror(512, 288);
@@ -277,7 +292,6 @@ export class Renderer {
       list.push({p: mp, i: f * 3.8, c: col, pri: 100});
     }
     for (const e of match.effects) {
-      if (list.length >= 12) break;
       const d = Math.hypot(e.p[0] - eye[0], e.p[1] - eye[1], e.p[2] - eye[2]);
       if (d > 48) continue;
       const frac = clamp(e.life / (e.max || .2), 0, 1);
@@ -392,21 +406,29 @@ export class Renderer {
     const activeTerrain = lite ? this.terrainLite : this.terrain;
     const activeActors = lite ? this.actorsLite : this.actors;
 
-    const dt = this.lastRenderTime === null ? (1 / 60) : clamp(time - this.lastRenderTime, .001, .15);
+    const dt = this.lastRenderTime === null ? 1 / 60 : clamp(time - this.lastRenderTime, 0, .15);
+    if (this.lastMatch !== match) {
+      this.lastMatch = match;
+      this.schlieren.reset();
+      this.fluxGI.dynamicFlux.fill(0);
+      this.khdr.resetAdaptation();
+      this.flirBlend = 0;
+      this.mirrorAt = -10;
+    }
     this.lastRenderTime = time;
 
     if (offscreen) this.khdr.ensure(this.canvas.width, this.canvas.height);
     this.lastVP = vp;
 
     // Advance FluxGI 1.0, SchlierenOptics 1.0, AeroVortex 1.0, ThermoFlux 1.0 & ResonanceCore 1.0 GPU fields
-    if (fluxGIOn && this.fluxGI) this.fluxGI.update(match, dt, true);
+    if (fluxGIOn && this.fluxGI) this.fluxGI.update(match, view.paused ? 0 : dt, true);
     if (resonanceOn) match.resonance.packUniforms();
     if (schlierenOn && this.schlieren) {
-      this.schlieren.step(match, dt);
+      this.schlieren.step(match, view.paused ? 0 : dt);
       this.schlieren.project(vp, eye, cam.fov, this.aspect);
     }
     const flirTarget = (thermoOn && view.flir) ? 1 : 0;
-    this.flirBlend = view.flirSnap ? flirTarget : this.flirBlend + (flirTarget - this.flirBlend) * (1 - Math.exp(-16 * dt));
+    this.flirBlend = !thermoOn || view.flirSnap ? flirTarget : this.flirBlend + (flirTarget - this.flirBlend) * (1 - Math.exp(-16 * dt));
     if (aeroOn && this.aeroTex) {
       match.aeroVortex._packTexture();
       gl.bindTexture(gl.TEXTURE_2D, this.aeroTex);
@@ -455,11 +477,11 @@ export class Renderer {
     }
 
     // 2. Planar Harbor Water Reflection Pass (skipped in Lightweight Mode)
-    const seeWater = !lite && (!match || eye[0] < 1 || fwd[0] < -.16);
+    const seeWater = !lite && (!match || eye[0] < 1 || fwd[0] - Math.abs(right[0]) * fx < -.16);
     const mirrorInterval = extra ? .045 : .18;
     if (seeWater && (time - this.mirrorAt > mirrorInterval || time < this.mirrorAt)) {
       this.mirrorAt = time;
-      const ref = p => [p[0], -3.36 - p[1], p[2]], re = ref(eye);
+      const ref = p => [p[0], 2 * WATER_HEIGHT - p[1], p[2]], re = ref(eye);
       this.mirrorVP = multiply(proj, lookAt(re, ref(cam.target), [0, -1, 0]));
       gl.activeTexture(gl.TEXTURE4);
       gl.bindTexture(gl.TEXTURE_2D, null);
