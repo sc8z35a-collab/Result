@@ -776,7 +776,7 @@ function shotPalette(s) {
   return {core: '#fffef2', jacket: '#d4b468', outer: s.team ? '#ff9d52' : '#ffdf6e', ring: '#fff3ad', spark: '#ffd264', vapor: '#dcd5c4'};
 }
 
-export function movingDetails(match, time, extra = false, lite = false) {
+export function movingDetails(match, time, extra = false, lite = false, opts = null) {
   const m = new Mesh();
   if (!lite) {
     const gullCount = extra ? 11 : 7;
@@ -1316,6 +1316,15 @@ export function movingDetails(match, time, extra = false, lite = false) {
       const y = .7 + (i % 6) * .85 + Math.sin(time * 1.4 + i) * .25;
       m.box(x, y, z, .028, .028, .028, 'white', '#fff2cf', 0, 3);
     }
+  }
+
+  // ChronoTrace 1.0: 3D world-space holographic ballistic crime-scene & death reconstruction ribbons (0 extra draw calls!)
+  if (opts && match.chronoTrace && (opts.showChrono || opts.deathTrace)) {
+    match.chronoTrace.appendForensicGeometry(m, time, {
+      showAll: !!opts.showChrono,
+      highlightTrace: opts.deathTrace || null,
+      lite
+    });
   }
 
   return m;

@@ -472,7 +472,8 @@ export class SoftwareRenderer {
         this.mesh(activeActors[(a.isSpy ? 'spy_' : '') + a.team + a.gun] || activeActors[a.team + a.gun], {pose: a, p: [a.x, a.y, a.z], r: [cy, 0, sy], u: [0, 1, 0], b: [-sy, 0, cy]}, Math.sin(a.stride * 2.75) * Math.min(1, Math.hypot(a.vx, a.vz) / 4))
       }
     }
-    this.mesh(chunk(movingDetails(match, time, extra, lite)));
+    const deathTrace = (this.config?.chronoTrace !== false && match?.player && !match.player.alive) ? (match.chronoTrace?.lastPlayerDeathTrace || null) : null;
+    this.mesh(chunk(movingDetails(match, time, extra, lite, {showChrono: !!view.chrono && this.config?.chronoTrace !== false, deathTrace})));
     if (match?.player.alive && view.firstPerson) {
       const a = match.player,
         m = view.motion || {},

@@ -10,7 +10,7 @@ const $ = s => document.getElementById(s),
 // Optically exact +2/3 wider view width relative to 24.7° / 13.0° FOV:
 // 2 * atan((5/3) * tan(24.7°/2)) = 40.1°, 2 * atan((5/3) * tan(13.0°/2)) = 21.5°.
 const BASE_FOV = 40.1, ADS_FOV = 21.5;
-const defaults = {lightMode: false, resolution: 'HD', graphics: 'high', rate: 360, rateV2: true, hdr: true, khdr: true, shadowMode: 'pro', shadows: true, fluxGI: true, schlieren: true, aeroVortex: true, thermoFlux: true, spectraField: true, echoPulse: true, audioMode: 'hrtf', sensitivity: 1, volume: 55, sound: false};
+const defaults = {lightMode: false, resolution: 'HD', graphics: 'high', rate: 360, rateV2: true, hdr: true, khdr: true, shadowMode: 'pro', shadows: true, fluxGI: true, schlieren: true, aeroVortex: true, thermoFlux: true, resonance: true, chronoTrace: true, spectraField: true, echoPulse: true, audioMode: 'hrtf', sensitivity: 1, volume: 55, sound: false};
 const graphicsHints = {
   standard: '軽量描画 · 基本ライト · 標準反射',
   high: '高精細質感 · 動的ライト · 標準水面反射',
@@ -72,6 +72,8 @@ settings.fluxGI = settings.fluxGI !== false;
 settings.schlieren = settings.schlieren !== false;
 settings.aeroVortex = settings.aeroVortex !== false;
 settings.thermoFlux = settings.thermoFlux !== false;
+settings.resonance = settings.resonance !== false;
+settings.chronoTrace = settings.chronoTrace !== false;
 settings.spectraField = settings.spectraField !== false;
 settings.echoPulse = settings.echoPulse !== false;
 if (![0, 60, 120, 360].includes(settings.rate))settings.rate = 360;
@@ -101,6 +103,7 @@ let screen = 'title',
   hudAt = 0,
   spectraAt = 0,
   flirActive = false,
+  chronoActive = false,
   nextFrame = 0,
   lastTime = null,
   accum = 0,
@@ -454,7 +457,7 @@ function group(id, value, change) {
 const touch = matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0;
 document.body.classList.toggle('touch', touch);
 function controls() {
-  const rows = touch ? [['移動 / ダッシュ', '左スティック（強く前傾でダッシュ）'], ['視点', '右側スワイプ / 射撃長押しドラッグ / 右スティック'], ['発射 / 再装填', '射撃(長押し連射＋視点移動)・R2 / R・X'], ['ジャンプ / しゃがみ', '↑・A / しゃがみ・B'], ['FLIR / 流体煙幕', '左下 FLIR・煙幕ボタン']] : [['移動 / ダッシュ', 'WASD / Shift · 左スティック強前傾'], ['視点', 'マウス / 矢印キー / 右スティック'], ['発射 / 再装填', '左クリック(長押し連射＋視点移動)・F・R2 / R'], ['ジャンプ / しゃがむ', 'Space・A / Ctrl・B'], ['熱視界 / 煙幕 / 波動図', 'T (FLIR) · G (流体煙幕) · M (ベイズ波動図)'], ['一時停止', 'Esc / P / Start']];
+  const rows = touch ? [['移動 / ダッシュ', '左スティック（強く前傾でダッシュ）'], ['視点', '右側スワイプ / 射撃長押しドラッグ / 右スティック'], ['発射 / 再装填', '射撃(長押し連射＋視点移動)・R2 / R・X'], ['ジャンプ / しゃがみ', '↑・A / しゃがみ・B'], ['FLIR / 煙幕 / 解析', '左下 FLIR・煙幕・解析ボタン']] : [['移動 / ダッシュ', 'WASD / Shift · 左スティック強前傾'], ['視点', 'マウス / 矢印キー / 右スティック'], ['発射 / 再装填', '左クリック(長押し連射＋視点移動)・F・R2 / R'], ['ジャンプ / しゃがむ', 'Space・A / Ctrl・B'], ['熱視界 / 煙幕 / 解析', 'T (FLIR) · G (流体煙幕) · L (4D弾道解析) · M (波動図)'], ['一時停止', 'Esc / P / Start']];
   if (match?.player.df)rows.push(...(touch ? [['DF1 OUT', '画面右の専用ボタン / L2・Y・LB・RB']] : [['中央集中 / 散弾', 'Q / Y'], ['P1 ブースト', 'X / LB'], ['照準 / レンズ切替', '右クリック・C・L2 / V・RB'], ['EVR1 購入', 'B']]));
   $('controls').innerHTML = rows.map(([a, b]) => `<span>${a}</span><b>${b}</b>`).join('')
 }
@@ -477,6 +480,7 @@ function show(s) {
   if (s !== 'game' && document.pointerLockElement)document.exitPointerLock();
   if (s === 'lobby') {
     flirActive = false;
+    chronoActive = false;
     if (match?.ended) {
       match = null;
       tourTime = 0
@@ -486,6 +490,7 @@ function show(s) {
   if (s === 'settings')drawSettings();
   if (s === 'title') {
     flirActive = false;
+    chronoActive = false;
     match = null;
     audio.resetMatch();
     tourTime = 0;
@@ -639,6 +644,16 @@ function drawSettings() {
     : settings.thermoFlux
       ? 'オン · Fourier熱伝導PDE＋持続熱足跡・高温着弾痕＋全武器対応FLIR熱視界（T切替）'
       : 'オフ · GPU FLIR熱視界を無効化';
+  $('resonanceSwitch').setAttribute('aria-checked', String(settings.resonance));
+  $('resonanceHint').textContent = lite
+    ? '軽量モードでクラドニGPU振動シェーダーを省略中（物理ノック判定は継続）'
+    : settings.resonance
+      ? 'オン · 全40コンテナ3モード連続体力学＋クラドニGPU表面波動＋5,100m/s鋼鉄ノック探知'
+      : 'オフ · コンテナ表面クラドニ振動シェーダーを無効化';
+  $('chronoSwitch').setAttribute('aria-checked', String(settings.chronoTrace));
+  $('chronoHint').textContent = settings.chronoTrace
+    ? 'オン · 360Hz 4D空間弾道レコーダー＋被撃破3秒3Dホログラム再現＋現場弾道スキャナー（L切替）'
+    : 'オフ · 3D空間弾道ホログラム表示を無効化';
   $('spectraSwitch').setAttribute('aria-checked', String(settings.spectraField));
   $('spectraHint').textContent = settings.spectraField
     ? 'オン · 味方チーム視界崩壊Fokker-Planckベイズ確率波動図を表示（M切替 · 完全フェアプレイ）'
@@ -689,6 +704,11 @@ $('thermoSwitch').onclick = () => {
   setGraphics('thermoFlux', !settings.thermoFlux);
   if (!settings.thermoFlux) flirActive = false;
 };
+$('resonanceSwitch').onclick = () => setGraphics('resonance', !settings.resonance);
+$('chronoSwitch').onclick = () => {
+  setGraphics('chronoTrace', !settings.chronoTrace);
+  if (!settings.chronoTrace) chronoActive = false;
+};
 $('spectraSwitch').onclick = () => {
   settings.spectraField = !settings.spectraField;
   save();
@@ -731,12 +751,12 @@ function pointer() {
     lockPending = true;
     const p = $('scene').requestPointerLock?.();
     if (p?.catch)p.catch (() => {}).finally(() => {
-      lockPending = false
+      lockPending = false;
     }); else setTimeout(() => {
       lockPending = false
     }, 300)
   } catch {
-    lockPending = false
+    lockPending = false;
   }
 }
 function toggleFlir() {
@@ -759,6 +779,18 @@ function triggerSmokeVent() {
     noticeUntil = match.time + 1.1;
   }
 }
+function toggleChrono() {
+  if (!match) return;
+  if (!settings.chronoTrace) {
+    $('combatNotice').textContent = 'ChronoTrace 1.0 がオフになっています（設定から有効化）';
+    noticeUntil = match.time + 1.8;
+    return;
+  }
+  chronoActive = !chronoActive;
+  $('combatNotice').textContent = chronoActive ? 'ChronoTrace 1.0 · 4D空間弾道スキャナー ON（過去22秒の弾道を3D投影）' : '4D空間弾道スキャナー OFF';
+  noticeUntil = match.time + 1.6;
+  hud();
+}
 function startMatch() {
   if (!ready || starting)return;
   starting = true;
@@ -766,6 +798,7 @@ function startMatch() {
   gameKick = hurt = 0;
   noticeUntil = 0;
   flirActive = false;
+  chronoActive = false;
   spectraAt = 0;
   resetMotion();
   audio.resetMatch();
@@ -777,7 +810,7 @@ function startMatch() {
   if (settings.sound)audio.enable(true);
   audio.set(settings.volume / 100);
   $('startHint').hidden = false;
-  $('startHint').textContent = touch ? '左強傾ダッシュ · FLIR熱視界 · 流体煙幕 · タンカー+100発' : 'WASD 移動 / Shift ダッシュ · T 熱視界FLIR · G 流体煙幕 · M ベイズ波動図';
+  $('startHint').textContent = touch ? '左強傾ダッシュ · FLIR熱視界 · 煙幕 · 4D弾道解析 · 鋼鉄ノック探知' : 'WASD 移動 / Shift ダッシュ · T FLIR · G 流体煙幕 · L 4D弾道解析 · M 波動図';
   $('combatNotice').textContent = '';
   $('feed').replaceChildren();
   starting = false;
@@ -819,6 +852,16 @@ function event(e) {
   }
   if (e.type === 'smoke' && e.actor === p) {
     $('combatNotice').textContent = 'AeroVortex 流体煙幕展開　·　T キー熱視界で貫煙探知';
+    noticeUntil = match.time + 2.2;
+  }
+  if (e.type === 'resonate' && e.actor === p && e.knockedEnemy) {
+    const bn = $('hitBanner');
+    bn.textContent = 'SEISMIC KNOCK';
+    bn.className = 'is-knock';
+    hitState.bannerAge = 0;
+    hitState.bannerDur = .86;
+    const ms = Number.isFinite(e.waveDelayMs) ? e.waveDelayMs.toFixed(1) : '1.2';
+    $('combatNotice').textContent = `ResonanceCore 鋼鉄波ノック (${ms}ms · 5,100m/s) · ${e.knockedEnemy.name} を遮蔽裏から動揺`;
     noticeUntil = match.time + 2.2;
   }
   if (e.type === 'spawn' && e.actor === p) {
@@ -882,6 +925,29 @@ function hud() {
   $('flirFrame').hidden = !flirOn;
   $('tacFlir')?.classList.toggle('is-on', flirOn);
   $('touchFlir')?.classList.toggle('is-active', flirOn);
+  const chronoOn = chronoActive && settings.chronoTrace;
+  $('tacChrono')?.classList.toggle('is-on', chronoOn);
+  $('touchChrono')?.classList.toggle('is-active', chronoOn);
+  const appEl = $('app');
+  if (appEl) {
+    appEl.dataset.flirActive = String(flirOn);
+    appEl.dataset.chronoActive = String(chronoOn);
+  }
+  const cBan = $('chronoBanner');
+  if (cBan && match.chronoTrace) {
+    const deathTr = !a.alive && settings.chronoTrace ? match.chronoTrace.lastPlayerDeathTrace : null;
+    if (deathTr) {
+      cBan.hidden = false;
+      cBan.className = 'is-death';
+      cBan.textContent = `撃破弾道再現 · ${match.chronoTrace.formatTelemetry(deathTr)}`;
+    } else if (chronoOn && a.alive) {
+      cBan.hidden = false;
+      cBan.className = '';
+      cBan.textContent = match.chronoTrace.formatTelemetry() || 'CHRONOTRACE 1.0 · 4D空間弾道スキャナー稼働中（射撃/跳弾/貫通をリアルタイム記録）';
+    } else {
+      cBan.hidden = true;
+    }
+  }
   const smCd = Math.ceil(match.smokeCooldown || 0);
   const tacSm = $('tacSmoke');
   if (tacSm) {
@@ -931,6 +997,8 @@ function resultUI() {
     const av = match.aeroVortex?.stats || {wakesCarved: 0, smokeVents: 0};
     const tf = match.thermoFlux?.stats || {footprintsStamped: 0, spyTrailsFollowed: 0};
     const sp = match.spectraField?.stats || {peakCertaintyPct: 0};
+    const rc = match.resonance?.stats || {strikes: 0, seismicKnocks: 0};
+    const ct = match.chronoTrace?.stats || {recorded: 0, longestKillM: 0};
     const [lw, lc, le] = s.lanesPct;
     synEl.hidden = false;
     synEl.innerHTML =
@@ -947,6 +1015,8 @@ function resultUI() {
         `<span>音響デコイ <b>${ep.echoDecoys}</b>${ep.nv21RejectedDecoys ? ` / 2.1看破${ep.nv21RejectedDecoys}` : ''}</span>` +
         `<span>弾道煙切裂 <b>${av.wakesCarved}</b></span>` +
         `<span>熱足跡 <b>${tf.footprintsStamped}</b></span>` +
+        `<span>構造ノック <b>${rc.seismicKnocks}</b></span>` +
+        `<span>最長キル <b>${ct.longestKillM > 0 ? ct.longestKillM.toFixed(1) + 'm' : '—'}</b></span>` +
         `<span>ベイズ確定 <b>${sp.peakCertaintyPct}%</b></span>` +
       `</div>`;
   } else if (synEl) {
@@ -979,7 +1049,7 @@ document.addEventListener('keydown', e => {
     return
   }
   if (screen !== 'game')return;
-  if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyF', 'KeyR', 'KeyT', 'KeyG', 'KeyM'].includes(e.code))e.preventDefault();
+  if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyF', 'KeyR', 'KeyT', 'KeyG', 'KeyL', 'KeyM'].includes(e.code))e.preventDefault();
   keys.add(e.code);
   if (e.code === 'KeyF')holdFireKey = true;
   if (e.repeat)return;
@@ -987,6 +1057,7 @@ document.addEventListener('keydown', e => {
   if (e.code === 'KeyF')fire();
   if (e.code === 'KeyT')toggleFlir();
   if (e.code === 'KeyG')triggerSmokeVent();
+  if (e.code === 'KeyL')toggleChrono();
   if (e.code === 'KeyM') {
     settings.spectraField = !settings.spectraField;
     save();
@@ -1139,7 +1210,8 @@ for (const [id, action] of [
   ['touchJump', () => { simJump = true; }],
   ['touchCrouch', () => { setTouchCrouch(!touchCrouch); }],
   ['touchFlir', () => toggleFlir()],
-  ['touchSmoke', () => triggerSmokeVent()]
+  ['touchSmoke', () => triggerSmokeVent()],
+  ['touchChrono', () => toggleChrono()]
 ])$(id).onpointerdown = e => {
   e.preventDefault();
   action()
@@ -1288,6 +1360,7 @@ function frame(ms) {
   if (cinematic)$('cinema-veil').style.opacity = 0; else renderer.render(cam, timeNow, match, {
     firstPerson: !!match?.player.alive && !match?.player.df?.ads,
     flir: !!(flirActive && !settings.lightMode && settings.thermoFlux && match?.player.alive),
+    chrono: !!(chronoActive && settings.chronoTrace),
     kick: gameKick,
     shake: 0,
     hurt,
@@ -1326,6 +1399,9 @@ function frame(ms) {
   appEl.dataset.schlieren = String(!!(settings.schlieren && !settings.lightMode));
   appEl.dataset.aeroVortex = String(!!(settings.aeroVortex && !settings.lightMode));
   appEl.dataset.thermoFlux = String(!!(settings.thermoFlux && !settings.lightMode));
+  appEl.dataset.resonance = String(!!(settings.resonance && !settings.lightMode));
+  appEl.dataset.chronoTrace = String(!!settings.chronoTrace);
+  appEl.dataset.chronoActive = String(!!(chronoActive && settings.chronoTrace));
   appEl.dataset.spectraField = String(!!settings.spectraField);
   appEl.dataset.flirActive = String(!!(flirActive && !settings.lightMode && settings.thermoFlux));
   appEl.dataset.echoPulse = String(!!settings.echoPulse);

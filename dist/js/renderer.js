@@ -325,7 +325,7 @@ export class Renderer {
       this.lightCol.set(L.c, k * 3);
     }
   }
-  worldPass(vp, eye, output, khdrOn, sfMode, quality, time, terrainMesh = this.terrain, fluxGIOn = false) {
+  worldPass(vp, eye, output, khdrOn, sfMode, quality, time, terrainMesh = this.terrain, fluxGIOn = false, res = null) {
     const gl = this.gl, p = this.world;
     gl.useProgram(p.obj);
     if (this.fluxGI?.tex) {
@@ -333,6 +333,15 @@ export class Renderer {
       gl.bindTexture(gl.TEXTURE_2D, this.fluxGI.tex);
     }
     if (p.uFluxGIOn != null) gl.uniform1i(p.uFluxGIOn, fluxGIOn ? 1 : 0);
+    if (p.uResCount != null) {
+      const rc = res ? res.uResCount : 0;
+      gl.uniform1i(p.uResCount, rc);
+      if (rc > 0) {
+        if (p.uResPos) gl.uniform4fv(p.uResPos, res.uResPos);
+        if (p.uResDim) gl.uniform4fv(p.uResDim, res.uResDim);
+        if (p.uResHit) gl.uniform4fv(p.uResHit, res.uResHit);
+      }
+    }
     gl.uniformMatrix4fv(p.uVP, false, vp);
     gl.uniformMatrix4fv(p.uModel, false, I);
     this.sf.applyWorldUniforms(p, sfMode);
@@ -366,6 +375,8 @@ export class Renderer {
       schlierenOn = !lite && cfg.schlieren !== false,
       aeroOn = !lite && cfg.aeroVortex !== false && !!match?.aeroVortex,
       thermoOn = !lite && cfg.thermoFlux !== false && !!match?.thermoFlux,
+      resonanceOn = !lite && cfg.resonance !== false && !!match?.resonance,
+      chronoOn = cfg.chronoTrace !== false && !!match?.chronoTrace,
       sfMode = this.shadowMode(),
       offscreen = this.useOffscreen(),
       eye = cam.pos,
@@ -387,8 +398,9 @@ export class Renderer {
     if (offscreen) this.khdr.ensure(this.canvas.width, this.canvas.height);
     this.lastVP = vp;
 
-    // Advance FluxGI 1.0, SchlierenOptics 1.0, AeroVortex 1.0 & ThermoFlux 1.0 GPU streaming fields
+    // Advance FluxGI 1.0, SchlierenOptics 1.0, AeroVortex 1.0, ThermoFlux 1.0 & ResonanceCore 1.0 GPU fields
     if (fluxGIOn && this.fluxGI) this.fluxGI.update(match, dt, true);
+    if (resonanceOn) match.resonance.packUniforms();
     if (schlierenOn && this.schlieren) {
       this.schlieren.step(match, dt);
       this.schlieren.project(vp, eye, cam.fov, this.aspect);
@@ -455,7 +467,7 @@ export class Renderer {
       gl.viewport(0, 0, this.mirrorDim[0], this.mirrorDim[1]);
       gl.clearColor(0, 0, 0, 0);
       gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-      this.worldPass(this.mirrorVP, re, 3, khdrOn, sfMode, Math.min(1, quality), time, activeTerrain, fluxGIOn);
+      this.worldPass(this.mirrorVP, re, 3, khdrOn, sfMode, Math.min(1, quality), time, activeTerrain, fluxGIOn, resonanceOn ? match.resonance : null);
     }
     gl.activeTexture(gl.TEXTURE4);
     gl.bindTexture(gl.TEXTURE_2D, this.mirrorTex);
@@ -470,7 +482,7 @@ export class Renderer {
     gl.clearColor(.24, .35, .39, 1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
-    this.worldPass(vp, eye, sceneOutput, khdrOn, sfMode, quality, time, activeTerrain, fluxGIOn);
+    this.worldPass(vp, eye, sceneOutput, khdrOn, sfMode, quality, time, activeTerrain, fluxGIOn, resonanceOn ? match.resonance : null);
 
     const p = this.world;
     if (match) {
@@ -497,11 +509,13 @@ export class Renderer {
     }
 
     gl.uniform1i(p.uMode, 0);
+    if (p.uResCount != null) gl.uniform1i(p.uResCount, 0);
     gl.uniformMatrix4fv(p.uModel, false, I);
     gl.uniform3f(p.uHit, 0, 0, 0);
     gl.uniform2f(p.uRecoil, 0, 0);
     gl.uniform2f(p.uHitFX, 0, 0);
-    const fxMesh = movingDetails(match, time, !lite && (extra || khdrOn), lite);
+    const deathTrace = (chronoOn && match?.player && !match.player.alive) ? (match.chronoTrace.lastPlayerDeathTrace || null) : null;
+    const fxMesh = movingDetails(match, time, !lite && (extra || khdrOn), lite, {showChrono: chronoOn && !!view.chrono, deathTrace});
     this.effects.count = fxMesh.count;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.effects.buf);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(fxMesh.data), gl.DYNAMIC_DRAW);

@@ -10,6 +10,8 @@ import {SynapseProfiler} from './synapse.js';
 import {AeroVortex} from './aerovortex.js';
 import {ThermoFlux} from './thermoflux.js';
 import {SpectraField} from './spectrafield.js';
+import {ResonanceCore} from './resonance.js';
+import {ChronoTrace} from './chronotrace.js';
 const baseSpeed = 360, baseInterval = .24;
 export const weapons = {
   'SW T': {capacity: 10, damage: 9, rate: 100, velocity: 100, speed: baseSpeed, interval: baseInterval, burst: 1, reload: 1.4},
@@ -77,6 +79,8 @@ export class Match {
     this.aeroVortex = new AeroVortex();
     this.thermoFlux = new ThermoFlux();
     this.spectraField = new SpectraField();
+    this.resonance = new ResonanceCore();
+    this.chronoTrace = new ChronoTrace();
     this.smokeCooldown = 0;
     this.techStats = {ricochets: 0, ricochetHits: 0, penetrations: 0, wallbangHits: 0};
     const counts = modes[config.mode] || modes['3v3'];
@@ -150,6 +154,7 @@ export class Match {
       recoil: 0,
       recoilSide: 0,
       hitRecoil: 0,
+      seismicRattle: 0,
       hitFlash: 0,
       shieldFlash: 0,
       hitDir: null,
@@ -226,7 +231,7 @@ export class Match {
       const sideOff = (a.human ? .14 : .11) + barrelSide * .048;
       const muzzle = add(p, add(scale(dir, barrelLen), add(scale(right, sideOff), scale(up, a.human ? -.12 : -.18))));
       if (!firstDir) { firstDir = dir; firstMuzzle = muzzle; }
-      this.shots.push({
+      const shot = {
         id: ++this.seq,
         owner: a,
         team: a.team,
@@ -253,7 +258,9 @@ export class Match {
         life: 1.35,
         age: 0,
         whizzed: false
-      });
+      };
+      this.chronoTrace.beginShot(shot, this.time);
+      this.shots.push(shot);
       // Spawn muzzle flash & drifting smoke puff in world space.
       this.effects.push({
         kind: 'muzzle',
@@ -325,6 +332,7 @@ export class Match {
     if (shieldBreak) {
       this.aeroVortex.injectBurst(v.x, v.z, {smoke: 0.95, heat: 1.12, force: 3.6, radius: 2});
       this.thermoFlux.depositHeat(v.x, v.z, 0.85, 2);
+      this.resonance.exciteBlast([v.x, v.y + 1.0, v.z], 0.78);
     }
     this.nv.learn(v, false);
     this.nv.onHit?.(v, owner, dir, power);
@@ -332,6 +340,7 @@ export class Match {
     if (!kill)return {shield: absorbed > 0, shieldBreak, kill: false};
     this.aeroVortex.injectBurst(v.x, v.z, {smoke: 1.35, heat: 0.92, force: 4.8, radius: 3});
     this.thermoFlux.depositHeat(v.x, v.z, 1.15, 2);
+    this.resonance.exciteBlast([v.x, v.y + 1.0, v.z], 1.15);
     v.alive = false;
     v.respawn = 3;
     v.reload = 0;
@@ -378,6 +387,7 @@ export class Match {
           });
           this.aeroVortex.injectBurst(tk.x, tk.z, {smoke: 1.95, heat: 0.72, force: 4.5, radius: 3});
           this.thermoFlux.depositHeat(tk.x, tk.z, 0.75, 2);
+          this.resonance.exciteBlast([tk.x, 1.5, tk.z], 1.1);
           this.spectraField.observe(1 - a.team, tk.x, tk.z, {sigma: 5.5, weight: 0.78});
           this.echoPulse.emit(this, {kind: 'tanker', pos: [tk.x, 1.8, tk.z], actor: a, team: a.team, loudness: 1.4});
           if (a.human) this.synapse?.observeTankerCapture();
@@ -427,6 +437,7 @@ export class Match {
     a.flash = Math.max(0, a.flash - dt);
     a.recoil = Math.max(0, (a.recoil || 0) - dt * 6.5);
     a.hitRecoil = Math.max(0, (a.hitRecoil || 0) - dt * 4.2);
+    a.seismicRattle = Math.max(0, (a.seismicRattle || 0) - dt * 1.4);
     a.hitFlash = Math.max(0, (a.hitFlash || 0) - dt * 5.2);
     a.shieldFlash = Math.max(0, (a.shieldFlash || 0) - dt * 4.2);
     a.cooldown = Math.max(0, a.cooldown - dt);
@@ -561,6 +572,12 @@ export class Match {
     s.p = b;
     s.life -= dt;
     s.age = (s.age || 0) + dt;
+    // Supersonic Mach shockwave aero-acoustic coupling to nearby hollow steel shipping containers
+    if (s.speed >= 340 && s.age >= (s._nextMachAt || 0.008)) {
+      s._nextMachAt = s.age + 0.045;
+      this.resonance.exciteMach(b, s.speed);
+    }
+    this.chronoTrace.sampleShot(s, this.time);
     s.trailClock = (s.trailClock || 0) + dt;
     if (s.trail && s.trailClock >= .0055) {
       s.trailClock = 0;
@@ -572,6 +589,7 @@ export class Match {
       if (target) {
         const res = this.damage(target, s.owner, s.damage, s.dir, {ricochet: s.ricocheted, wallbang: s.penetrated});
         const kind = res?.kill ? 'kill' : res?.shieldBreak ? 'break' : res?.shield ? 'shield' : 'hit';
+        this.chronoTrace.finishShot(s, p, kind, this.time, target);
         const dur = kind === 'kill' ? .78 : kind === 'break' ? .58 : kind === 'shield' ? .42 : .36;
         const bc = bodyCenter(target);
         const outN = unit([p[0] - bc[0] - s.dir[0] * .25, (p[1] - (target.y + .95)) * .35 - s.dir[1] * .25, p[2] - bc[1] - s.dir[2] * .25]);
@@ -600,6 +618,7 @@ export class Match {
 
         if (ball.action === 'ricochet') {
           this.techStats.ricochets++;
+          this.chronoTrace.recordRicochet(s, hitInfo.point, normal, ball.grazingSin, this.time);
           s.old = [...hitInfo.point];
           s.p = ball.pos;
           s.dir = ball.dir;
@@ -635,6 +654,8 @@ export class Match {
           if (this.scorches.length > 26) this.scorches.shift();
           this.aeroVortex.injectSmoke(hitInfo.point[0], hitInfo.point[2], 0.42, 0.72, 1, ball.dir[0] * 2.5, ball.dir[2] * 2.5);
           this.thermoFlux.depositHeat(hitInfo.point[0], hitInfo.point[2], 0.92, 1);
+          const resHit = this.resonance.exciteStrike(hitInfo.point, 1.05, s.owner, this);
+          if (resHit) this.event('resonate', {...resHit, actor: s.owner, mat});
           this.echoPulse.emit(this, {kind: 'ricochet', pos: hitInfo.point, actor: s.owner, team: s.team, loudness: 0.92, gun: s.gun});
           this.event('ricochet', {point: hitInfo.point, dir: ball.dir, normal, gun: s.gun, mat, actor: s.owner});
           return s.life > 0;
@@ -642,6 +663,7 @@ export class Match {
 
         if (ball.action === 'penetrate') {
           this.techStats.penetrations++;
+          this.chronoTrace.recordPenetration(s, ball.entryPos, ball.exitPos, normal, ball.thickness, mat, this.time);
           s.old = [...ball.entryPos];
           s.p = ball.exitPos;
           s.dir = ball.dir;
@@ -676,11 +698,16 @@ export class Match {
           while (this.scorches.length > 26) this.scorches.shift();
           this.aeroVortex.injectSmoke(ball.exitPos[0], ball.exitPos[2], 0.52, 0.55, 1, ball.dir[0] * 2.2, ball.dir[2] * 2.2);
           this.thermoFlux.depositHeat(ball.exitPos[0], ball.exitPos[2], 0.78, 1);
+          if (mat === 'steel') {
+            const resHit = this.resonance.exciteStrike(ball.entryPos, 0.9, s.owner, this);
+            if (resHit) this.event('resonate', {...resHit, actor: s.owner, mat});
+          }
           this.echoPulse.emit(this, {kind: 'penetrate', pos: ball.exitPos, actor: s.owner, team: s.team, loudness: 0.76, gun: s.gun});
           this.event('penetrate', {point: ball.exitPos, entry: ball.entryPos, dir: ball.dir, mat, thickness: ball.thickness, gun: s.gun, actor: s.owner});
           return s.life > 0;
         }
 
+        this.chronoTrace.finishShot(s, p, 'wall', this.time);
         const dur = (s.gun === 'MS10' || s.source === 'p1') ? .48 : .40;
         this.effects.push({
           kind: 'wall',
@@ -712,11 +739,17 @@ export class Match {
         if (this.scorches.length > 26)this.scorches.shift();
         this.aeroVortex.injectSmoke(p[0], p[2], 0.22, 0.25, 1, normal[0] * 1.2, normal[2] * 1.2);
         this.thermoFlux.depositHeat(p[0], p[2], 0.58, 1);
+        if (mat === 'steel') {
+          const resHit = this.resonance.exciteStrike(p, s.gun === 'MS10' ? 0.95 : 0.72, s.owner, this);
+          if (resHit) this.event('resonate', {...resHit, actor: s.owner, mat});
+        }
         this.event('impact', {point: p, dir: s.dir, normal, gun: s.gun, metal, mat, actor: s.owner})
       }
       return false
     }
-    return s.life > 0 && Math.abs(b[0]) < 120 && Math.abs(b[2]) < 200
+    const alive = s.life > 0 && Math.abs(b[0]) < 120 && Math.abs(b[2]) < 200;
+    if (!alive) this.chronoTrace.finishShot(s, b, 'miss', this.time);
+    return alive
   }
   step(dt, input) {
     if (this.ended)return;
@@ -730,7 +763,7 @@ export class Match {
       this.systems(a, dt);
     }
     this.updatePlayer(dt, input);
-    // Stamp warm ThermoFlux thermal footprints & EchoPulse sprint/steel-roof footsteps for moving actors!
+    // Stamp warm ThermoFlux thermal footprints, EchoPulse steps & ResonanceCore hollow container roof drums!
     for (let i = 0; i < this.actors.length; i++) {
       const a = this.actors[i];
       const prevStride = prevStrides[i];
@@ -738,6 +771,10 @@ export class Match {
       if (Math.floor((a.stride || 0) / 1.15) > Math.floor(prevStride / 1.15)) {
         const intensity = (a.sprintAmt || 0) > 0.35 ? 0.56 : 0.38;
         this.thermoFlux.stampFootprint(a.x, a.z, a.team, this.time, intensity);
+        if (a.y > 1.8) {
+          const roof = this.resonance.exciteRoofStep(a, (a.sprintAmt || 0) > 0.35 ? 0.65 : 0.42);
+          if (roof) this.event('resonate', {...roof, actor: a, mat: 'steel', roof: true});
+        }
       }
       if (!a.human && ((a.sprintAmt || 0) > 0.35 || a.y > 0.5)) {
         if (Math.floor((a.stride || 0) / 2.2) > Math.floor(prevStride / 2.2)) {
@@ -770,6 +807,8 @@ export class Match {
     this.aeroVortex.tick(dt);
     this.thermoFlux.tick(dt, this.tankers);
     this.spectraField.tick(dt, this);
+    this.resonance.step(dt);
+    this.chronoTrace.prune(this.time);
     let write = 0;
     for (const shot of this.shots) {
       if (!this.ended && this.projectile(shot, dt))this.shots[write++] = shot

@@ -2064,6 +2064,35 @@ export class SoundEngin {
     }
   }
 
+  _playContainerResonance(e, now, player) {
+    const p = e.point;
+    if (!p) return;
+    const isKnock = !!e.knockedEnemy && e.actor === player;
+    if (!isKnock && now - (this.lastResonateAt || 0) < 0.045) return;
+    this.lastResonateAt = now;
+
+    const path = computeAcousticPath(p, this.listenerPos);
+    if (path.dist > 68 && !isKnock) return;
+    const start = now + (isKnock ? 0 : path.delay);
+    const scaleGain = e.roof ? 0.36 : 0.72;
+    const v = clamp(path.directGain * scaleGain * (0.65 + (e.energy || 0.5) * 0.45), 0.03, 0.78);
+    const lpf = Math.min(path.cutoffHz, 5400);
+    const freqs = e.freqs || [88, 172, 298];
+    const rev = clamp(0.32 + path.reverbBoost + this.enclosure * 0.28, 0.2, 0.8);
+
+    // 3-Mode Kirchoff-Love corrugated steel box harmonic resonator
+    this._playTone({f0: freqs[0], f1: freqs[0] * 0.96, dur: e.roof ? 0.26 : 0.48, attack: 0.004, gain: 0.145 * v, type: 'sine', lpf, pos: p, bus: this.impactsBus, reverbSend: rev, start});
+    this._playTone({f0: freqs[1], f1: freqs[1] * 0.98, dur: e.roof ? 0.16 : 0.34, attack: 0.002, gain: 0.072 * v, type: 'triangle', lpf, pos: p, bus: this.impactsBus, reverbSend: rev * 0.8, start});
+    this._playTone({f0: freqs[2], f1: freqs[2] * 0.97, dur: e.roof ? 0.09 : 0.20, attack: 0.001, gain: 0.038 * v, type: 'sine', lpf, pos: p, bus: this.impactsBus, start});
+
+    // 5,100 m/s SEISMIC KNOCK confirmation: tactile hollow damped steel rattle + radar-grade emerald ping!
+    if (isKnock) {
+      this._playTone({f0: freqs[0] * 1.5, f1: freqs[0] * 1.15, dur: 0.22, attack: 0.003, gain: 0.125, type: 'triangle', bus: this.uiBus, start: now + 0.008});
+      this._playTone({f0: 1180, f1: 1760, dur: 0.12, attack: 0.002, gain: 0.088, type: 'sine', bus: this.uiBus, start: now + 0.014});
+      this._playBuffer({buffer: this.whiteNoiseBuf, loop: true, dur: 0.075, gain: 0.065, filterType: 'bandpass', f0: 2600, f1: 980, q: 3.4, bus: this.uiBus, start: now + 0.01});
+    }
+  }
+
   // --------------------------------------------------------------------------
   // Event Dispatcher (Full Backward Compatibility with PortAudio)
   // --------------------------------------------------------------------------
@@ -2102,6 +2131,10 @@ export class SoundEngin {
     }
     if (e.type === 'penetrate' && e.point) {
       this._playPenetrate(e, now);
+      return;
+    }
+    if (e.type === 'resonate' && e.point) {
+      this._playContainerResonance(e, now, player);
       return;
     }
     if (e.type === 'smoke' && e.point) {

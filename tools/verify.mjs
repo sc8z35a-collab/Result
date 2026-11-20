@@ -29,6 +29,8 @@ import {SynapseProfiler,SYNAPSE_VERSION,sectorOf} from '../dist/js/synapse.js';
 import {AeroVortex,AEROVORTEX_VERSION,AERO_COMPOSITE_GLSL,worldToAeroCell} from '../dist/js/aerovortex.js';
 import {ThermoFlux,THERMOFLUX_VERSION,THERMO_COMPOSITE_GLSL} from '../dist/js/thermoflux.js';
 import {SpectraField,SPECTRAFIELD_VERSION,worldToSpecCell} from '../dist/js/spectrafield.js';
+import {ResonanceCore,RESONANCE_VERSION,STEEL_WAVE_SPEED,RESONANCE_VS_GLSL,RESONANCE_FS_GLSL} from '../dist/js/resonance.js';
+import {ChronoTrace,CHRONOTRACE_VERSION} from '../dist/js/chronotrace.js';
 const h=1/360;
 function duel(loadout='DF1 OUT',limit='unlimited',multiplier=2,events=[]) {
   return new Match({mode:'1v1', limit, multiplier,loadout},event=>events.push(event));
@@ -763,6 +765,74 @@ for (const [mode,counts] of Object.entries(modes)) {
  assert(Math.hypot(pk.x-(-15),pk.z-(-35))<5.0&&pk.certainty>certBefore,`Bayesian likelihood fusion must focus peak threat onto (-15,-35) (got [${pk.x.toFixed(1)},${pk.z.toFixed(1)}], cert=${pk.certainty.toFixed(2)})`);
  console.log('SpectraField 1.0 OK:',{collapses:sf.stats.collapses,peak:[+pk.x.toFixed(1),+pk.z.toFixed(1)],certaintyPct:Math.round(pk.certainty*100)});
 }
-console.log('360Hz sim, weapon specs (DF1 OUT 95-mag 2x rate, MS10, RD20/30/40), FluxGI 1.0, SchlierenOptics 1.0, BallisticCore-X, EchoPulse 1.0, NV-Synapse 1.0, AeroVortex 1.0, ThermoFlux 1.0, SpectraField 1.0, Lightweight Mode LOD, 16-joint sculpted rig, KHDR, Shadow Flame 1.0 Flash/Pro, Sound Engin 1.0, Human-Realistic Aiming, NV2.1 Spy Engine, and all matches passed.');
+{
+ // ===== 9. ResonanceCore 1.0: Kirchoff-Love Thin-Plate Modal Mechanics, Stack Coupling & 5,100 m/s Container Knock =====
+ assert.equal(RESONANCE_VERSION,'ResonanceCore 1.0');
+ assert.equal(STEEL_WAVE_SPEED,5100);
+ assert(RESONANCE_VS_GLSL.includes('resonanceDisplace')&&RESONANCE_VS_GLSL.includes('uResPos'),'ResonanceCore VS GLSL must declare resonanceDisplace & uResPos');
+ assert(RESONANCE_FS_GLSL.includes('resonanceShade')&&RESONANCE_FS_GLSL.includes('uResHit'),'ResonanceCore FS GLSL must declare resonanceShade & uResHit');
+ const ev=[];
+ const m=duel('MS10','unlimited',2,ev);
+ const rc=m.resonance;
+ assert.equal(rc.containers.length,40,'ResonanceCore must build modal oscillators for all 40 harbor shipping containers');
+ // 9A. Physical eigenmode scaling: 40ft container ([-12,78], id=0) has deeper fundamental than 20ft container ([-5,71], id=2)
+ const c40=rc.containers[0], c40Top=rc.containers[1], c20=rc.containers[2];
+ assert(c40.freqs[0]<c20.freqs[0]-25,`40ft container f1 (${c40.freqs[0].toFixed(1)}Hz) must be deeper than 20ft (${c20.freqs[0].toFixed(1)}Hz)`);
+ assert.equal(c40.coupledIdx,1,'Vertically stacked 40ft pair at [-12,78] must be mechanically coupled');
+ // 9B. Direct steel strike transfers mechanical energy across corner castings to stacked upper partner AND executes 5,100 m/s Container Knock!
+ const p=m.player, e=m.actors[1];
+ // Place enemy hugging the EAST far face of stacked container [-12,78,w=2.65,d=12] (x1=-10.675 -> enemy at x=-9.85, z=78)
+ Object.assign(p,{x:-15.5,y:0,z:78,yaw:Math.PI/2,pitch:0,alive:true,vx:0,vz:0});
+ Object.assign(e,{x:-9.85,y:0,z:78,yaw:-Math.PI/2,pitch:0,alive:true,vx:0,vz:0,hitRecoil:0,seismicRattle:0});
+ const baseF1=c40.freqs[0];
+ const res=rc.exciteStrike([-13.32,1.3,78],1.0,p,m);
+ assert(res&&res.containerId===0,'Strike on west face of [-12,78] container must resolve to container 0');
+ assert(c40.energy>0.5&&c40Top.energy>0.15&&rc.stats.stackTransfers>=1,'Corner-casting coupling must excite vertically stacked upper container');
+ assert(res.knockedEnemy===e&&rc.stats.seismicKnocks>=1,'5,100 m/s Container Knock must detect enemy hugging far steel wall');
+ assert(res.waveDelayMs>0&&res.waveDelayMs<2.0,`Steel stress wave delay across 3.5m container must be <2ms (got ${res.waveDelayMs.toFixed(2)}ms)`);
+ assert(res.freqs[0]<baseF1,'Human body mass hugging steel panel must slightly damp-shift fundamental pitch');
+ assert(e.hitRecoil>0.3&&e.seismicRattle>0.5&&c40.knockPing===1.0,'Container Knock must rattle enemy stance and activate knockPing');
+ // 9C. GPU uniform packing + symplectic harmonic decay stability
+ const gpuCount=rc.packUniforms();
+ assert(gpuCount>=2&&rc.uResPos[3]>0.5&&rc.uResHit[3]===1.0,'packUniforms must upload top active vibrating containers with knockPing=1');
+ const peakE=c40.energy;
+ for(let i=0;i<30;i++) rc.step(1/60);
+ assert(Number.isFinite(c40.energy)&&c40.energy<peakE,'Symplectic damped harmonic integrator must remain finite and decay smoothly');
+ console.log('ResonanceCore 1.0 OK:',{f1_40ft:+baseF1.toFixed(1),f1_20ft:+c20.freqs[0].toFixed(1),stackTransfers:rc.stats.stackTransfers,knockMs:+res.waveDelayMs.toFixed(2),gpuActive:gpuCount});
+}
+{
+ // ===== 10. ChronoTrace 1.0: 360Hz 4D Ballistic Flight Recorder, Forensic Telemetry & 3D Hologram Geometry =====
+ assert.equal(CHRONOTRACE_VERSION,'ChronoTrace 1.0');
+ const m=duel('MS10','unlimited',2,[]);
+ const p=m.player, e=m.actors[1];
+ // Fire a real BallisticCore-X grazing steel ricochet kill off [9,77] into low-HP enemy at (5.5, 70.0)
+ Object.assign(p,{x:5.5,y:0,z:82.0,vx:0,vy:0,vz:0,alive:true});
+ Object.assign(e,{x:5.5,y:0,z:70.0,vx:0,vy:0,vz:0,alive:true,hp:4,shield:0});
+ const eye=eyeOf(p);
+ p.yaw=Math.atan2(7.5-eye[0],-(76.0-eye[2]));
+ p.pitch=Math.atan2(1.35-eye[1],Math.hypot(7.5-eye[0],76.0-eye[2]));
+ assert(m.trigger(p),'Player must fire ricochet shot');
+ for(let i=0;i<90&&m.shots.length;i++){
+  m.time+=h;
+  let w=0;
+  for(const s of m.shots) if(m.projectile(s,h)) m.shots[w++]=s;
+  m.shots.length=w;
+ }
+ const ct=m.chronoTrace;
+ assert(ct.traces.length>=1&&ct.stats.killsRecorded>=1&&ct.stats.ricochetTraces>=1,`ChronoTrace must commit grazing ricochet kill trace (traces=${ct.traces.length}, kills=${ct.stats.killsRecorded}, rics=${ct.stats.ricochetTraces})`);
+ const tr=ct.lastPlayerKillTrace;
+ assert(tr&&tr.pts.length>=3&&tr.ricochets.length>=1&&tr.distM>10&&tr.flightMs>=1,'Recorded 4D trace must capture muzzle->bounce->impact polyline, angle, distance & ms');
+ const readout=ct.formatTelemetry(tr);
+ assert(readout.includes('CHRONOTRACE 1.0')&&readout.includes('跳弾')&&readout.includes('飛行'),`Telemetry readout must include Japanese forensic fields (got "${readout}")`);
+ // Verify zero-extra-draw-call 3D forensic geometry inside movingDetails()
+ const baseFx=movingDetails(m,m.time,true,false);
+ const chronoFx=movingDetails(m,m.time,true,false,{showChrono:true,deathTrace:tr});
+ assert(chronoFx.count>baseFx.count+200,`ChronoTrace forensic geometry must emit 3D ribbon + ricochet protractor + impact crown (base=${baseFx.count}, chrono=${chronoFx.count})`);
+ for(let i=0;i<chronoFx.data.length;i+=STRIDE){
+  assert(Number.isFinite(chronoFx.data[i])&&Number.isFinite(chronoFx.data[i+1])&&Number.isFinite(chronoFx.data[i+2]),'ChronoTrace 3D hologram vertices must all be finite');
+ }
+ console.log('ChronoTrace 1.0 OK:',{traces:ct.traces.length,distM:+tr.distM.toFixed(1),flightMs:tr.flightMs,angleDeg:tr.ricochets[0].angleDeg,holoVerts:chronoFx.count-baseFx.count});
+}
+console.log('360Hz sim, weapon specs (DF1 OUT 95-mag 2x rate, MS10, RD20/30/40), FluxGI 1.0, SchlierenOptics 1.0, BallisticCore-X, EchoPulse 1.0, NV-Synapse 1.0, AeroVortex 1.0, ThermoFlux 1.0, SpectraField 1.0, ResonanceCore 1.0, ChronoTrace 1.0, Lightweight Mode LOD, 16-joint sculpted rig, KHDR, Shadow Flame 1.0 Flash/Pro, Sound Engin 1.0, Human-Realistic Aiming, NV2.1 Spy Engine, and all matches passed.');
 
 

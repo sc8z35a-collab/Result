@@ -2,6 +2,7 @@ import {SHADOW_FLAME_WORLD_GLSL} from './shadowflame.js';
 import {KHDR_TONE_GLSL} from './khdr.js';
 import {ARTICULATED_RIG_GLSL} from './rig.js';
 import {FLUXGI_WORLD_GLSL} from './fluxgi.js';
+import {RESONANCE_VS_GLSL, RESONANCE_FS_GLSL} from './resonance.js';
 
 export const shared = `
 precision highp float;
@@ -57,6 +58,7 @@ out vec2 uv;
 flat out float layer;
 flat out float kind;
 ${ARTICULATED_RIG_GLSL}
+${RESONANCE_VS_GLSL}
 void main(){
   vec3 p=aPos,n=aNormal;
   lPos=p;
@@ -97,17 +99,19 @@ void main(){
   vec4 world=uModel*vec4(p,1.);
   wPos=world.xyz;
   wNormal=mat3(uModel)*n;
+  resonanceDisplace(wPos,wNormal,cleanKind,uMode);
   wColor=aColor;
   uv=aUV;
   layer=aLayer;
   kind=cleanKind;
-  gl_Position=uVP*world;
+  gl_Position=uVP*vec4(wPos,1.);
 }`;
 
 export const worldFS = `#version 300 es
 ${shared}
 ${SHADOW_FLAME_WORLD_GLSL}
 ${FLUXGI_WORLD_GLSL}
+${RESONANCE_FS_GLSL}
 in vec3 wPos,wNormal,wColor,lPos;
 in vec2 uv;
 flat in float layer;
@@ -148,6 +152,12 @@ void main(){
       float bumpScale=(uQuality>=2?.14:.08)*smoothstep(1.2,3.5,d)*(1.-smoothstep(40.,95.,d));
       N=normalize(N-clamp(surfGrad/det,vec3(-.85),vec3(.85))*bumpScale);
     }
+  }
+
+  // ResonanceCore 1.0: Chladni standing-wave analytical normal ripple + 5,100 m/s steel stress-wave shimmer
+  vec3 resEmit=vec3(0.);
+  if(uMode==0 && metal>.5 && uResCount>0){
+    resEmit=resonanceShade(wPos,N,metal,uTime);
   }
 
   // Shadow Flame 1.0 (Off / Flash / Pro) evaluation
@@ -268,6 +278,7 @@ void main(){
       c+=(base*diff+lspec)*uLightCol[i]*att*flameOcc*(uKHDR==1?1.15:1.);
     }
   }
+  c+=resEmit;
 
   if(ground>.5 && uQuality>=0){
     float wet=smoothstep(.46,.77,noise(wPos.xz*vec2(.34,.23))*.62+noise(wPos.xz*.92)*.38);
