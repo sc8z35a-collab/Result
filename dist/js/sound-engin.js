@@ -1093,6 +1093,16 @@ export class SoundEngin {
       return;
     }
 
+    // 3b. AeroVortex 1.0 Venturi Wind-Shear Acoustics: real Navier-Stokes airflow speed at listener's ears!
+    if (match.aeroVortex && this.windFilter && this.windGain) {
+      const wSample = match.aeroVortex.sample(this.listenerPos[0], this.listenerPos[2]);
+      const spd = clamp(wSample.speed || 0, 0, 6);
+      const sr = this.ctx.sampleRate;
+      this.windFilter.frequency.setTargetAtTime(safeFreq(sr, 360 + spd * 185), now, 0.14);
+      this.windFilter.Q.setTargetAtTime(1.1 + clamp(spd * 0.32, 0, 2.2), now, 0.14);
+      this.windGain.gain.setTargetAtTime(0.030 + spd * 0.016, now, 0.16);
+    }
+
     // 4. Supply Tanker proximity 3D pressurized turbine hum
     if (match.tankers?.length && this.tankerGain) {
       let bestTk = null, bestD = 25;
@@ -2092,6 +2102,12 @@ export class SoundEngin {
     }
     if (e.type === 'penetrate' && e.point) {
       this._playPenetrate(e, now);
+      return;
+    }
+    if (e.type === 'smoke' && e.point) {
+      // Pressurized nitrogen/vapor canister pop + turbulent hiss
+      this._playTone({f0: 360, f1: 88, dur: 0.08, attack: 0.002, gain: 0.14, type: 'triangle', bus: this.foleyBus, start: now});
+      this._playBuffer({buffer: this.whiteNoiseBuf, loop: true, dur: 0.92, attack: 0.012, gain: 0.16, filterType: 'bandpass', f0: 3100, f1: 760, q: 1.4, bus: this.foleyBus, start: now + 0.015});
       return;
     }
     if (e.type === 'reload' && a) {

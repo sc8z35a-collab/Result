@@ -1483,6 +1483,205 @@ body.light-mode #echoCompass i { filter: none !important; }
 }
 .syn-chips b { color: #ffe294; font-weight: 800; }
 
+/* ==========================================================================
+   World-First PDE Trio UI: AeroVortex 1.0 · ThermoFlux 1.0 · SpectraField 1.0
+   ========================================================================== */
+.badge-aero, .badge-thermo, .badge-spec {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font: 700 10px/1.2 var(--mono);
+  letter-spacing: .06em;
+  vertical-align: middle;
+}
+.badge-aero {
+  color: #daf6ff;
+  background: linear-gradient(90deg, #123e54, #1e4d57);
+  border: 1px solid #6bdcff85;
+}
+.badge-thermo {
+  color: #ffe2cc;
+  background: linear-gradient(90deg, #4f1d45, #5e2a12);
+  border: 1px solid #ff91488a;
+}
+.badge-spec {
+  color: #d8ffec;
+  background: linear-gradient(90deg, #10453c, #3d3414);
+  border: 1px solid #66f0c888;
+}
+.aero-toggle[aria-checked=true] {
+  background: linear-gradient(90deg, #42b8e8, #8aeef5);
+  border-color: #c4f8ff;
+  box-shadow: 0 0 16px #54d4f548;
+}
+.thermo-toggle[aria-checked=true] {
+  background: linear-gradient(90deg, #c23878, #ff9638);
+  border-color: #ffd09c;
+  box-shadow: 0 0 16px #ff7e3852;
+}
+.spec-toggle[aria-checked=true] {
+  background: linear-gradient(90deg, #28cc9e, #edc25c);
+  border-color: #c2ffe8;
+  box-shadow: 0 0 16px #46e0b848;
+}
+
+/* ThermoFlux 1.0 Active Cyber-FLIR Perimeter Frame */
+#flirFrame {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
+  border: 1.5px solid #ff944048;
+  box-shadow: inset 0 0 46px #ff5e1c2e, inset 0 0 14px #94206832;
+}
+#flirFrame span {
+  position: absolute;
+  left: 50%;
+  top: calc(max(clamp(12px, 2.4vh, 26px), env(safe-area-inset-top)) + 48px);
+  transform: translateX(-50%);
+  padding: 2px 10px;
+  border-radius: 999px;
+  font: 800 9.5px/1.3 var(--mono);
+  letter-spacing: .12em;
+  color: #ffdfaa;
+  background: #220b1cc8;
+  border: 1px solid #ff9a4678;
+  text-shadow: 0 0 8px #ff6e2499;
+  white-space: nowrap;
+}
+body.touch #flirFrame span {
+  top: calc(max(6px, env(safe-area-inset-top)) + 32px);
+  font-size: 8px;
+  padding: 1px 7px;
+}
+
+/* SpectraField 1.0 Live Fair-Play Ally Bayesian Probability Hologram */
+#spectraBox {
+  position: absolute;
+  left: max(18px, env(safe-area-inset-left));
+  top: max(14px, env(safe-area-inset-top));
+  width: 96px;
+  padding: 5px 6px 4px;
+  border-radius: 6px;
+  background: #0d1d22c8;
+  border: 1px solid #68dfd448;
+  border-top: 2px solid #5eead8;
+  backdrop-filter: blur(6px);
+  box-shadow: 0 6px 20px #040d1066;
+  pointer-events: none;
+  z-index: 3;
+}
+.spec-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 3px;
+  margin-bottom: 4px;
+  font: 800 8.5px/1 var(--mono);
+  letter-spacing: .05em;
+  color: #8cf2e4;
+  white-space: nowrap;
+}
+.spec-head b { color: #ffd982; font-size: 9px; }
+#spectraCanvas {
+  display: block;
+  width: 84px;
+  height: 168px;
+  border-radius: 3px;
+  border: 1px solid #6cd8d030;
+}
+.spec-foot {
+  margin-top: 3px;
+  text-align: center;
+  font: 600 8px/1.1 var(--mono);
+  color: #9bb8b6;
+  letter-spacing: .05em;
+}
+body.touch #spectraBox {
+  left: max(8px, env(safe-area-inset-left));
+  top: calc(max(6px, env(safe-area-inset-top)) + 124px);
+  width: 62px;
+  padding: 3px 4px;
+}
+body.touch #spectraCanvas {
+  width: 54px;
+  height: 108px;
+}
+body.touch .spec-head { font-size: 6.8px; letter-spacing: .01em; margin-bottom: 2px; }
+body.touch .spec-head b { font-size: 7.2px; }
+body.touch .spec-foot { display: none; }
+
+/* Desktop Tactical PDE Micro-Strip (FLIR · Smoke Vent · Harbor Wind Speed) */
+#tacStrip {
+  position: absolute;
+  right: max(clamp(16px, 3vw, 44px), env(safe-area-inset-right));
+  bottom: calc(max(clamp(14px, 3.2vh, 34px), env(safe-area-inset-bottom)) + 112px);
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  pointer-events: none;
+  z-index: 3;
+}
+#tacStrip span {
+  padding: 3px 7px;
+  border-radius: 4px;
+  font: 700 9.5px/1.2 var(--mono);
+  letter-spacing: .05em;
+  color: #c8dad6;
+  background: #102125c4;
+  border: 1px solid #a0beb938;
+  backdrop-filter: blur(5px);
+  white-space: nowrap;
+}
+#tacFlir.is-on {
+  color: #ffe8b8;
+  background: #3d1228d8;
+  border-color: #ff9c48aa;
+  box-shadow: 0 0 12px #ff742855;
+}
+#tacSmoke.is-ready {
+  color: #ccf8ff;
+  border-color: #66def570;
+}
+#windVal { color: #9ce6f2 !important; }
+body.touch #tacStrip { display: none; }
+
+/* Mobile Compact Left-Edge FLIR & Smoke Vent Pills (Zero Overlap above Joystick) */
+#touchTac {
+  position: absolute;
+  left: max(10px, calc(env(safe-area-inset-left) + 8px));
+  bottom: calc(max(10px, calc(env(safe-area-inset-bottom) + 8px)) + 96px);
+  display: flex;
+  gap: 5px;
+  pointer-events: none;
+}
+#touchTac button {
+  position: static;
+  width: auto;
+  min-width: 40px;
+  height: 28px;
+  padding: 0 7px;
+  border-radius: 6px;
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: .03em;
+  white-space: nowrap;
+}
+#touchFlir.is-active {
+  border-color: #ffaa54;
+  color: #ffe9c2;
+  background: linear-gradient(135deg, #8a2254cc, #b84a18cc);
+  box-shadow: 0 0 12px #ff7e3266;
+}
+#touchSmoke.is-cd { opacity: .55; }
+body.light-mode #spectraBox,
+body.light-mode #tacStrip span {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  box-shadow: none !important;
+}
+
 
 
 

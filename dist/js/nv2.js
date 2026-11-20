@@ -1265,15 +1265,33 @@ export class NV2 extends NV13Pro {
     if (!b.visibleEnemies) b.visibleEnemies = [];
     b.visibleEnemies.length = 0;
 
-    // NV2.1 agile peripheral visual scan (strictly direct LOS via obstruction() > 1 — ZERO wallhack!)
+    // NV2.1 agile peripheral visual scan (strictly direct LOS via obstruction() > 1 & smoke-clear — ZERO wallhack!)
+    const av = this.match.aeroVortex;
+    const eye = eyeOf(a);
+    const smokeGate = b.spy ? 1.02 : 0.86;
+    if (av && av.stats.totalSmoke > 1.8) {
+      // Dense Navier-Stokes tactical smoke physically conceals optical LOS!
+      for (const e of this.match.actors) {
+        if (!e.alive || e.team === a.team) continue;
+        const rec = b.contacts.get(e.id);
+        if (rec?.seen && av.smokeOcclusion(eye, targetPoint(e)) > smokeGate) {
+          rec.seen = false;
+          if (b.target === e) {
+            b.seen = null;
+            b.target = null;
+            b.targetId = -1;
+          }
+        }
+      }
+    }
     if (b.spy) {
-      const eye = eyeOf(a);
       for (const e of this.match.actors) {
         if (!e.alive || e.team === a.team || b.contacts.get(e.id)?.seen) continue;
         const dx = e.x - a.x, dz = e.z - a.z, d = Math.hypot(dx, dz);
         const aimYaw = Math.atan2(dx, -dz);
         const fovDiff = Math.abs(angleDiff(a.yaw, aimYaw));
-        if ((d < 16 || (d < 86 && fovDiff < 1.72)) && obstruction(eye, targetPoint(e)) > 1) {
+        const tp = targetPoint(e);
+        if ((d < 16 || (d < 86 && fovDiff < 1.72)) && obstruction(eye, tp) > 1 && (!av || av.stats.totalSmoke <= 1.8 || av.smokeOcclusion(eye, tp) <= smokeGate)) {
           b.contacts.set(e.id, {
             x: e.x, y: e.y, z: e.z, vx: e.vx || 0, vz: e.vz || 0,
             t, seen: true, gun: e.gun, hp: e.hp + e.shield
@@ -1296,6 +1314,7 @@ export class NV2 extends NV13Pro {
       if (e.alive && e.team !== a.team && b.contacts.get(e.id)?.seen) {
         b.visibleEnemies.push(e);
         this.recordEnemyObservation(a.team, e);
+        this.match.spectraField?.observe(a.team, e.x, e.z, {sigma: 2.5, weight: 0.90});
         if (b.spy) recordVisualSighting(b.spy, a, e, t, this.metrics);
         if (e.human && a.team === 1 && this.match.synapse) {
           this.match.synapse.observe([e.x, e.y, e.z], {
@@ -1307,6 +1326,24 @@ export class NV2 extends NV13Pro {
             isVisual: true
           });
         }
+      }
+    }
+    // Fair-play ThermoFlux thermal-spoor tracking for NV2.1 Spy Engine when target slipped around a corner!
+    if (b.spy && !b.seen && this.match.thermoFlux && t - (b._spoorAt || -10) > 0.65) {
+      b._spoorAt = t;
+      const spoor = this.match.thermoFlux.findEnemySpoor(eye, 1 - a.team, t, 14);
+      if (spoor) {
+        this.match.spectraField?.observe(a.team, spoor.x, spoor.z, {sigma: 3.4, weight: 0.72});
+        if (t - (b.seenAt || -10) > 2.8) {
+          b.lastPos = [spoor.x, spoor.z];
+        }
+      }
+    }
+    // Fair-play SpectraField Bayesian peak-threat guidance when standard NV2 has no fresh visual contact!
+    if (!b.spy && !b.seen && this.match.spectraField && t - (b.seenAt || -10) > 4.2) {
+      const pk = this.match.spectraField.getPeakThreat(a.team);
+      if (pk.certainty > 0.25) {
+        b.lastPos = [pk.x, pk.z];
       }
     }
     if (b.seen && b.target && !hadTarget) {

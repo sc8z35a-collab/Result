@@ -7,6 +7,9 @@ import {RD, RD20, RD30, isRDWeapon, initialRD, updateRD, bulletGuidanceRD} from 
 import {solveBallisticImpact} from './ballistics.js';
 import {EchoPulseField} from './echopulse.js';
 import {SynapseProfiler} from './synapse.js';
+import {AeroVortex} from './aerovortex.js';
+import {ThermoFlux} from './thermoflux.js';
+import {SpectraField} from './spectrafield.js';
 const baseSpeed = 360, baseInterval = .24;
 export const weapons = {
   'SW T': {capacity: 10, damage: 9, rate: 100, velocity: 100, speed: baseSpeed, interval: baseInterval, burst: 1, reload: 1.4},
@@ -71,6 +74,10 @@ export class Match {
     this.seq = 0;
     this.echoPulse = new EchoPulseField();
     this.synapse = new SynapseProfiler();
+    this.aeroVortex = new AeroVortex();
+    this.thermoFlux = new ThermoFlux();
+    this.spectraField = new SpectraField();
+    this.smokeCooldown = 0;
     this.techStats = {ricochets: 0, ricochetHits: 0, penetrations: 0, wallbangHits: 0};
     const counts = modes[config.mode] || modes['3v3'];
     this.goals = counts.map(n => config.limit === 'unlimited' ? Infinity : n * clamp(Math.round(config.multiplier) || 5, 1, 99));
@@ -283,8 +290,23 @@ export class Match {
       loudness: a.gun === 'MS10' ? 1.25 : a.gun === RD ? 1.12 : 1.0,
       gun: a.gun
     });
+    if (firstMuzzle && firstDir) {
+      this.aeroVortex.injectSmoke(firstMuzzle[0], firstMuzzle[2], 0.11, 0.18, 1, firstDir[0] * 1.3, firstDir[2] * 1.3);
+      this.thermoFlux.depositHeat(a.x, a.z, 0.14, 0);
+    }
     this.nv.onShotFired?.(a, source);
     this.event('fire', {actor: a, source, gun: a.gun, p: firstMuzzle, dir: firstDir, speed: w.speed, pellets: salvo, burstIndex: a.shotCount})
+  }
+  deploySmokeVent(a = this.player) {
+    if (!a?.alive || this.ended || (a.human && this.smokeCooldown > 0.01)) return false;
+    const fx = Math.sin(a.yaw), fz = -Math.cos(a.yaw);
+    const sx = clamp(a.x + fx * 3.4, -24, 24), sz = clamp(a.z + fz * 3.4, -98, 98);
+    this.aeroVortex.deploySmokeVent(sx, sz, fx, fz);
+    this.thermoFlux.depositHeat(sx, sz, 0.45, 2);
+    if (a.human) this.smokeCooldown = 10.0;
+    this.echoPulse.emit(this, {kind: 'tanker', pos: [sx, 1.2, sz], actor: a, team: a.team, loudness: 0.72});
+    this.event('smoke', {actor: a, point: [sx, 1.0, sz]});
+    return true;
   }
   damage(v, owner, power, dir = null, meta = null) {
     if (this.ended || !v.alive || owner.team === v.team)return null;
@@ -300,10 +322,16 @@ export class Match {
     if (dir)v.hitDir = [...dir];
     if (meta?.ricochet) this.techStats.ricochetHits++;
     if (meta?.wallbang) this.techStats.wallbangHits++;
+    if (shieldBreak) {
+      this.aeroVortex.injectBurst(v.x, v.z, {smoke: 0.95, heat: 1.12, force: 3.6, radius: 2});
+      this.thermoFlux.depositHeat(v.x, v.z, 0.85, 2);
+    }
     this.nv.learn(v, false);
     this.nv.onHit?.(v, owner, dir, power);
     this.event('hit', {victim: v, actor: owner, shield: absorbed > 0, shieldBreak, kill, damage: power, dir, ricochet: !!meta?.ricochet, wallbang: !!meta?.wallbang});
     if (!kill)return {shield: absorbed > 0, shieldBreak, kill: false};
+    this.aeroVortex.injectBurst(v.x, v.z, {smoke: 1.35, heat: 0.92, force: 4.8, radius: 3});
+    this.thermoFlux.depositHeat(v.x, v.z, 1.15, 2);
     v.alive = false;
     v.respawn = 3;
     v.reload = 0;
@@ -348,6 +376,9 @@ export class Match {
             max: .95,
             seed: ++this.seq
           });
+          this.aeroVortex.injectBurst(tk.x, tk.z, {smoke: 1.95, heat: 0.72, force: 4.5, radius: 3});
+          this.thermoFlux.depositHeat(tk.x, tk.z, 0.75, 2);
+          this.spectraField.observe(1 - a.team, tk.x, tk.z, {sigma: 5.5, weight: 0.78});
           this.echoPulse.emit(this, {kind: 'tanker', pos: [tk.x, 1.8, tk.z], actor: a, team: a.team, loudness: 1.4});
           if (a.human) this.synapse?.observeTankerCapture();
           this.event('tanker', {actor: a, tanker: tk});
@@ -451,7 +482,17 @@ export class Match {
   }
   projectile(s, dt) {
     if (s.guided)steerGuidedShot(this, s, dt);
-    const a = s.p, b = add(a, scale(s.dir, s.speed * dt));
+    const a = s.p;
+    // AeroVortex 1.0 physical harbor crosswind coupling (subtle caliber-scaled aerodynamic drift)
+    if (!s.guided && s.p[1] > 0.1 && s.p[1] < 5.5) {
+      const wind = this.aeroVortex.sample(a[0], a[2]);
+      if (wind.speed > 0.35) {
+        const drag = s.gun === 'MS10' ? 0.0009 : s.gun === 'RD40' ? 0.0013 : 0.0019;
+        s.dir = unit([s.dir[0] + wind.vx * drag * dt, s.dir[1], s.dir[2] + wind.vz * drag * dt]);
+      }
+    }
+    const b = add(a, scale(s.dir, s.speed * dt));
+    this.aeroVortex.injectProjectileWake(a, b, s.speed, s.gun);
     let at = obstruction(a, b), target = null;
     for (const v of this.actors) {
       if (!v.alive || v.team === s.team)continue;
@@ -592,6 +633,8 @@ export class Match {
             normal, mat, gun: s.gun, source: s.source, life: 1.85, max: 1.85, seed: this.seq
           });
           if (this.scorches.length > 26) this.scorches.shift();
+          this.aeroVortex.injectSmoke(hitInfo.point[0], hitInfo.point[2], 0.42, 0.72, 1, ball.dir[0] * 2.5, ball.dir[2] * 2.5);
+          this.thermoFlux.depositHeat(hitInfo.point[0], hitInfo.point[2], 0.92, 1);
           this.echoPulse.emit(this, {kind: 'ricochet', pos: hitInfo.point, actor: s.owner, team: s.team, loudness: 0.92, gun: s.gun});
           this.event('ricochet', {point: hitInfo.point, dir: ball.dir, normal, gun: s.gun, mat, actor: s.owner});
           return s.life > 0;
@@ -631,6 +674,8 @@ export class Match {
             normal: ball.exitNormal, mat, gun: s.gun, source: s.source, life: 1.85, max: 1.85, seed: ++this.seq
           });
           while (this.scorches.length > 26) this.scorches.shift();
+          this.aeroVortex.injectSmoke(ball.exitPos[0], ball.exitPos[2], 0.52, 0.55, 1, ball.dir[0] * 2.2, ball.dir[2] * 2.2);
+          this.thermoFlux.depositHeat(ball.exitPos[0], ball.exitPos[2], 0.78, 1);
           this.echoPulse.emit(this, {kind: 'penetrate', pos: ball.exitPos, actor: s.owner, team: s.team, loudness: 0.76, gun: s.gun});
           this.event('penetrate', {point: ball.exitPos, entry: ball.entryPos, dir: ball.dir, mat, thickness: ball.thickness, gun: s.gun, actor: s.owner});
           return s.life > 0;
@@ -665,6 +710,8 @@ export class Match {
           seed: this.seq
         });
         if (this.scorches.length > 26)this.scorches.shift();
+        this.aeroVortex.injectSmoke(p[0], p[2], 0.22, 0.25, 1, normal[0] * 1.2, normal[2] * 1.2);
+        this.thermoFlux.depositHeat(p[0], p[2], 0.58, 1);
         this.event('impact', {point: p, dir: s.dir, normal, gun: s.gun, metal, mat, actor: s.owner})
       }
       return false
@@ -674,23 +721,55 @@ export class Match {
   step(dt, input) {
     if (this.ended)return;
     this.time += dt;
+    this.smokeCooldown = Math.max(0, this.smokeCooldown - dt);
     if (this.time > this.tremorAt + 1.2)this.tremorAt = this.time + 65 + this.rng() * 36;
     this.groundMotion = this.time >= this.tremorAt ? Math.sin((this.time - this.tremorAt) / 1.2 * Math.PI) : 0;
-    for (const a of this.actors) {
-      const prevStride = a.stride || 0;
+    const prevStrides = this.actors.map(a => a.stride || 0);
+    for (let i = 0; i < this.actors.length; i++) {
+      const a = this.actors[i];
       this.systems(a, dt);
-      // Emit audible EchoPulse footstep waves for sprinting or elevated steel-roof movement!
-      if (a.alive && a.onGround && !a.human && ((a.sprintAmt || 0) > 0.35 || a.y > 0.5)) {
-        if (Math.floor(a.stride / 2.2) > Math.floor(prevStride / 2.2)) {
+    }
+    this.updatePlayer(dt, input);
+    // Stamp warm ThermoFlux thermal footprints & EchoPulse sprint/steel-roof footsteps for moving actors!
+    for (let i = 0; i < this.actors.length; i++) {
+      const a = this.actors[i];
+      const prevStride = prevStrides[i];
+      if (!a.alive || !a.onGround) continue;
+      if (Math.floor((a.stride || 0) / 1.15) > Math.floor(prevStride / 1.15)) {
+        const intensity = (a.sprintAmt || 0) > 0.35 ? 0.56 : 0.38;
+        this.thermoFlux.stampFootprint(a.x, a.z, a.team, this.time, intensity);
+      }
+      if (!a.human && ((a.sprintAmt || 0) > 0.35 || a.y > 0.5)) {
+        if (Math.floor((a.stride || 0) / 2.2) > Math.floor(prevStride / 2.2)) {
           this.echoPulse.emit(this, {kind: 'step', pos: [a.x, a.y + 0.15, a.z], actor: a, team: a.team, loudness: a.y > 0.5 ? 0.85 : 0.55});
         }
       }
     }
-    this.updatePlayer(dt, input);
     const arrivedEchoes = this.echoPulse.step(this);
-    for (const rep of arrivedEchoes) this.nv.onEchoArrival?.(rep);
+    for (const rep of arrivedEchoes) {
+      this.nv.onEchoArrival?.(rep);
+      const listener = this.actors[rep.listenerId];
+      if (listener?.alive) {
+        this.spectraField.observe(listener.team, rep.perceivedPos[0], rep.perceivedPos[2], {
+          sigma: rep.occluded ? 7.2 : 4.5,
+          weight: rep.isDecoy ? 0.35 : 0.62
+        });
+      }
+    }
+    // Feed newly arrived player acoustic waves into Team 0's fair-play Bayesian wavefunction!
+    if (this.echoPulse.playerWaves.length) {
+      for (const w of this.echoPulse.playerWaves) {
+        if (!w.specFed && this.time >= w.arriveAt) {
+          w.specFed = true;
+          this.spectraField.observe(0, w.pos[0], w.pos[2], {sigma: w.occluded ? 7.2 : 4.6, weight: 0.58});
+        }
+      }
+    }
     this.nv.tick(dt);
     this.updateTankers(dt);
+    this.aeroVortex.tick(dt);
+    this.thermoFlux.tick(dt, this.tankers);
+    this.spectraField.tick(dt, this);
     let write = 0;
     for (const shot of this.shots) {
       if (!this.ended && this.projectile(shot, dt))this.shots[write++] = shot
@@ -712,6 +791,7 @@ export class Match {
         c.v[0] *= .68;
         c.v[2] *= .68;
         c.spin *= .65;
+        if (!c.bounced) this.thermoFlux.depositHeat(c.p[0], c.p[2], 0.24, 0);
         if ((c.bounces || 0) < 2 && impactVy > .55) {
           this.event('casing', {point: [...c.p], gun: c.gun, speed: impactVy, bounce: c.bounces || 0});
           c.bounces = (c.bounces || 0) + 1

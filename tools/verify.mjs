@@ -26,6 +26,9 @@ import {SchlierenOptics,SCHLIEREN_COMPOSITE_GLSL} from '../dist/js/schlieren.js'
 import {BALLISTICS_VERSION,WEAPON_PENETRATION,RICOCHET_SIN_STEEL,solveBallisticImpact} from '../dist/js/ballistics.js';
 import {EchoPulseField,ECHOPULSE_VERSION} from '../dist/js/echopulse.js';
 import {SynapseProfiler,SYNAPSE_VERSION,sectorOf} from '../dist/js/synapse.js';
+import {AeroVortex,AEROVORTEX_VERSION,AERO_COMPOSITE_GLSL,worldToAeroCell} from '../dist/js/aerovortex.js';
+import {ThermoFlux,THERMOFLUX_VERSION,THERMO_COMPOSITE_GLSL} from '../dist/js/thermoflux.js';
+import {SpectraField,SPECTRAFIELD_VERSION,worldToSpecCell} from '../dist/js/spectrafield.js';
 const h=1/360;
 function duel(loadout='DF1 OUT',limit='unlimited',multiplier=2,events=[]) {
   return new Match({mode:'1v1', limit, multiplier,loadout},event=>events.push(event));
@@ -677,6 +680,89 @@ for (const [mode,counts] of Object.entries(modes)) {
  assert(sum.archetypeJa&&sum.counterJa&&sum.lanesPct[0]>50&&sum.observations>=16,'NV-Synapse summary must output complete Japanese tactical readout');
  console.log('NV-Synapse 1.0 OK:',{archetype:sum.archetype,ja:sum.archetypeJa,counter:sum.counterJa,lanesPct:sum.lanesPct,confPct:sum.confidencePct});
 }
-console.log('360Hz sim, weapon specs (DF1 OUT 95-mag 2x rate, MS10, RD20/30/40), FluxGI 1.0, SchlierenOptics 1.0, BallisticCore-X, EchoPulse 1.0, NV-Synapse 1.0, Lightweight Mode LOD, 16-joint sculpted rig, KHDR, Shadow Flame 1.0 Flash/Pro, Sound Engin 1.0, Human-Realistic Aiming, NV2.1 Spy Engine, and all matches passed.');
+{
+ // ===== 6. AeroVortex 1.0: Obstacle-Aware 2D Navier-Stokes Fluid Dynamics + Bullet-Wake Tunnel Carving =====
+ assert.equal(AEROVORTEX_VERSION,'AeroVortex 1.0');
+ assert(AERO_COMPOSITE_GLSL.includes('applyAeroVortex')&&AERO_COMPOSITE_GLSL.includes('uAeroTex')&&AERO_COMPOSITE_GLSL.includes('uSceneDepth'),'AeroVortex GLSL must declare applyAeroVortex, uAeroTex & uSceneDepth');
+ const av=new AeroVortex();
+ const [cix,ciz]=worldToAeroCell(9,77); // Inside red NORTH container [9,77,w=3,d=12.2]
+ assert.equal(av.solid[ciz*av.w+cix],1,'AeroVortex solid boundary mask must block cells inside shipping containers');
+ assert.equal(av.vx[ciz*av.w+cix],0,'Velocity inside solid container must be strictly zero');
+ for(let i=0;i<20;i++) av.stepFluid(1/24);
+ for(let i=0;i<av.n;i++) assert(Number.isFinite(av.vx[i])&&Number.isFinite(av.vz[i])&&Number.isFinite(av.smoke[i]),'Navier-Stokes velocity & smoke fields must remain finite');
+ assert(av.stats.maxWindSpeed>1.2,`Harbor sea-breeze Venturi flow must develop realistic wind speed (got ${av.stats.maxWindSpeed.toFixed(2)} m/s)`);
+ // Deploy tactical Smoke Vent in open lane at (0, 10) -> physically blocks optical LOS!
+ av.deploySmokeVent(0,10,0,-1);
+ const occ=av.smokeOcclusion([0,1.5,18],[0,1.5,2]);
+ assert(occ>0.78,`AeroVortex smoke vent must physically block optical AI LOS (tau=${occ.toFixed(2)})`);
+ // Supersonic MS10 bullet tearing straight through the smoke cloud carves an aerodynamic tunnel!
+ const beforeCenter=av.sample(0,10).smoke;
+ av.injectProjectileWake([0,1.5,15],[0,1.5,5],648,'MS10');
+ const afterCenter=av.sample(0,10).smoke;
+ assert(afterCenter<beforeCenter*0.85&&av.stats.wakesCarved>=1,`Supersonic MS10 wake must carve smoke tunnel (before=${beforeCenter.toFixed(2)}, after=${afterCenter.toFixed(2)}, wakes=${av.stats.wakesCarved})`);
+ console.log('AeroVortex 1.0 OK:',{maxWind:+av.stats.maxWindSpeed.toFixed(2),smokeTau:+occ.toFixed(2),tunnelDrop:+((1-afterCenter/beforeCenter)*100).toFixed(0)+'%'});
+}
+{
+ // ===== 7. ThermoFlux 1.0: Fourier Heat-Equation PDE, Persistent Footprints & Fair-Play NV2.1 Thermal Spoor =====
+ assert.equal(THERMOFLUX_VERSION,'ThermoFlux 1.0');
+ assert(THERMO_COMPOSITE_GLSL.includes('applyThermoFluxFLIR')&&THERMO_COMPOSITE_GLSL.includes('ironbowPalette')&&THERMO_COMPOSITE_GLSL.includes('uThermoTex'),'ThermoFlux GLSL must declare applyThermoFluxFLIR, ironbowPalette & uThermoTex');
+ const tf=new ThermoFlux();
+ // Solar baking contrast: verify sunlit cells bake hotter than shadowed container alleys
+ let minBase=1,maxBase=0;
+ for(let i=0;i<tf.n;i++){minBase=Math.min(minBase,tf.baseTemp[i]);maxBase=Math.max(maxBase,tf.baseTemp[i]);}
+ assert(maxBase>minBase+0.15,`ThermoFlux solar baking must differentiate sunlit steel/dock (${maxBase.toFixed(2)}) vs cold shade (${minBase.toFixed(2)})`);
+ // Stamp fresh enemy thermal footprint in open alley at (0, 40) + hidden enemy footprint behind [-7.5, 46] container at (-10.2, 46)
+ tf.stampFootprint(0,40,1,5.0,0.58);
+ tf.stampFootprint(-10.2,46,1,5.0,0.65);
+ const peakBefore=tf.sampleTemp(0,40).dyn;
+ const neighborBefore=tf.sampleTemp(1.6,40).dyn;
+ tf.stepHeat(0.10);
+ const peakAfter=tf.sampleTemp(0,40).dyn;
+ const neighborAfter=tf.sampleTemp(1.6,40).dyn;
+ assert(peakAfter<peakBefore&&neighborAfter>neighborBefore,'Fourier heat PDE must diffuse warmth into adjacent cells and cool peak');
+ // Fair-play NV2.1 thermal-spoor finder spots visible hot trail (0,40) from (0,46), and NEVER sees occluded trail (-10.2,46) through steel container from (-4.2,46)!
+ const visibleSpoor=tf.findEnemySpoor([0,1.6,46],1,5.8,14);
+ assert(visibleSpoor&&Math.hypot(visibleSpoor.x-0,visibleSpoor.z-40)<2.2,'NV2.1 must track visible warm enemy thermal footprint');
+ const tfOcc=new ThermoFlux();
+ tfOcc.stampFootprint(-10.2,46,1,5.0,0.65);
+ const occludedSpoor=tfOcc.findEnemySpoor([-4.2,1.6,46],1,5.8,12);
+ assert.equal(occludedSpoor,null,'Fair-play thermal spoor tracker must NOT detect footprints behind solid steel containers');
+ console.log('ThermoFlux 1.0 OK:',{solarDelta:+(maxBase-minBase).toFixed(2),diffusedNeighbor:+neighborAfter.toFixed(3),spoorFound:true});
+}
+{
+ // ===== 8. SpectraField 1.0: Obstacle-Constrained Bayesian Fokker-Planck PDE & Negative-Information Collapse =====
+ assert.equal(SPECTRAFIELD_VERSION,'SpectraField 1.0');
+ const sf=new SpectraField();
+ // Verify normalized probability mass = 1.0 and strictly 0 inside solid shipping containers
+ let mass=0;
+ for(let i=0;i<sf.n;i++){
+  if(!sf.passable[i]) assert.equal(sf.fields[0][i],0,'Probability mass must be strictly 0 inside solid containers');
+  mass+=sf.fields[0][i];
+ }
+ assert(Math.abs(mass-1)<1e-4,`Fokker-Planck wavefunction must normalize to 1.0 (got ${mass})`);
+ // Bayesian Negative-Information Collapse: observer at (0, 60) looking North (yaw=0) down open center lane
+ const obs={x:0,y:0,z:60,yaw:0,pitch:0,alive:true,crouch:0,lean:0};
+ const [tx,tz]=worldToSpecCell(0,45);
+ const beforeCell=sf.fields[0][tz*sf.w+tx];
+ sf.collapseSightCone(0,obs,null);
+ const afterCell=sf.fields[0][tz*sf.w+tx];
+ assert(afterCell<beforeCell*0.5&&sf.stats.collapses>0,`Looking down empty corridor must collapse Bayesian probability (before=${beforeCell.toFixed(5)}, after=${afterCell.toFixed(5)})`);
+ // Dense AeroVortex smoke across z=52 stops visibility collapse behind the smoke!
+ const sfSmoke=new SpectraField();
+ const avBlock=new AeroVortex();
+ avBlock.deploySmokeVent(0,52,0,-1);
+ const beforeBehindSmoke=sfSmoke.fields[0][tz*sfSmoke.w+tx];
+ sfSmoke.collapseSightCone(0,obs,avBlock);
+ const afterBehindSmoke=sfSmoke.fields[0][tz*sfSmoke.w+tx];
+ assert(afterBehindSmoke>=beforeBehindSmoke*0.85,'AeroVortex smoke must shield hidden alleys from Bayesian visibility collapse');
+ // Multi-sensor Bayesian likelihood fusion shifts peak threat directly to sighted coordinate & boosts Shannon certainty
+ const certBefore=sf.certainty[0];
+ sf.observe(0,-15,-35,{sigma:3.0,weight:1.2});
+ sf.observe(0,-15,-35,{sigma:3.0,weight:1.2});
+ const pk=sf.getPeakThreat(0);
+ assert(Math.hypot(pk.x-(-15),pk.z-(-35))<5.0&&pk.certainty>certBefore,`Bayesian likelihood fusion must focus peak threat onto (-15,-35) (got [${pk.x.toFixed(1)},${pk.z.toFixed(1)}], cert=${pk.certainty.toFixed(2)})`);
+ console.log('SpectraField 1.0 OK:',{collapses:sf.stats.collapses,peak:[+pk.x.toFixed(1),+pk.z.toFixed(1)],certaintyPct:Math.round(pk.certainty*100)});
+}
+console.log('360Hz sim, weapon specs (DF1 OUT 95-mag 2x rate, MS10, RD20/30/40), FluxGI 1.0, SchlierenOptics 1.0, BallisticCore-X, EchoPulse 1.0, NV-Synapse 1.0, AeroVortex 1.0, ThermoFlux 1.0, SpectraField 1.0, Lightweight Mode LOD, 16-joint sculpted rig, KHDR, Shadow Flame 1.0 Flash/Pro, Sound Engin 1.0, Human-Realistic Aiming, NV2.1 Spy Engine, and all matches passed.');
 
 

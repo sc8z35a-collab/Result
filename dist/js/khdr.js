@@ -10,6 +10,8 @@
 
 import {clamp} from './geometry.js';
 import {SCHLIEREN_COMPOSITE_GLSL} from './schlieren.js';
+import {AERO_COMPOSITE_GLSL} from './aerovortex.js';
+import {THERMO_COMPOSITE_GLSL} from './thermoflux.js';
 
 function makeProgram(gl, vs, fs) {
   const obj = gl.createProgram(), sh = [];
@@ -47,7 +49,7 @@ function makeTarget(gl, w, h, internalFormat, withDepthTex = false) {
   gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
 
-  let depthTex = null;
+  let depthTex = null, vmFb = null, vmDepthRb = null;
   if (withDepthTex) {
     depthTex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, depthTex);
@@ -60,21 +62,37 @@ function makeTarget(gl, w, h, internalFormat, withDepthTex = false) {
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, depthTex, 0);
   }
 
-  const ok = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+  let ok = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+  if (ok && withDepthTex) {
+    // Dedicated viewmodel FBO sharing the same HDR color target with its own depth buffer so
+    // depthTex stays 100% pure world+actor depth for AeroVortex ray-marching & ThermoFlux FLIR!
+    vmDepthRb = gl.createRenderbuffer();
+    gl.bindRenderbuffer(gl.RENDERBUFFER, vmDepthRb);
+    gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, w, h);
+    vmFb = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, vmFb);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, vmDepthRb);
+    ok = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+  }
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   if (!ok) {
     gl.deleteTexture(tex);
     if (depthTex) gl.deleteTexture(depthTex);
+    if (vmDepthRb) gl.deleteRenderbuffer(vmDepthRb);
+    if (vmFb) gl.deleteFramebuffer(vmFb);
     gl.deleteFramebuffer(fb);
     return null;
   }
-  return {fb, tex, depthTex, w, h, format: internalFormat};
+  return {fb, tex, depthTex, vmFb, vmDepthRb, w, h, format: internalFormat};
 }
 
 function destroyTarget(gl, t) {
   if (!t) return;
   if (t.tex) gl.deleteTexture(t.tex);
   if (t.depthTex) gl.deleteTexture(t.depthTex);
+  if (t.vmDepthRb) gl.deleteRenderbuffer(t.vmDepthRb);
+  if (t.vmFb) gl.deleteFramebuffer(t.vmFb);
   if (t.fb) gl.deleteFramebuffer(t.fb);
 }
 
@@ -296,6 +314,8 @@ out vec4 frag;
 
 ${KHDR_TONE_GLSL}
 ${SCHLIEREN_COMPOSITE_GLSL}
+${AERO_COMPOSITE_GLSL}
+${THERMO_COMPOSITE_GLSL}
 
 vec3 dec(vec3 v){return uLinear==1?max(v,vec3(0.)):kDecodeLogK(v);}
 vec3 aces(vec3 x){return clamp((x*(2.51*x+.03))/(x*(2.43*x+.59)+.14),0.,1.);}
@@ -392,6 +412,19 @@ void main(){
     base+=shaftCol*worldMask;
   }
 
+  // 3b. AeroVortex 1.0 Depth-Occluded 3D Volumetric Navier-Stokes Smoke + ThermoFlux 1.0 GPU Cyber-FLIR Visor!
+  if(uAeroOn==1 || uFlirBlend>.005){
+    float sceneDepth=texture(uSceneDepth,vUV).r;
+    if(uAeroOn==1 && uFlirBlend<.88){
+      vec3 smokeCol=base;
+      applyAeroVortex(vUV,worldMask,sceneDepth,uTime,smokeCol);
+      base=mix(smokeCol,base,smoothstep(.15,.85,uFlirBlend));
+    }
+    if(uFlirBlend>.005){
+      base=applyThermoFluxFLIR(vUV,worldMask,sceneDepth,uTime,base);
+    }
+  }
+
   // 4. KHDR Perceptual Enhancement Pipeline (K-Adapt + K-LCE + K-Halo + Warm/Cool Split)
   vec3 c=base;
   if(uKHDR==1){
@@ -430,15 +463,16 @@ void main(){
     c*=mix(vec3(1.),vec3(1.04,1.01,.96),hiMask*.28);
   }
 
-  // 5. K-Halo / Extra Dual Bloom + KHDR Horizontal Anamorphic Glare Streak
+  // 5. K-Halo / Extra Dual Bloom + KHDR Horizontal Anamorphic Glare Streak (attenuated in FLIR mode for razor-sharp IR contrast)
   if(uHasBloom==1){
+    float flirBloomMul=1.-uFlirBlend*.72;
     vec3 bA=dec(texture(uBloomA,vUV).rgb);
     vec3 bB=dec(texture(uBloomB,vUV).rgb);
     if(uKHDR==1){
       vec3 streak=dec(texture(uStreak,vUV).rgb);
-      c+=bA*.34+bB*.30+streak*.24;
+      c+=(bA*.34+bB*.30+streak*.24)*flirBloomMul;
     } else {
-      c+=bA*.42+bB*.38;
+      c+=(bA*.42+bB*.38)*flirBloomMul;
     }
   }
 
@@ -494,7 +528,18 @@ export class KHDRPipeline {
     this.bindSamplers(this.adapt1P, {uTex: 11, uPrev: 14});
     this.bindSamplers(this.bloomExP, {uScene: 5});
     this.bindSamplers(this.blurP, {uTex: 5});
-    this.bindSamplers(this.compP, {uScene: 5, uBloomA: 6, uBloomB: 7, uStreak: 15, uSfScreen: 10, uAdapt: 11});
+    this.bindSamplers(this.compP, {
+      uScene: 5,
+      uBloomA: 6,
+      uBloomB: 7,
+      uSceneDepth: 8,
+      uAeroTex: 9,
+      uSfScreen: 10,
+      uAdapt: 11,
+      uThermoTex: 12,
+      uFluxGIPost: 13,
+      uStreak: 15
+    });
   }
 
   bindSamplers(p, pairs) {
@@ -610,7 +655,12 @@ export class KHDRPipeline {
     }
   }
 
-  composite({w, h, finalOutput, khdrOn, hasBloom, useFXAA, sfScreenTex, dt, shake, hurt, time, emptyVao, schlierenOn = false, shockCount = 0, shocks = null, shockMeta = null, gunHeat = 0, aspect = 16 / 9}) {
+  composite({
+    w, h, finalOutput, khdrOn, hasBloom, useFXAA, sfScreenTex, dt, shake, hurt, time, emptyVao,
+    schlierenOn = false, shockCount = 0, shocks = null, shockMeta = null, gunHeat = 0, aspect = 16 / 9,
+    aeroOn = false, aeroTex = null, thermoTex = null, fluxGITex = null, fluxGIOn = false,
+    flirBlend = 0, flirActors = null, invVP = null, camEye = null
+  }) {
     const gl = this.gl, t = this.targets;
     gl.disable(gl.DEPTH_TEST);
 
@@ -628,12 +678,20 @@ export class KHDRPipeline {
     gl.bindTexture(gl.TEXTURE_2D, hasBloom ? t.a0.tex : this.neutralTex);
     gl.activeTexture(gl.TEXTURE7);
     gl.bindTexture(gl.TEXTURE_2D, hasBloom ? t.b1.tex : this.neutralTex);
-    gl.activeTexture(gl.TEXTURE15);
-    gl.bindTexture(gl.TEXTURE_2D, (hasBloom && khdrOn) ? t.s1.tex : this.neutralTex);
+    gl.activeTexture(gl.TEXTURE8);
+    gl.bindTexture(gl.TEXTURE_2D, t.scene.depthTex || this.neutralTex);
+    gl.activeTexture(gl.TEXTURE9);
+    gl.bindTexture(gl.TEXTURE_2D, aeroTex || this.neutralTex);
     gl.activeTexture(gl.TEXTURE10);
     gl.bindTexture(gl.TEXTURE_2D, sfScreenTex || this.neutralTex);
     gl.activeTexture(gl.TEXTURE11);
     gl.bindTexture(gl.TEXTURE_2D, adaptTex);
+    gl.activeTexture(gl.TEXTURE12);
+    gl.bindTexture(gl.TEXTURE_2D, thermoTex || this.neutralTex);
+    gl.activeTexture(gl.TEXTURE13);
+    gl.bindTexture(gl.TEXTURE_2D, fluxGITex || this.neutralTex);
+    gl.activeTexture(gl.TEXTURE15);
+    gl.bindTexture(gl.TEXTURE_2D, (hasBloom && khdrOn) ? t.s1.tex : this.neutralTex);
 
     gl.uniform1i(this.compP.uOutput, finalOutput);
     gl.uniform1i(this.compP.uLinear, this.floatHDR ? 1 : 0);
@@ -650,10 +708,17 @@ export class KHDRPipeline {
     if (this.compP.uAspect != null) gl.uniform1f(this.compP.uAspect, aspect || 16 / 9);
     if (this.compP.uShocks != null && shocks) gl.uniform4fv(this.compP.uShocks, shocks);
     if (this.compP.uShockMeta != null && shockMeta) gl.uniform4fv(this.compP.uShockMeta, shockMeta);
+    if (this.compP.uAeroOn != null) gl.uniform1i(this.compP.uAeroOn, (aeroOn && aeroTex && invVP) ? 1 : 0);
+    if (this.compP.uFluxGIPostOn != null) gl.uniform1i(this.compP.uFluxGIPostOn, (fluxGIOn && fluxGITex) ? 1 : 0);
+    if (this.compP.uInvVP != null && invVP) gl.uniformMatrix4fv(this.compP.uInvVP, false, invVP);
+    if (this.compP.uCamEye != null && camEye) gl.uniform3fv(this.compP.uCamEye, camEye);
+    if (this.compP.uFlirOn != null) gl.uniform1i(this.compP.uFlirOn, flirBlend > 0.005 ? 1 : 0);
+    if (this.compP.uFlirBlend != null) gl.uniform1f(this.compP.uFlirBlend, (thermoTex && invVP) ? clamp(flirBlend || 0, 0, 1) : 0);
+    if (this.compP.uFlirActors != null && flirActors) gl.uniform4fv(this.compP.uFlirActors, flirActors);
 
     gl.bindVertexArray(emptyVao);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
-    for (const u of [5, 6, 7, 10, 11, 14, 15]) {
+    for (const u of [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]) {
       gl.activeTexture(gl.TEXTURE0 + u);
       gl.bindTexture(gl.TEXTURE_2D, null);
     }

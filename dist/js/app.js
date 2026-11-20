@@ -10,7 +10,7 @@ const $ = s => document.getElementById(s),
 // Optically exact +2/3 wider view width relative to 24.7° / 13.0° FOV:
 // 2 * atan((5/3) * tan(24.7°/2)) = 40.1°, 2 * atan((5/3) * tan(13.0°/2)) = 21.5°.
 const BASE_FOV = 40.1, ADS_FOV = 21.5;
-const defaults = {lightMode: false, resolution: 'HD', graphics: 'high', rate: 360, rateV2: true, hdr: true, khdr: true, shadowMode: 'pro', shadows: true, fluxGI: true, schlieren: true, echoPulse: true, audioMode: 'hrtf', sensitivity: 1, volume: 55, sound: false};
+const defaults = {lightMode: false, resolution: 'HD', graphics: 'high', rate: 360, rateV2: true, hdr: true, khdr: true, shadowMode: 'pro', shadows: true, fluxGI: true, schlieren: true, aeroVortex: true, thermoFlux: true, spectraField: true, echoPulse: true, audioMode: 'hrtf', sensitivity: 1, volume: 55, sound: false};
 const graphicsHints = {
   standard: '軽量描画 · 基本ライト · 標準反射',
   high: '高精細質感 · 動的ライト · 標準水面反射',
@@ -70,6 +70,9 @@ settings.khdr = !!settings.khdr;
 if (settings.khdr) settings.hdr = true;
 settings.fluxGI = settings.fluxGI !== false;
 settings.schlieren = settings.schlieren !== false;
+settings.aeroVortex = settings.aeroVortex !== false;
+settings.thermoFlux = settings.thermoFlux !== false;
+settings.spectraField = settings.spectraField !== false;
 settings.echoPulse = settings.echoPulse !== false;
 if (![0, 60, 120, 360].includes(settings.rate))settings.rate = 360;
 if (!modes[rules.mode])rules.mode = '3v3';
@@ -96,6 +99,8 @@ let screen = 'title',
   tourTime = 0,
   resetView = true,
   hudAt = 0,
+  spectraAt = 0,
+  flirActive = false,
   nextFrame = 0,
   lastTime = null,
   accum = 0,
@@ -449,7 +454,7 @@ function group(id, value, change) {
 const touch = matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0;
 document.body.classList.toggle('touch', touch);
 function controls() {
-  const rows = touch ? [['移動 / ダッシュ', '左スティック（強く前傾でダッシュ）'], ['視点', '右側スワイプ / 射撃長押しドラッグ / 右スティック'], ['発射 / 再装填', '射撃(長押し連射＋視点移動)・R2 / R・X'], ['ジャンプ / しゃがみ', '↑・A / しゃがみ・B']] : [['移動 / ダッシュ', 'WASD / Shift · 左スティック強前傾'], ['視点', 'マウス / 矢印キー / 右スティック'], ['発射 / 再装填', '左クリック(長押し連射＋視点移動)・F・R2 / R'], ['ジャンプ / しゃがむ', 'Space・A / Ctrl・B'], ['一時停止', 'Esc / P / Start']];
+  const rows = touch ? [['移動 / ダッシュ', '左スティック（強く前傾でダッシュ）'], ['視点', '右側スワイプ / 射撃長押しドラッグ / 右スティック'], ['発射 / 再装填', '射撃(長押し連射＋視点移動)・R2 / R・X'], ['ジャンプ / しゃがみ', '↑・A / しゃがみ・B'], ['FLIR / 流体煙幕', '左下 FLIR・煙幕ボタン']] : [['移動 / ダッシュ', 'WASD / Shift · 左スティック強前傾'], ['視点', 'マウス / 矢印キー / 右スティック'], ['発射 / 再装填', '左クリック(長押し連射＋視点移動)・F・R2 / R'], ['ジャンプ / しゃがむ', 'Space・A / Ctrl・B'], ['熱視界 / 煙幕 / 波動図', 'T (FLIR) · G (流体煙幕) · M (ベイズ波動図)'], ['一時停止', 'Esc / P / Start']];
   if (match?.player.df)rows.push(...(touch ? [['DF1 OUT', '画面右の専用ボタン / L2・Y・LB・RB']] : [['中央集中 / 散弾', 'Q / Y'], ['P1 ブースト', 'X / LB'], ['照準 / レンズ切替', '右クリック・C・L2 / V・RB'], ['EVR1 購入', 'B']]));
   $('controls').innerHTML = rows.map(([a, b]) => `<span>${a}</span><b>${b}</b>`).join('')
 }
@@ -471,6 +476,7 @@ function show(s) {
   accum = 0;
   if (s !== 'game' && document.pointerLockElement)document.exitPointerLock();
   if (s === 'lobby') {
+    flirActive = false;
     if (match?.ended) {
       match = null;
       tourTime = 0
@@ -479,6 +485,7 @@ function show(s) {
   }
   if (s === 'settings')drawSettings();
   if (s === 'title') {
+    flirActive = false;
     match = null;
     audio.resetMatch();
     tourTime = 0;
@@ -620,6 +627,22 @@ function drawSettings() {
     : settings.schlieren
       ? 'オン · 衝撃波Gladstone-Dale屈折レンズ＋プリズム色収差＋銃身陽炎（画面揺れ0）'
       : 'オフ · 衝撃波空間歪み・銃身陽炎なし';
+  $('aeroSwitch').setAttribute('aria-checked', String(settings.aeroVortex));
+  $('aeroHint').textContent = lite
+    ? '軽量モードで3D流体煙幕レイマーチを自動省略中（解除で復帰）'
+    : settings.aeroVortex
+      ? 'オン · 2D Navier-Stokes流体力学＋弾丸ウェイク貫通トンネル＋深度遮蔽ボリューム煙幕（G展開）'
+      : 'オフ · ボリューム煙幕レイマーチを無効化';
+  $('thermoSwitch').setAttribute('aria-checked', String(settings.thermoFlux));
+  $('thermoHint').textContent = lite
+    ? '軽量モードでGPU熱視界FLIRを自動省略中（解除で復帰）'
+    : settings.thermoFlux
+      ? 'オン · Fourier熱伝導PDE＋持続熱足跡・高温着弾痕＋全武器対応FLIR熱視界（T切替）'
+      : 'オフ · GPU FLIR熱視界を無効化';
+  $('spectraSwitch').setAttribute('aria-checked', String(settings.spectraField));
+  $('spectraHint').textContent = settings.spectraField
+    ? 'オン · 味方チーム視界崩壊Fokker-Planckベイズ確率波動図を表示（M切替 · 完全フェアプレイ）'
+    : 'オフ · ベイズ確率波動図HUDを非表示（AIのベイズ推論PDEは継続稼働）';
   $('echoSwitch').setAttribute('aria-checked', String(settings.echoPulse));
   $('echoHint').textContent = settings.echoPulse
     ? 'オン · 音速343m/s音響波動コンパス表示（ミュート時も音源方向を可視化）'
@@ -661,6 +684,16 @@ $('hdrSwitch').onclick = () => setGraphics('hdr', !settings.hdr);
 $('khdrSwitch').onclick = () => setGraphics('khdr', !settings.khdr);
 $('fluxSwitch').onclick = () => setGraphics('fluxGI', !settings.fluxGI);
 $('schlierenSwitch').onclick = () => setGraphics('schlieren', !settings.schlieren);
+$('aeroSwitch').onclick = () => setGraphics('aeroVortex', !settings.aeroVortex);
+$('thermoSwitch').onclick = () => {
+  setGraphics('thermoFlux', !settings.thermoFlux);
+  if (!settings.thermoFlux) flirActive = false;
+};
+$('spectraSwitch').onclick = () => {
+  settings.spectraField = !settings.spectraField;
+  save();
+  drawSettings();
+};
 $('echoSwitch').onclick = () => {
   settings.echoPulse = !settings.echoPulse;
   save();
@@ -706,12 +739,34 @@ function pointer() {
     lockPending = false
   }
 }
+function toggleFlir() {
+  if (!match?.player.alive) return;
+  if (settings.lightMode || !settings.thermoFlux) {
+    $('combatNotice').textContent = '軽量モード／ThermoFlux オフ時は FLIR を使用できません';
+    noticeUntil = match.time + 2.0;
+    return;
+  }
+  flirActive = !flirActive;
+  $('combatNotice').textContent = flirActive ? 'ThermoFlux FLIR 熱視界 ON · 貫煙熱痕探知' : 'FLIR 熱視界 OFF';
+  noticeUntil = match.time + 1.4;
+  hud();
+}
+function triggerSmokeVent() {
+  if (!match?.player.alive) return;
+  if (!match.deploySmokeVent(match.player)) {
+    const cd = Math.ceil(match.smokeCooldown || 0);
+    $('combatNotice').textContent = `流体煙幕リチャージ中（残り ${cd}s）`;
+    noticeUntil = match.time + 1.1;
+  }
+}
 function startMatch() {
   if (!ready || starting)return;
   starting = true;
   feed = [];
   gameKick = hurt = 0;
   noticeUntil = 0;
+  flirActive = false;
+  spectraAt = 0;
   resetMotion();
   audio.resetMatch();
   match = new Match(rules, event);
@@ -722,7 +777,7 @@ function startMatch() {
   if (settings.sound)audio.enable(true);
   audio.set(settings.volume / 100);
   $('startHint').hidden = false;
-  $('startHint').textContent = touch ? '左強傾ダッシュ · 射撃ドラッグ視点 · タンカー+100発' : 'WASD 移動 / Shift・コントローラー強前傾 ダッシュ · 補給タンカーで +100発 / 精製1.5×';
+  $('startHint').textContent = touch ? '左強傾ダッシュ · FLIR熱視界 · 流体煙幕 · タンカー+100発' : 'WASD 移動 / Shift ダッシュ · T 熱視界FLIR · G 流体煙幕 · M ベイズ波動図';
   $('combatNotice').textContent = '';
   $('feed').replaceChildren();
   starting = false;
@@ -761,6 +816,10 @@ function event(e) {
     // Smooth optical-radar sensor pod deploy rise impulse
     gunMotion.vrdSnap += 1.35;
     gunMotion.vy += .12;
+  }
+  if (e.type === 'smoke' && e.actor === p) {
+    $('combatNotice').textContent = 'AeroVortex 流体煙幕展開　·　T キー熱視界で貫煙探知';
+    noticeUntil = match.time + 2.2;
   }
   if (e.type === 'spawn' && e.actor === p) {
     recoilState.pitch = recoilState.yaw = recoilState.shotsInBurst = 0;
@@ -818,6 +877,36 @@ function hud() {
   $('reticle').classList.toggle('is-rd30', a.gun === 'RD30');
   $('reticle').classList.toggle('is-rd40', a.gun === 'RD40');
   $('spawnCounter').textContent = Math.max(0, a.respawn).toFixed(1) + ' s';
+  // Update AeroVortex wind meter, ThermoFlux FLIR status & SpectraField Bayeisan hologram!
+  const flirOn = flirActive && !settings.lightMode && settings.thermoFlux && a.alive;
+  $('flirFrame').hidden = !flirOn;
+  $('tacFlir')?.classList.toggle('is-on', flirOn);
+  $('touchFlir')?.classList.toggle('is-active', flirOn);
+  const smCd = Math.ceil(match.smokeCooldown || 0);
+  const tacSm = $('tacSmoke');
+  if (tacSm) {
+    tacSm.textContent = smCd > 0 ? `G · 煙幕 ${smCd}s` : 'G · 煙幕 READY';
+    tacSm.classList.toggle('is-ready', smCd <= 0);
+  }
+  const tSm = $('touchSmoke');
+  if (tSm) {
+    tSm.textContent = smCd > 0 ? `${smCd}s` : '煙幕';
+    tSm.classList.toggle('is-cd', smCd > 0);
+  }
+  if (match.aeroVortex && $('windVal')) {
+    const w = match.aeroVortex.sample(a.x, a.z);
+    $('windVal').textContent = `風 ${w.speed.toFixed(1)}m/s`;
+  }
+  const specBox = $('spectraBox');
+  if (specBox && match.spectraField) {
+    const showSpec = !!settings.spectraField && a.alive;
+    specBox.hidden = !showSpec;
+    if (showSpec && timeNow >= spectraAt) {
+      spectraAt = timeNow + (settings.lightMode ? .25 : .12);
+      match.spectraField.renderHologram($('spectraCanvas'), match);
+      $('spectraCert').textContent = Math.round((match.spectraField.certainty[0] || 0) * 100) + '%';
+    }
+  }
   if (match.time > 9)$('startHint').hidden = true;
   if (noticeUntil < match.time)$('combatNotice').textContent = '';
   feed = feed.filter(x => x.until > match.time).slice(-3);
@@ -839,6 +928,9 @@ function resultUI() {
     const s = match.synapse.getSummary();
     const ts = match.techStats || {ricochets: 0, ricochetHits: 0, penetrations: 0, wallbangHits: 0};
     const ep = match.echoPulse?.stats || {echoDecoys: 0, nv21RejectedDecoys: 0};
+    const av = match.aeroVortex?.stats || {wakesCarved: 0, smokeVents: 0};
+    const tf = match.thermoFlux?.stats || {footprintsStamped: 0, spyTrailsFollowed: 0};
+    const sp = match.spectraField?.stats || {peakCertaintyPct: 0};
     const [lw, lc, le] = s.lanesPct;
     synEl.hidden = false;
     synEl.innerHTML =
@@ -853,6 +945,9 @@ function resultUI() {
         `<span>跳弾 <b>${ts.ricochets}</b>${ts.ricochetHits ? ` (命中${ts.ricochetHits})` : ''}</span>` +
         `<span>貫通 <b>${ts.penetrations}</b>${ts.wallbangHits ? ` (命中${ts.wallbangHits})` : ''}</span>` +
         `<span>音響デコイ <b>${ep.echoDecoys}</b>${ep.nv21RejectedDecoys ? ` / 2.1看破${ep.nv21RejectedDecoys}` : ''}</span>` +
+        `<span>弾道煙切裂 <b>${av.wakesCarved}</b></span>` +
+        `<span>熱足跡 <b>${tf.footprintsStamped}</b></span>` +
+        `<span>ベイズ確定 <b>${sp.peakCertaintyPct}%</b></span>` +
       `</div>`;
   } else if (synEl) {
     synEl.hidden = true;
@@ -884,12 +979,19 @@ document.addEventListener('keydown', e => {
     return
   }
   if (screen !== 'game')return;
-  if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyF', 'KeyR'].includes(e.code))e.preventDefault();
+  if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyF', 'KeyR', 'KeyT', 'KeyG', 'KeyM'].includes(e.code))e.preventDefault();
   keys.add(e.code);
   if (e.code === 'KeyF')holdFireKey = true;
   if (e.repeat)return;
   if (e.code === 'KeyR')match.reload(match.player);
   if (e.code === 'KeyF')fire();
+  if (e.code === 'KeyT')toggleFlir();
+  if (e.code === 'KeyG')triggerSmokeVent();
+  if (e.code === 'KeyM') {
+    settings.spectraField = !settings.spectraField;
+    save();
+    hud();
+  }
   if (e.code === 'Space')simJump = true;
   if (e.code === 'KeyP')doPause();
   const extra = {KeyQ: 'pattern', KeyX: 'boost', KeyC: 'ads', KeyV: 'scope', KeyB: 'buy'}[e.code];
@@ -1032,11 +1134,13 @@ function releaseFireTouch(e) {
   touchFire.classList.remove('is-active')
 }
 touchFire.onpointerup = touchFire.onpointercancel = touchFire.onlostpointercapture = releaseFireTouch;
-for (const [id, action] of [['touchReload', () => match?.reload(match.player)], ['touchJump', () => {
-  simJump = true
-}], ['touchCrouch', () => {
-  setTouchCrouch(!touchCrouch);
-}]])$(id).onpointerdown = e => {
+for (const [id, action] of [
+  ['touchReload', () => match?.reload(match.player)],
+  ['touchJump', () => { simJump = true; }],
+  ['touchCrouch', () => { setTouchCrouch(!touchCrouch); }],
+  ['touchFlir', () => toggleFlir()],
+  ['touchSmoke', () => triggerSmokeVent()]
+])$(id).onpointerdown = e => {
   e.preventDefault();
   action()
 };
@@ -1183,6 +1287,7 @@ function frame(ms) {
   $('app').classList.toggle('cinematic', cinematic);
   if (cinematic)$('cinema-veil').style.opacity = 0; else renderer.render(cam, timeNow, match, {
     firstPerson: !!match?.player.alive && !match?.player.df?.ads,
+    flir: !!(flirActive && !settings.lightMode && settings.thermoFlux && match?.player.alive),
     kick: gameKick,
     shake: 0,
     hurt,
@@ -1219,6 +1324,10 @@ function frame(ms) {
   appEl.dataset.lightMode = String(!!settings.lightMode);
   appEl.dataset.fluxGi = String(!!(settings.fluxGI && !settings.lightMode));
   appEl.dataset.schlieren = String(!!(settings.schlieren && !settings.lightMode));
+  appEl.dataset.aeroVortex = String(!!(settings.aeroVortex && !settings.lightMode));
+  appEl.dataset.thermoFlux = String(!!(settings.thermoFlux && !settings.lightMode));
+  appEl.dataset.spectraField = String(!!settings.spectraField);
+  appEl.dataset.flirActive = String(!!(flirActive && !settings.lightMode && settings.thermoFlux));
   appEl.dataset.echoPulse = String(!!settings.echoPulse);
   appEl.dataset.audioEngine = SOUND_ENGIN_VERSION;
   appEl.dataset.audioMode = effectiveAudioMode();

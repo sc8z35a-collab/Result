@@ -1,4 +1,5 @@
-import {STRIDE, add, sub, scale, unit, cross, dot, multiply, lookAt, perspective, clamp} from './geometry.js';
+import {STRIDE, add, sub, scale, unit, cross, dot, multiply, invert4, lookAt, perspective, clamp} from './geometry.js';
+import {bodyCenter, torso} from './posture.js';
 import {loadTextures} from './materials.js';
 import {buildHarbor} from './harbor.js';
 import {character, viewModel, movingDetails, muzzleFlashMesh} from './models.js';
@@ -9,6 +10,8 @@ import {ShadowFlame, shadowModes} from './shadowflame.js';
 import {KHDRPipeline} from './khdr.js';
 import {FluxGI} from './fluxgi.js';
 import {SchlierenOptics} from './schlieren.js';
+import {AERO_W, AERO_H} from './aerovortex.js';
+import {THERMO_W, THERMO_H} from './thermoflux.js';
 
 const I = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
 export const sizes = {HD: [1280, 720], FHD: [1920, 1080], '2K': [2560, 1440]};
@@ -170,6 +173,22 @@ export class Renderer {
     this.actorData = new Float32Array(24);
     this.lightPos = new Float32Array(24);
     this.lightCol = new Float32Array(18);
+    this.flirActors = new Float32Array(24);
+    this.flirBlend = 0;
+
+    // Persistent zero-leak GPU streaming textures for AeroVortex 1.0 & ThermoFlux 1.0 (12 KB/frame each)
+    const makeStreamTex = (w, h) => {
+      const tx = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, tx);
+      gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, w, h);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      return tx;
+    };
+    this.aeroTex = makeStreamTex(AERO_W, AERO_H);
+    this.thermoTex = makeStreamTex(THERMO_W, THERMO_H);
   }
   ensureMirror(w, h) {
     if (this.mirrorTarget && this.mirrorTarget.w === w && this.mirrorTarget.h === h) return;
@@ -208,7 +227,7 @@ export class Renderer {
   }
   useOffscreen() {
     if (this.isLite()) return false;
-    return this.quality() >= 2 || !!this.config?.khdr || this.shadowMode() >= 2 || this.config?.schlieren !== false;
+    return this.quality() >= 2 || !!this.config?.khdr || this.shadowMode() >= 2 || this.config?.schlieren !== false || this.config?.aeroVortex !== false || this.config?.thermoFlux !== false;
   }
   settings(config) {
     const prevKHDR = !this.config?.lightMode && !!this.config?.khdr;
@@ -345,6 +364,8 @@ export class Renderer {
       khdrOn = !lite && !!cfg.khdr,
       fluxGIOn = !lite && cfg.fluxGI !== false,
       schlierenOn = !lite && cfg.schlieren !== false,
+      aeroOn = !lite && cfg.aeroVortex !== false && !!match?.aeroVortex,
+      thermoOn = !lite && cfg.thermoFlux !== false && !!match?.thermoFlux,
       sfMode = this.shadowMode(),
       offscreen = this.useOffscreen(),
       eye = cam.pos,
@@ -366,16 +387,41 @@ export class Renderer {
     if (offscreen) this.khdr.ensure(this.canvas.width, this.canvas.height);
     this.lastVP = vp;
 
-    // Advance FluxGI 1.0 dynamic light-field & SchlierenOptics 1.0 3D shockwave projector
+    // Advance FluxGI 1.0, SchlierenOptics 1.0, AeroVortex 1.0 & ThermoFlux 1.0 GPU streaming fields
     if (fluxGIOn && this.fluxGI) this.fluxGI.update(match, dt, true);
     if (schlierenOn && this.schlieren) {
       this.schlieren.step(match, dt);
       this.schlieren.project(vp, eye, cam.fov, this.aspect);
     }
+    const flirTarget = (thermoOn && view.flir) ? 1 : 0;
+    this.flirBlend = view.flirSnap ? flirTarget : this.flirBlend + (flirTarget - this.flirBlend) * (1 - Math.exp(-16 * dt));
+    if (aeroOn && this.aeroTex) {
+      match.aeroVortex._packTexture();
+      gl.bindTexture(gl.TEXTURE_2D, this.aeroTex);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, AERO_W, AERO_H, gl.RGBA, gl.UNSIGNED_BYTE, match.aeroVortex.texData);
+    }
+    if (thermoOn && this.flirBlend > 0.005 && this.thermoTex) {
+      match.thermoFlux._packTexture();
+      gl.bindTexture(gl.TEXTURE_2D, this.thermoTex);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, THERMO_W, THERMO_H, gl.RGBA, gl.UNSIGNED_BYTE, match.thermoFlux.texData);
+    }
 
-    // Pack live actor positions + crouch factor (w = 1.0 + crouch) for Shadow Flame contact shadows
+    // Pack live actor positions + crouch factor (Shadow Flame) & bio-thermal centers (ThermoFlux FLIR)
     this.actorData.fill(0);
-    if (match && !lite) match.actors.forEach((a, i) => this.actorData.set([a.x, a.y, a.z, a.alive ? 1 + (a.crouch || 0) : 0], i * 4));
+    this.flirActors.fill(0);
+    if (match && !lite) {
+      let fk = 0;
+      match.actors.forEach((a, i) => {
+        this.actorData.set([a.x, a.y, a.z, a.alive ? 1 + (a.crouch || 0) : 0], i * 4);
+        if (a.alive && !a.human && fk < 6) {
+          const [cx, cz] = bodyCenter(a);
+          const cy = a.y + 0.92 * torso(a);
+          const bioHeat = clamp(0.86 + (a.sprintAmt || 0) * 0.14 + (a.flash > 0 ? 0.25 : 0) + (a.hitFlash || 0) * 0.22, 0.5, 1.35);
+          this.flirActors.set([cx, cy, cz, bioHeat], fk * 4);
+          fk++;
+        }
+      });
+    }
     if (lite) {
       this.lightPos.fill(0);
       this.lightCol.fill(0);
@@ -542,7 +588,8 @@ export class Renderer {
       const fpVP = multiply(perspective(66 * Math.PI / 180, this.aspect, .04, 50), lookAt(eye, cam.target));
       const modelM = matrix(basis.right, basis.up, basis.back, base);
 
-      gl.bindFramebuffer(gl.FRAMEBUFFER, targetFB);
+      const vmFB = (targetFB && this.khdr.targets?.scene?.vmFb) ? this.khdr.targets.scene.vmFb : targetFB;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, vmFB);
       gl.viewport(0, 0, this.canvas.width, this.canvas.height);
       gl.clear(gl.DEPTH_BUFFER_BIT);
       gl.useProgram(p.obj);
@@ -571,8 +618,10 @@ export class Renderer {
       }
     }
 
-    // 6. Unified KHDR / Extra / Shadow Flame Pro / SchlierenOptics 1.0 Post-Process & Composite
+    // 6. Unified KHDR / Shadow Flame Pro / SchlierenOptics 1.0 / AeroVortex 1.0 / ThermoFlux 1.0 Composite
     if (offscreen && this.khdr.targets) {
+      const needInvVP = (aeroOn && (match?.aeroVortex?.stats?.totalSmoke || 0) > 0.02) || this.flirBlend > 0.005;
+      const invVP = needInvVP ? invert4(vp) : null;
       this.khdr.composite({
         w: this.canvas.width,
         h: this.canvas.height,
@@ -591,7 +640,16 @@ export class Renderer {
         shocks: this.schlieren?.uShocks || null,
         shockMeta: this.schlieren?.uShockMeta || null,
         gunHeat: schlierenOn && view.firstPerson ? (view.motion?.heat || 0) : 0,
-        aspect: this.aspect
+        aspect: this.aspect,
+        aeroOn: aeroOn && (match?.aeroVortex?.stats?.totalSmoke || 0) > 0.02,
+        aeroTex: this.aeroTex,
+        thermoTex: this.thermoTex,
+        fluxGITex: this.fluxGI?.tex || null,
+        fluxGIOn,
+        flirBlend: this.flirBlend,
+        flirActors: this.flirActors,
+        invVP,
+        camEye: eye
       });
     }
 

@@ -32,6 +32,35 @@ export class ThermalOptic {
     }
     this.seed = seed;
     const origin = cam.pos, dir = unit(sub(cam.target, origin)), right = unit(cross(dir, [0, 1, 0])), up = cross(right, dir);
+    // ThermoFlux 1.0 physical ground thermal trails (footprints, hot impact craters, hot brass) & solar contrast
+    const tf = match.thermoFlux;
+    if (tf && origin[1] > 0.1) {
+      for (let py = Math.floor(H * 0.35); py < H; py += 2) {
+        const vertical = (1 - 2 * (py + .5) / H) * halfY;
+        const ry = dir[1] + vertical * up[1];
+        if (ry >= -0.025) continue;
+        const tGround = -origin[1] / ry;
+        if (tGround < 0.8 || tGround > 68) continue;
+        for (let px = 0; px < W; px += 2) {
+          const horizontal = (2 * (px + .5) / W - 1) * halfX;
+          const rx = dir[0] + horizontal * right[0] + vertical * up[0];
+          const rz = dir[2] + horizontal * right[2] + vertical * up[2];
+          const gx = origin[0] + rx * tGround;
+          const gz = origin[2] + rz * tGround;
+          const samp = tf.sampleTemp(gx, gz);
+          if (samp.dyn < 0.06) continue;
+          const boost = Math.min(185, samp.dyn * 165);
+          for (let oy = 0; oy < 2 && py + oy < H; oy++) {
+            for (let ox = 0; ox < 2 && px + ox < W; ox++) {
+              const pIdx = ((py + oy) * W + (px + ox)) * 4;
+              rgb[pIdx] = Math.min(255, rgb[pIdx] + boost * 1.02);
+              rgb[pIdx + 1] = Math.min(255, rgb[pIdx + 1] + boost * 0.96);
+              rgb[pIdx + 2] = Math.min(255, rgb[pIdx + 2] + boost * 0.88);
+            }
+          }
+        }
+      }
+    }
     const zbuf = new Float32Array(W * H);
     zbuf.fill(130);
     for (const a of match.actors) {
