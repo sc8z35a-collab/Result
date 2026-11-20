@@ -12,6 +12,7 @@ import {ThermoFlux} from './thermoflux.js';
 import {SpectraField} from './spectrafield.js';
 import {ResonanceCore} from './resonance.js';
 import {ChronoTrace} from './chronotrace.js';
+import {FermatCore} from './fermat.js';
 const baseSpeed = 360, baseInterval = .24;
 export const weapons = {
   'SW T': {capacity: 10, damage: 9, rate: 100, velocity: 100, speed: baseSpeed, interval: baseInterval, burst: 1, reload: 1.4},
@@ -81,6 +82,7 @@ export class Match {
     this.spectraField = new SpectraField();
     this.resonance = new ResonanceCore();
     this.chronoTrace = new ChronoTrace();
+    this.fermat = new FermatCore();
     this.smokeCooldown = 0;
     this.techStats = {ricochets: 0, ricochetHits: 0, penetrations: 0, wallbangHits: 0};
     const counts = modes[config.mode] || modes['3v3'];
@@ -253,6 +255,7 @@ export class Match {
         penetrations: 0,
         ricocheted: false,
         penetrated: false,
+        fermatLocked: this.fermat.isShotFermatAligned(a, dir) || !!a._fermatAiShot,
         damage: w.damage,
         speed: w.speed,
         life: 1.35,
@@ -793,12 +796,18 @@ export class Match {
         });
       }
     }
-    // Feed newly arrived player acoustic waves into Team 0's fair-play Bayesian wavefunction!
+    // Feed newly arrived player acoustic waves into Team 0's fair-play Bayesian wavefunction & FermatCore!
     if (this.echoPulse.playerWaves.length) {
       for (const w of this.echoPulse.playerWaves) {
         if (!w.specFed && this.time >= w.arriveAt) {
           w.specFed = true;
           this.spectraField.observe(0, w.pos[0], w.pos[2], {sigma: w.occluded ? 7.2 : 4.6, weight: 0.58});
+          if (w.actorId >= 0) {
+            const srcActor = this.actors[w.actorId];
+            if (srcActor?.alive && srcActor.team === 1) {
+              this.fermat.recordIntel(0, srcActor, this.time, 'echo', [w.pos[0], Math.max(1.15, w.pos[1]), w.pos[2]]);
+            }
+          }
         }
       }
     }

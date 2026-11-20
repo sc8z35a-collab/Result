@@ -88,6 +88,7 @@ export class EchoPulseField {
         if (team === listener.team && kind !== 'tanker') continue;
         this.playerWaves.push({
           kind,
+          actorId: actor?.id ?? -1,
           pos: perceivedPos,
           arriveAt: tNow + arrivalDelay,
           expireAt: tNow + arrivalDelay + (kind === 'tanker' ? 1.55 : kind === 'fire' ? 0.92 : 0.72),

@@ -31,6 +31,7 @@ import {ThermoFlux,THERMOFLUX_VERSION,THERMO_COMPOSITE_GLSL} from '../dist/js/th
 import {SpectraField,SPECTRAFIELD_VERSION,worldToSpecCell} from '../dist/js/spectrafield.js';
 import {ResonanceCore,RESONANCE_VERSION,STEEL_WAVE_SPEED,RESONANCE_VS_GLSL,RESONANCE_FS_GLSL} from '../dist/js/resonance.js';
 import {ChronoTrace,CHRONOTRACE_VERSION} from '../dist/js/chronotrace.js';
+import {FermatCore,FERMAT_VERSION,STEEL_MANIFOLD,solveTwoBounce,traceForwardPreview} from '../dist/js/fermat.js';
 const h=1/360;
 function duel(loadout='DF1 OUT',limit='unlimited',multiplier=2,events=[]) {
   return new Match({mode:'1v1', limit, multiplier,loadout},event=>events.push(event));
@@ -833,6 +834,87 @@ for (const [mode,counts] of Object.entries(modes)) {
  }
  console.log('ChronoTrace 1.0 OK:',{traces:ct.traces.length,distM:+tr.distM.toFixed(1),flightMs:tr.flightMs,angleDeg:tr.ricochets[0].angleDeg,holoVerts:chronoFx.count-baseFx.count});
 }
-console.log('360Hz sim, weapon specs (DF1 OUT 95-mag 2x rate, MS10, RD20/30/40), FluxGI 1.0, SchlierenOptics 1.0, BallisticCore-X, EchoPulse 1.0, NV-Synapse 1.0, AeroVortex 1.0, ThermoFlux 1.0, SpectraField 1.0, ResonanceCore 1.0, ChronoTrace 1.0, Lightweight Mode LOD, 16-joint sculpted rig, KHDR, Shadow Flame 1.0 Flash/Pro, Sound Engin 1.0, Human-Realistic Aiming, NV2.1 Spy Engine, and all matches passed.');
+{
+ // ===== 11. FermatCore 1.0: Closed-Form Method-of-Images 1 & 2-Bounce Bank-Shots, Zero-Wallhack Gate & Mobile CPU Budget =====
+ assert.equal(FERMAT_VERSION,'FermatCore 1.0');
+ assert(STEEL_MANIFOLD.faces.length>=90,'Steel mirror manifold must index all ground-tier corrugated container faces');
+ // 11A. 1-Bounce Closed-Form Method of Images -> fire REAL 360Hz MS10 shot along solved Fermat axis and score real corner bank-shot hit!
+ {
+  const m=duel('MS10','unlimited',2,[]);
+  const p=m.player, e=m.actors[1];
+  // Shooter at (5.5, 82), enemy at (5.5, 70) beside red NORTH container [9,77] (west face x=7.5)
+  Object.assign(p,{x:5.5,y:0,z:82.0,vx:0,vy:0,vz:0,alive:true});
+  Object.assign(e,{x:5.5,y:0,z:70.0,vx:0,vy:0,vz:0,alive:true,hp:100,shield:10});
+  const sol=m.fermat.solveBankShot(eyeOf(p),targetPoint(e),null,'MS10',weapons.MS10.speed,false);
+  assert(sol&&sol.bounces===1&&sol.angleDeg>5&&sol.angleDeg<24,`FermatCore must solve 1-bounce bank shot off [9,77] (got ${JSON.stringify(sol)})`);
+  p.yaw=Math.atan2(sol.aimDir[0],-sol.aimDir[2]);
+  p.pitch=Math.atan2(sol.aimDir[1],Math.hypot(sol.aimDir[0],sol.aimDir[2]));
+  m.fermat.playerBank=sol;
+  assert(m.trigger(p),'Player must fire Fermat-solved 1-bounce shot');
+  assert(m.shots[0].fermatLocked===true,'Shot fired along solved Fermat axis must engage precision fermatLocked stabilization');
+  for(let i=0;i<90&&m.shots.length;i++){
+   m.time+=h;
+   let w=0;
+   for(const s of m.shots) if(m.projectile(s,h)) m.shots[w++]=s;
+   m.shots.length=w;
+  }
+  assert(m.techStats.ricochets>=1&&m.techStats.ricochetHits>=1&&(e.hp+e.shield)<110,`Fermat-solved 1-bounce shot must physically ricochet & hit target (rics=${m.techStats.ricochets}, hits=${m.techStats.ricochetHits})`);
+ }
+ // 11B. 2-Bounce Double Method of Images -> physically bounce TWICE across opposing steel container canyon walls and hit target!
+ {
+  const m=duel('MS10','unlimited',2,[]);
+  const p=m.player, e=m.actors[1];
+  // Real Harbor Range opposing steel container corridor between [-12,78] east face & [-5,71] west face (15° / 15° double bank!)
+  let dblSol=null, srcP=[-10,1.5,83], dstP=[-10,1.3,63];
+  for(let i=0;i<STEEL_MANIFOLD.faces.length&&!dblSol;i++){
+   const f1=STEEL_MANIFOLD.faces[i];
+   for(const j of STEEL_MANIFOLD.neighbors[i]){
+    const s2=solveTwoBounce(srcP,dstP,f1,STEEL_MANIFOLD.faces[j],weapons.MS10.speed);
+    if(s2){dblSol=s2;break;}
+   }
+  }
+  assert(dblSol&&dblSol.bounces===2&&dblSol.bounce1&&dblSol.bounce2,'Harbor Range container canyons must admit closed-form 2-bounce Double Method-of-Images solutions');
+  // Fire REAL 360Hz MS10 shot along 2-bounce Fermat aimDir and prove it physically executes >=2 steel ricochets and hits target!
+  Object.assign(p,{x:srcP[0],y:0,z:srcP[2],vx:0,vy:0,vz:0,alive:true,crouch:0});
+  Object.assign(e,{x:dstP[0],y:0,z:dstP[2],vx:0,vy:0,vz:0,alive:true,hp:100,shield:10,crouch:0});
+  // Re-solve from exact eyeOf(p) to exact targetPoint(e) using the discovered opposing steel pair!
+  const exact2=solveTwoBounce(eyeOf(p),targetPoint(e),STEEL_MANIFOLD.faces[dblSol.faceId1],STEEL_MANIFOLD.faces[dblSol.faceId2],weapons.MS10.speed);
+  assert(exact2&&exact2.bounces===2,'Exact eye-to-torso 2-bounce Fermat path must be valid');
+  p.yaw=Math.atan2(exact2.aimDir[0],-exact2.aimDir[2]);
+  p.pitch=Math.atan2(exact2.aimDir[1],Math.hypot(exact2.aimDir[0],exact2.aimDir[2]));
+  m.fermat.playerBank=exact2;
+  assert(m.trigger(p),'Player must fire 2-bounce Fermat bank shot');
+  for(let i=0;i<180&&m.shots.length;i++){
+   m.time+=h;
+   let w=0;
+   for(const s of m.shots) if(m.projectile(s,h)) m.shots[w++]=s;
+   m.shots.length=w;
+  }
+  assert(m.techStats.ricochets>=2&&m.techStats.ricochetHits>=1&&(e.hp+e.shield)<110,`Fermat-solved 2-bounce shot must physically bounce TWICE off steel containers and hit target (rics=${m.techStats.ricochets}, hits=${m.techStats.ricochetHits}, hp=${e.hp}+${e.shield})`);
+ }
+ // 11C. 100% Fair-Play Zero-Wallhack Gate + Live Crosshair Grazing Preview + Smartphone CPU Budget (< 0.25 ms!)
+ {
+  const m=duel('MS10','unlimited',2,[]);
+  const p=m.player, e=m.actors[1];
+  // Hide enemy cleanly behind [-7.5, 46] steel container (zero LOS, zero intel!)
+  Object.assign(p,{x:-4.0,y:0,z:52.0,yaw:0,pitch:0,alive:true,vx:0,vz:0});
+  Object.assign(e,{x:-10.2,y:0,z:46.0,yaw:Math.PI,pitch:0,alive:true,vx:0,vz:0,seismicRattle:0});
+  assert(obstruction(eyeOf(p),targetPoint(e))<0.99,'Enemy must be occluded behind steel container');
+  m.time=5.0;
+  const blind=m.fermat.updatePlayerOracle(m,m.time,true);
+  assert.equal(blind.bank,null,'FermatCore MUST NOT reveal bank-shots for unseen/unheard occluded enemies (zero wallhack!)');
+  // Forward crosshair grazing preview on steel wall works legally at all times
+  const grazeDir=unit([7.5-5.5, 0, 76.0-82.0]);
+  const fwdPrev=traceForwardPreview([5.5,1.5,82.0],grazeDir,'MS10');
+  assert(fwdPrev&&fwdPrev.kind==='ricochet'&&fwdPrev.angle1>5&&fwdPrev.angle1<=24,'Live forward crosshair preview must detect steel grazing ricochet');
+  // Smartphone CPU micro-benchmark: 200 full Method-of-Images solves must average < 250 us!
+  const tStart=performance.now();
+  for(let k=0;k<200;k++) m.fermat.solveBankShot([5.5,1.5,82.0],[5.5,1.3,70.0],null,'MS10',648,true);
+  const avgUs=((performance.now()-tStart)/200)*1000;
+  assert(avgUs<250,`FermatCore mobile CPU budget exceeded (${avgUs.toFixed(1)} us > 250 us)`);
+  console.log('FermatCore 1.0 OK:',{faces:STEEL_MANIFOLD.faces.length,oneBounceHit:true,twoBounceHit:true,zeroWallhack:true,avgSolveUs:+avgUs.toFixed(1)});
+ }
+}
+console.log('360Hz sim, weapon specs (DF1 OUT 95-mag 2x rate, MS10, RD20/30/40), FluxGI 1.0, SchlierenOptics 1.0, BallisticCore-X, EchoPulse 1.0, NV-Synapse 1.0, AeroVortex 1.0, ThermoFlux 1.0, SpectraField 1.0, ResonanceCore 1.0, ChronoTrace 1.0, FermatCore 1.0, Lightweight Mode LOD, 16-joint sculpted rig, KHDR, Shadow Flame 1.0 Flash/Pro, Sound Engin 1.0, Human-Realistic Aiming, NV2.1 Spy Engine, and all matches passed.');
 
 

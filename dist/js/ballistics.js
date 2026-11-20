@@ -62,7 +62,7 @@ export function solveBallisticImpact(shot, hit, rng = null) {
     const rx = dir[0] - 2 * dn * n[0];
     const ry = dir[1] - 2 * dn * n[1];
     const rz = dir[2] - 2 * dn * n[2];
-    const jitter = mat === 'steel' ? 0.032 : 0.048;
+    const jitter = (mat === 'steel' ? 0.032 : 0.048) * (shot.fermatLocked ? 0.20 : 1.0);
     const j1 = rng ? (rng() - 0.5) * 2 * jitter : 0;
     const j2 = rng ? (rng() - 0.5) * 2 * jitter * 0.55 : 0;
     const j3 = rng ? (rng() - 0.5) * 2 * jitter : 0;

@@ -10,7 +10,7 @@ const $ = s => document.getElementById(s),
 // Optically exact +2/3 wider view width relative to 24.7° / 13.0° FOV:
 // 2 * atan((5/3) * tan(24.7°/2)) = 40.1°, 2 * atan((5/3) * tan(13.0°/2)) = 21.5°.
 const BASE_FOV = 40.1, ADS_FOV = 21.5;
-const defaults = {lightMode: false, resolution: 'HD', graphics: 'high', rate: 360, rateV2: true, hdr: true, khdr: true, shadowMode: 'pro', shadows: true, fluxGI: true, schlieren: true, aeroVortex: true, thermoFlux: true, resonance: true, chronoTrace: true, spectraField: true, echoPulse: true, audioMode: 'hrtf', sensitivity: 1, volume: 55, sound: false};
+const defaults = {lightMode: false, resolution: 'HD', graphics: 'high', rate: 360, rateV2: true, hdr: true, khdr: true, shadowMode: 'pro', shadows: true, fluxGI: true, schlieren: true, aeroVortex: true, thermoFlux: true, resonance: true, chronoTrace: true, fermatCore: true, spectraField: true, echoPulse: true, audioMode: 'hrtf', sensitivity: 1, volume: 55, sound: false};
 const graphicsHints = {
   standard: '軽量描画 · 基本ライト · 標準反射',
   high: '高精細質感 · 動的ライト · 標準水面反射',
@@ -74,6 +74,7 @@ settings.aeroVortex = settings.aeroVortex !== false;
 settings.thermoFlux = settings.thermoFlux !== false;
 settings.resonance = settings.resonance !== false;
 settings.chronoTrace = settings.chronoTrace !== false;
+settings.fermatCore = settings.fermatCore !== false;
 settings.spectraField = settings.spectraField !== false;
 settings.echoPulse = settings.echoPulse !== false;
 if (![0, 60, 120, 360].includes(settings.rate))settings.rate = 360;
@@ -654,6 +655,10 @@ function drawSettings() {
   $('chronoHint').textContent = settings.chronoTrace
     ? 'オン · 360Hz 4D空間弾道レコーダー＋被撃破3秒3Dホログラム再現＋現場弾道スキャナー（L切替）'
     : 'オフ · 3D空間弾道ホログラム表示を無効化';
+  $('fermatSwitch').setAttribute('aria-checked', String(settings.fermatCore));
+  $('fermatHint').textContent = settings.fermatCore
+    ? 'オン · 閉形式鏡像法1〜2段跳弾ソルバー（GPU負荷0 · <0.05ms · 軽量モード常時動作 · K切替）'
+    : 'オフ · フェルマー跳弾光学マーカーを非表示（AIの跳弾解析は継続）';
   $('spectraSwitch').setAttribute('aria-checked', String(settings.spectraField));
   $('spectraHint').textContent = settings.spectraField
     ? 'オン · 味方チーム視界崩壊Fokker-Planckベイズ確率波動図を表示（M切替 · 完全フェアプレイ）'
@@ -708,6 +713,11 @@ $('resonanceSwitch').onclick = () => setGraphics('resonance', !settings.resonanc
 $('chronoSwitch').onclick = () => {
   setGraphics('chronoTrace', !settings.chronoTrace);
   if (!settings.chronoTrace) chronoActive = false;
+};
+$('fermatSwitch').onclick = () => {
+  settings.fermatCore = !settings.fermatCore;
+  save();
+  drawSettings();
 };
 $('spectraSwitch').onclick = () => {
   settings.spectraField = !settings.spectraField;
@@ -999,6 +1009,7 @@ function resultUI() {
     const sp = match.spectraField?.stats || {peakCertaintyPct: 0};
     const rc = match.resonance?.stats || {strikes: 0, seismicKnocks: 0};
     const ct = match.chronoTrace?.stats || {recorded: 0, longestKillM: 0};
+    const fc = match.fermat?.stats || {solutionsFound: 0, doubleBankFound: 0, aiBankShots: 0};
     const [lw, lc, le] = s.lanesPct;
     synEl.hidden = false;
     synEl.innerHTML =
@@ -1017,6 +1028,7 @@ function resultUI() {
         `<span>熱足跡 <b>${tf.footprintsStamped}</b></span>` +
         `<span>構造ノック <b>${rc.seismicKnocks}</b></span>` +
         `<span>最長キル <b>${ct.longestKillM > 0 ? ct.longestKillM.toFixed(1) + 'm' : '—'}</b></span>` +
+        `<span>鏡像跳弾解 <b>${fc.solutionsFound}</b>${fc.aiBankShots ? ` / AI跳弾${fc.aiBankShots}` : ''}</span>` +
         `<span>ベイズ確定 <b>${sp.peakCertaintyPct}%</b></span>` +
       `</div>`;
   } else if (synEl) {
@@ -1049,7 +1061,7 @@ document.addEventListener('keydown', e => {
     return
   }
   if (screen !== 'game')return;
-  if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyF', 'KeyR', 'KeyT', 'KeyG', 'KeyL', 'KeyM'].includes(e.code))e.preventDefault();
+  if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyF', 'KeyR', 'KeyT', 'KeyG', 'KeyL', 'KeyK', 'KeyM'].includes(e.code))e.preventDefault();
   keys.add(e.code);
   if (e.code === 'KeyF')holdFireKey = true;
   if (e.repeat)return;
@@ -1058,6 +1070,12 @@ document.addEventListener('keydown', e => {
   if (e.code === 'KeyT')toggleFlir();
   if (e.code === 'KeyG')triggerSmokeVent();
   if (e.code === 'KeyL')toggleChrono();
+  if (e.code === 'KeyK') {
+    settings.fermatCore = !settings.fermatCore;
+    save();
+    $('combatNotice').textContent = settings.fermatCore ? 'FermatCore 1.0 鏡像跳弾解析 ON（GPU負荷 0）' : 'FermatCore 1.0 マーカー OFF';
+    noticeUntil = match.time + 1.4;
+  }
   if (e.code === 'KeyM') {
     settings.spectraField = !settings.spectraField;
     save();
@@ -1387,7 +1405,7 @@ function frame(ms) {
       rdBarrelPhase: gunMotion.rdBarrelPhase
     }
   });
-  equipment.draw(renderer, match, cam, timeNow, screen === 'game', !!settings.lightMode, !!settings.echoPulse);
+  equipment.draw(renderer, match, cam, timeNow, screen === 'game', !!settings.lightMode, !!settings.echoPulse, !!settings.fermatCore);
   if (resetView) {
     resetView = false;
     $('loading').hidden = true
@@ -1402,6 +1420,7 @@ function frame(ms) {
   appEl.dataset.resonance = String(!!(settings.resonance && !settings.lightMode));
   appEl.dataset.chronoTrace = String(!!settings.chronoTrace);
   appEl.dataset.chronoActive = String(!!(chronoActive && settings.chronoTrace));
+  appEl.dataset.fermatCore = String(!!settings.fermatCore);
   appEl.dataset.spectraField = String(!!settings.spectraField);
   appEl.dataset.flirActive = String(!!(flirActive && !settings.lightMode && settings.thermoFlux));
   appEl.dataset.echoPulse = String(!!settings.echoPulse);

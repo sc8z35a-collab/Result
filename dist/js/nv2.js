@@ -1622,20 +1622,35 @@ export class NV2 extends NV13Pro {
       const wpn = this.match.weapon(a);
       const band = WEAPON_BAND[a.gun] || WEAPON_BAND['SW T'];
       let suppressMode = false;
+      let fermatBank = null;
 
       if (!(b.seen && b.target)) {
-        if (!spyInfiltrating && b.lastSeenTargetPos && t - b.lastSeenTargetAt > 0.12 && t - b.lastSeenTargetAt < 0.78
+        // World-First NV2.1 × FermatCore 1.0: solve closed-form 1-bounce steel bank-shot around blind cover (strictly fair-play visual sighting!)
+        if (isSpy && !spyInfiltrating && b.lastSeenTargetPos && t - b.lastSeenTargetAt > 0.14 && t - b.lastSeenTargetAt < 2.1
+          && a.mag >= wpn.capacity * 0.38 && a.reload <= 0 && b.state !== '戦術退避' && b.state !== '態勢立て直し' && this.match.fermat) {
+          if (t >= (b.fermatAt || 0)) {
+            b.fermatAt = t + 0.25;
+            b.fermatBank = this.match.fermat.solveBankShot(eyeOf(a), b.lastSeenTargetPos, null, a.gun, wpn.speed, false);
+          }
+          if (b.fermatBank && b.fermatBank.bounces === 1) {
+            fermatBank = b.fermatBank;
+            suppressMode = true;
+          }
+        }
+        if (!fermatBank && !spyInfiltrating && b.lastSeenTargetPos && t - b.lastSeenTargetAt > 0.12 && t - b.lastSeenTargetAt < 0.78
           && (b.role === 'ANCHOR' || cog.playbook === 'PINCER_DOUBLE_FLANK') && a.mag >= wpn.capacity * 0.36 && a.reload <= 0
           && b.state !== '戦術退避' && b.state !== '態勢立て直し') {
           suppressMode = true;
-        } else if (isSpy && b.spy.prediction && dist2(a.x, a.z, b.spy.prediction.predX, b.spy.prediction.predZ) < 28) {
+        } else if (!fermatBank && isSpy && b.spy.prediction && dist2(a.x, a.z, b.spy.prediction.predX, b.spy.prediction.predZ) < 28) {
           // Spy pre-aims toward visually predicted target corner when closing in for backstab
           fallbackYaw = Math.atan2(b.spy.prediction.predX - a.x, -(b.spy.prediction.predZ - a.z));
-        } else if (b.state === '予測待ち伏せ' && t < b.ambushUntil) {
+        } else if (!fermatBank && b.state === '予測待ち伏せ' && t < b.ambushUntil) {
           fallbackYaw = b.ambushYaw;
-        } else if (b.lastPos) {
+        } else if (!fermatBank && b.lastPos) {
           fallbackYaw = Math.atan2(b.lastPos[0] - a.x, -(b.lastPos[1] - a.z));
         }
+      } else {
+        b.fermatBank = null;
       }
 
       const backstabBonus = !!(isSpy && b.seen && b.target
@@ -1646,7 +1661,7 @@ export class NV2 extends NV13Pro {
         wpn,
         fallbackYaw,
         fallbackPitch: 0,
-        suppressPos: suppressMode ? b.lastSeenTargetPos : null,
+        suppressPos: fermatBank ? fermatBank.bounce1 : (suppressMode ? b.lastSeenTargetPos : null),
         counterStrafing,
         dodging: dodgingShot,
         backstabBonus
@@ -1661,7 +1676,7 @@ export class NV2 extends NV13Pro {
       const canShootSeen = b.seen && b.target && b.peekPhase !== 'bait' && !(isSpy && b.spy.holdFire);
       if ((canShootSeen || suppressMode) && aimRes.readyToFire && a.mag > 0 && a.reload <= 0 && a.cooldown <= 0 && !a.burstLeft && t >= b.burstPauseUntil) {
         const d = aimRes.dist;
-        const tol = (suppressMode ? 0.14 : (isSpy ? 0.048 : 0.060) + (d < 14 ? 0.034 : 0)) * (1 + b.spread * 0.20);
+        const tol = (fermatBank ? 0.055 : suppressMode ? 0.14 : (isSpy ? 0.048 : 0.060) + (d < 14 ? 0.034 : 0)) * (1 + b.spread * 0.20);
         const maxEngageD = Math.max(72, band.max * 1.42);
         if (aimRes.alignPerceived < tol && d < maxEngageD) {
           // Trigger short counter-strafe micro-stop for steadier mid-long range shots
@@ -1670,12 +1685,16 @@ export class NV2 extends NV13Pro {
             this.metrics.counterStrafes++;
           }
           const saveY = a.yaw, saveP = a.pitch;
-          const ms = aimRes.microSpread * (counterStrafing ? 0.65 : 1.0);
+          const ms = aimRes.microSpread * (fermatBank ? 0.38 : counterStrafing ? 0.65 : 1.0);
           a.yaw += (b.rng() - 0.5) * ms;
           a.pitch = clamp(a.pitch + (b.rng() - 0.5) * ms * 0.65, -1.2, 1.2);
+          if (fermatBank) a._fermatAiShot = true;
           if (this.match.trigger(a)) {
             b.burstCount++;
-            if (suppressMode) {
+            if (fermatBank) {
+              if (this.match.fermat) this.match.fermat.stats.aiBankShots++;
+              b.burstPauseUntil = t + 0.42;
+            } else if (suppressMode) {
               this.metrics.suppress++;
               b.burstPauseUntil = t + 0.30;
             } else if (a.gun === 'MS10' && d > 24 && b.burstCount >= (isSpy ? 5 : 4)) {
@@ -1686,6 +1705,7 @@ export class NV2 extends NV13Pro {
               b.burstPauseUntil = t + (isSpy ? 0.11 : 0.16);
             }
           }
+          a._fermatAiShot = false;
           a.yaw = saveY;
           a.pitch = saveP;
         }

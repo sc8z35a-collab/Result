@@ -1774,6 +1774,180 @@ body.touch #touchTac button {
   font-size: 9px;
 }
 
+/* ==========================================================================
+   FermatCore 1.0 — Zero-GPU-Pass Smartphone-Safe Method-of-Images Vector Optics
+   ========================================================================== */
+.badge-fermat {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font: 700 10px/1.2 var(--mono);
+  letter-spacing: .06em;
+  vertical-align: middle;
+  color: #fff6cf;
+  background: linear-gradient(90deg, #4f3b10, #164b42);
+  border: 1px solid #ffe06688;
+}
+.fermat-toggle[aria-checked=true] {
+  background: linear-gradient(90deg, #f5c946, #3ee8b8);
+  border-color: #fff6c2;
+  box-shadow: 0 0 16px #f5cb4a50;
+}
+#fermatOverlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 1;
+  overflow: visible;
+  filter: drop-shadow(0 0 3px #071217d8);
+}
+#fermatOverlay line {
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+#fermatLeg1 {
+  stroke: #ffe68ac8;
+  stroke-width: 1.55px;
+  stroke-dasharray: 4 3;
+}
+#fermatLeg2 {
+  stroke: #ffd44ef2;
+  stroke-width: 2.0px;
+  stroke-dasharray: 7 4;
+}
+#fermatLeg3 {
+  stroke: #5ef8dbe8;
+  stroke-width: 1.75px;
+  stroke-dasharray: 5 4;
+}
+#fermatOverlay.is-locked #fermatLeg1 {
+  stroke: #fff7bce8;
+  stroke-width: 1.7px;
+  stroke-dasharray: none;
+}
+#fermatOverlay.is-locked #fermatLeg2 {
+  stroke: #ffeb6eff;
+  stroke-width: 2.4px;
+  stroke-dasharray: none;
+}
+#fermatOverlay.is-locked #fermatLeg3 {
+  stroke: #6affdfee;
+  stroke-width: 2.0px;
+  stroke-dasharray: 6 3;
+}
+#fermatOverlay.is-preview #fermatLeg2 {
+  stroke: #6ee8ffd8;
+  stroke-width: 1.65px;
+  stroke-dasharray: 6 4;
+}
+#fermatOverlay.is-preview #fermatLeg3 {
+  stroke: #ffd866d0;
+  stroke-width: 1.5px;
+  stroke-dasharray: 4 4;
+}
+#fermatOverlay.is-pen #fermatLeg2,
+#fermatOverlay.is-pen #fermatLeg3 {
+  stroke: #ff8e52e0;
+  stroke-width: 1.7px;
+  stroke-dasharray: 5 3;
+}
+#fermatNode {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 2;
+  will-change: left, top;
+}
+#fermatNode i {
+  display: block;
+  width: 16px;
+  height: 16px;
+  border: 1.8px solid #ffd854;
+  transform: rotate(45deg);
+  box-shadow: 0 0 8px #ffc83880, inset 0 0 4px #ffe68844;
+  background: #ffd85418;
+}
+#fermatNode.is-locked i {
+  width: 20px;
+  height: 20px;
+  border-color: #7affdf;
+  background: #5ef5cc2e;
+  box-shadow: 0 0 12px #4ef2ccbb, 0 0 4px #fff8c8;
+}
+#fermatNode.is-preview i {
+  width: 11px;
+  height: 11px;
+  border-color: #72ecffd0;
+  background: #5ee6ff18;
+  box-shadow: 0 0 6px #58deff66;
+}
+#fermatNode.is-pen i {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  transform: none;
+  border-color: #ff9152e0;
+  background: #ff7c3c22;
+  box-shadow: 0 0 6px #ff783470;
+}
+#fermatTag {
+  position: absolute;
+  left: 50%;
+  top: calc(100% + 7px);
+  transform: translateX(-50%);
+  padding: 1.5px 6px;
+  border-radius: 3px;
+  font: 800 9px/1.2 var(--mono);
+  letter-spacing: .06em;
+  color: #fff2be;
+  background: #1b180cd8;
+  border: 1px solid #ffd8548c;
+  white-space: nowrap;
+}
+#fermatNode.is-locked #fermatTag {
+  color: #c6fff0;
+  background: #092622e0;
+  border-color: #64f8d6aa;
+}
+#fermatNode.is-preview #fermatTag {
+  color: #d2f8ff;
+  background: #0b2029cc;
+  border-color: #6ce4ff78;
+  font-size: 8.5px;
+}
+#fermatNode.is-pen #fermatTag {
+  color: #ffe0cc;
+  background: #28140ccc;
+  border-color: #ff905288;
+  font-size: 8.5px;
+}
+#fermatNode2 {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  transform: translate(-50%, -50%) rotate(45deg);
+  border: 1.8px solid #5ef5d8;
+  background: #5ef5d82c;
+  box-shadow: 0 0 8px #4ef0d099;
+  pointer-events: none;
+  z-index: 2;
+}
+body.light-mode #fermatOverlay {
+  filter: none !important;
+}
+body.light-mode #fermatNode i,
+body.light-mode #fermatNode2 {
+  box-shadow: none !important;
+}
+body.touch #fermatTag {
+  font-size: 8px;
+  padding: 1px 4px;
+}
+
+
 
 
 
