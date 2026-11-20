@@ -5,7 +5,7 @@ import {character, viewModel, movingDetails, muzzleFlashMesh} from './models.js'
 import {weapons, npcWeapons} from './match.js';
 import {effectiveSize} from './renderer.js';
 import {layers, unit, sub, cross, add, scale, dot, clamp} from './geometry.js';
-import {imageFrom, labelNames, makeLabel} from './materials.js';
+import {loadAtlas, loadScenery, resetMaterialLayers, labelNames, makeLabel} from './materials.js';
 const STR = 13, SUN = unit([-.66, .28, -.70]);
 const pack = (r, g, b) => ((255 << 24) | (b << 16) | (g << 8) | r) >>> 0;
 function canvas(w, h) {
@@ -105,7 +105,8 @@ export class SoftwareRenderer {
     this.tones = {sdr: lut('sdr'), hdr: lut('hdr'), khdr: lut('khdr')}
   }
   async init() {
-    const [manifest, img, sky, waves] = await Promise.all([fetch('./assets/materials.json').then(r => r.json()), imageFrom('./assets/materials.webp'), imageFrom('./assets/marine-sky.webp'), imageFrom('./assets/waves.webp')]);
+    const [{manifest, sheet}, sky, waves] = await Promise.all([loadAtlas(), loadScenery(true), loadScenery(false)]);
+    resetMaterialLayers();
     const s = manifest.tile, c = canvas(s, s), ctx = c.getContext('2d', {willReadFrequently: true});
     this.mats = [];
     ctx.fillStyle = 'white';
@@ -113,7 +114,7 @@ export class SoftwareRenderer {
     this.mats.push(tex(c));
     manifest.layers.forEach((a, i) => {
       layers[a.name] = i + 1;
-      ctx.drawImage(img, i % manifest.columns * s, Math.floor(i / manifest.columns) * s, s, s, 0, 0, s, s);
+      ctx.drawImage(sheet, i % manifest.columns * s, Math.floor(i / manifest.columns) * s, s, s, 0, 0, s, s);
       this.mats.push(tex(c))
     });
     for (const a of labelNames) {

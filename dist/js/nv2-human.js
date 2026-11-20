@@ -239,7 +239,8 @@ export class HumanMind {
     this.suppressionCount++;
   }
 
-  onDamaged(actor, attacker, power, t, metrics) {
+  onDamaged(actor, attacker, power, t, metrics, impactDir) {
+    const quietFor = t - this.lastCombatAt;
     this.lastCombatAt = t;
     this.lastDamageBurst += power;
     const res = this.persona.stressResilience * (this.isNv21 ? 1.25 : 1.0);
@@ -254,11 +255,12 @@ export class HumanMind {
     }
 
     // Check if ambushed from outside front ±52 deg attention cone -> HUMAN STARTLE REFLEX!
-    if (attacker) {
-      const dx = attacker.x - actor.x, dz = attacker.z - actor.z;
+    if (attacker || impactDir) {
+      const dx = attacker ? attacker.x - actor.x : -impactDir[0];
+      const dz = attacker ? attacker.z - actor.z : -impactDir[2];
       const threatYaw = Math.atan2(dx, -dz);
       const angOff = Math.abs(angleDiff(threatYaw, actor.yaw));
-      const surprise = angOff > 0.90 || (t - this.lastCombatAt > 3.2 && angOff > 0.45);
+      const surprise = angOff > 0.90 || (quietFor > 3.2 && angOff > 0.45);
       if (surprise && t > this.startleUntil + 0.65) {
         const freezeDur = (this.isNv21 ? 0.085 : 0.125) + this.rng() * (this.isNv21 ? 0.045 : 0.080);
         this.startle = clamp(0.62 + (angOff / Math.PI) * 0.38, 0.5, 1.0);

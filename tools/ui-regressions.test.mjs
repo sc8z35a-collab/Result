@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
+import { setTimeout as delay } from 'node:timers/promises';
 import { resolve } from 'node:path';
 import { test } from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { JSDOM } from 'jsdom';
-import { createCanvas } from '@napi-rs/canvas';
+import { createCanvas, Image, Path2D } from '@napi-rs/canvas';
 
 const dist = process.env.RESULT_QA_SOURCE
   ? pathToFileURL(resolve(process.env.RESULT_QA_SOURCE, 'dist') + '/')
@@ -17,6 +19,10 @@ const {SoftwareRenderer} = await load('software');
 const {KHDRPipeline} = await load('khdr');
 const {PilotEquipment} = await load('df-hud');
 const {HDRDisplay} = await load('hdr');
+const {SoundEngin2} = await load('audio');
+const {PilotWallet} = await load('wallet');
+const {imageFrom, loadTextures, labelNames} = await load('materials');
+const {layers} = await load('geometry');
 let appId = 0;
 
 const settle = async (condition = () => true) => {
@@ -425,4 +431,139 @@ test('80 | Leaving an HDR display switches back to the regular canvas', async t 
   media.matches = false;
   await savedHandler();
   assert.equal(canvas.hidden, true);
+});
+
+function renderAssets(t, {missing = [], stalled = [], fetchManifest = async url => new Response(await readFile(new URL(url, dist)))} = {}) {
+  class AssetImage extends Image {
+    set src(url) {
+      if (stalled.includes(url)) return;
+      if (missing.includes(url)) queueMicrotask(() => this.onerror?.());
+      else super.src = readFileSync(new URL(url, dist));
+    }
+  }
+  install(t, {
+    Image: AssetImage, Path2D, document: {createElement: () => createCanvas(1, 1)},
+    fetch: fetchManifest
+  });
+}
+
+test('C01 | Stalled image and manifest requests exit the boot wait', async t => {
+  let aborted = false;
+  renderAssets(t, {stalled: ['stalled.webp'], fetchManifest: (_url, {signal} = {}) => new Promise((_, reject) => {
+    signal?.addEventListener('abort', () => { aborted = true; reject(signal.reason); });
+  })});
+  const imageResult = await Promise.race([
+    imageFrom('stalled.webp', 15).then(() => 'loaded', () => 'failed'),
+    delay(200, 'waiting')
+  ]);
+  assert.equal(imageResult, 'failed');
+
+  const timer = globalThis.setTimeout;
+  t.mock.method(globalThis, 'setTimeout', (fn, ms, ...args) => timer(fn, ms === 8000 ? 25 : ms, ...args));
+  const renderer = new SoftwareRenderer(createCanvas(32, 32));
+  const manifestResult = await Promise.race([renderer.init().then(() => 'ready'), delay(3000, 'waiting')]);
+  assert.equal(manifestResult, 'ready');
+  assert(aborted);
+});
+
+test('C02 | The software renderer starts when both scenery images fail', async t => {
+  renderAssets(t, {missing: ['./assets/marine-sky.webp', './assets/waves.webp']});
+  const renderer = new SoftwareRenderer(createCanvas(32, 32));
+  await renderer.init();
+  assert(renderer.sky.some(pixel => (pixel >>> 24) === 255));
+  assert(renderer.waves.some(pixel => (pixel >>> 24) === 255));
+  assert(renderer.mats.length > 1 + labelNames.length, 'the original terrain atlas remains usable');
+  assert(renderer.terrain.data.length > 0);
+});
+
+test('C03 | A missing or damaged atlas leaves color meshes and labels available', async t => {
+  let manifest = {tile: 400, columns: 8, layers: null};
+  renderAssets(t, {fetchManifest: async () => manifest ? Response.json(manifest) : new Response('', {status:404})});
+  for (let scenario = 0; scenario < 2; scenario++) {
+    const renderer = new SoftwareRenderer(createCanvas(32, 32));
+    await renderer.init();
+    assert.equal(renderer.mats.length, 1 + labelNames.length);
+    assert(renderer.terrain.data.length > 0 && renderer.devices['SW T'].data.length > 0);
+    assert(layers.labelHBR > 0);
+    assert.equal(layers.asphalt, undefined);
+    manifest = null;
+  }
+});
+
+test('C04 | WebGL reports a texture allocation error as an initialization failure', async t => {
+  renderAssets(t);
+  const deleted = [];
+  let num = 0, error = 0;
+  const gl = new Proxy({
+    NO_ERROR: 0, createTexture: () => ++num, getExtension: () => null,
+    texStorage3D: () => { error = 1285; },
+    getError: () => error, deleteTexture: texture => deleted.push(texture)
+  }, {get: (target, key) => target[key] ?? (() => {})});
+  await assert.rejects(loadTextures(gl), /1285/);
+  assert.deepEqual(deleted, [1, 2]);
+});
+
+test('C05 | A WebGPU validation error reveals the working standard canvas', async t => {
+  const device = new EventTarget();
+  Object.assign(device, {
+    createShaderModule: () => ({}), createRenderPipelineAsync: async () => ({}),
+    lost: new Promise(() => {}), destroy() {}
+  });
+  install(t, {matchMedia: () => ({matches: true}), navigator: {gpu: {
+    requestAdapter: async () => ({requestDevice: async () => device})
+  }}});
+  const canvas = {hidden: true, getContext: () => ({configure() {}, unconfigure() {}})};
+  const display = new HDRDisplay(canvas);
+  t.after(() => display.dispose());
+  await display.choose(true);
+  assert.equal(canvas.hidden, false);
+  device.dispatchEvent(new Event('uncapturederror'));
+  assert.equal(canvas.hidden, true);
+  assert.equal(display.active, false);
+});
+
+test('C06 | An audio failure on impact cannot interrupt a winning kill or its credit', async t => {
+  t.mock.method(console, 'warn', () => {});
+  t.mock.method(SoundEngin2.prototype, 'enable', async function (on) { this.on = on; });
+  t.mock.method(SoundEngin2.prototype, 'event', function (event) {
+    if (this.on && event.type === 'hit') throw new Error('audio device lost during hit');
+  });
+  const ui = await app(t, {prefs: {settings: {sound: true}, rules: {mode:'1v1', multiplier:1}}});
+  ui.start();
+  const m = ui.match();
+  assert(m.damage(m.actors[1], m.player, 200).kill);
+  assert.equal(m.actors[1].alive, false);
+  assert.deepEqual(m.scores, [1, 0]);
+  assert.equal(m.winner, 0);
+  assert.equal(ui.d.body.dataset.screen, 'results');
+  await settle(() => ui.$('creditResult').textContent.includes('所持 0.10 CR'));
+});
+
+test('C07 | An audio listener error leaves frame rendering and simulation running', async t => {
+  t.mock.method(console, 'warn', () => {});
+  t.mock.method(SoundEngin2.prototype, 'enable', async function (on) { this.on = on; });
+  let failures = 0;
+  t.mock.method(SoundEngin2.prototype, 'update', function (_dt, match) {
+    if (this.on && match) { failures++; throw new Error('audio listener update failed'); }
+  });
+  const ui = await app(t, {prefs: {settings: {sound: true}}});
+  ui.start();
+  const rendered = ui.rendered(), time = ui.match().time;
+  ui.frame(34);
+  assert.equal(failures, 1);
+  assert(ui.rendered() > rendered);
+  assert(ui.match().time > time);
+});
+
+test('C08 | A kill survives closing the page before the first asynchronous write', async t => {
+  const stalled = t.mock.method(PilotWallet.prototype, 'change', () => new Promise(() => {}));
+  const ui = await app(t, {prefs: {rules: {mode:'1v1'}}});
+  ui.start();
+  const m = ui.match();
+  m.damage(m.actors[1], m.player, 200);
+  stalled.mock.restore();
+  const reopened = new PilotEquipment(() => null, () => {});
+  await settle(() => ui.$('lobbyCredit').textContent === '0.10 CR');
+  assert(!await reopened.wallet.change(m.receiptId + '/0/1'));
+  assert.equal(ui.$('lobbyCredit').textContent, '0.10 CR');
 });
