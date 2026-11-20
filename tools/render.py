@@ -4,14 +4,14 @@ from mathutils import Vector
 p=Path(__file__).resolve().parent
 bpy.ops.wm.read_factory_settings(use_empty=True)
 scene=bpy.context.scene
-scene.render.engine='CYCLES';scene.cycles.device='CPU';scene.cycles.samples=24;scene.cycles.use_denoising=False;scene.cycles.max_bounces=4;scene.cycles.diffuse_bounces=2;scene.cycles.glossy_bounces=2;scene.cycles.transparent_max_bounces=6
+scene.render.engine='CYCLES';scene.cycles.device='CPU';scene.cycles.samples=72;scene.cycles.use_denoising=False;scene.cycles.max_bounces=4;scene.cycles.diffuse_bounces=2;scene.cycles.glossy_bounces=2;scene.cycles.transparent_max_bounces=6
 scene.render.threads_mode='FIXED';scene.render.threads=10;scene.render.resolution_x=2048;scene.render.resolution_y=1248;scene.render.resolution_percentage=100;scene.view_settings.view_transform='AgX';scene.view_settings.look='AgX - Medium High Contrast';scene.view_settings.exposure=0
 world=bpy.data.worlds.new('Sea air');scene.world=world;world.use_nodes=True;n=world.node_tree.nodes;l=world.node_tree.links;bg=n.get('Background');env=n.new('ShaderNodeTexEnvironment');env.image=bpy.data.images.load(str(p/'sky-env.jpg'));l.new(env.outputs['Color'],bg.inputs['Color']);bg.inputs['Strength'].default_value=.95
 sun=bpy.data.lights.new('Afternoon sun','SUN');sun.energy=4.2;sun.angle=math.radians(.9);sun.color=(1.0,.80,.565);so=bpy.data.objects.new('Afternoon sun',sun);scene.collection.objects.link(so);so.rotation_euler=Vector((.78,.46,-.39)).to_track_quat('-Z','Y').to_euler()
 raw=np.fromfile(p/'mesh.bin','<f4').reshape((-1,3,13));winding=np.cross(raw[:,1,:3]-raw[:,0,:3],raw[:,2,:3]-raw[:,0,:3]);flip=np.einsum('ij,ij->i',winding,raw[:,:,3:6].mean(axis=1))<0;raw[flip]=raw[flip][:,[0,2,1],:];raw=raw.reshape((-1,13));layout=json.loads((p/'layers.json').read_text());names={v:k for k,v in layout.items()}
 mats=[]
 for ni in range(len(names)):
- name=names[ni];m=bpy.data.materials.new(name);m.use_nodes=True;nt=m.node_tree;nodes=nt.nodes;ln=nt.links;bs=nodes.get('Principled BSDF');fac=nodes.new('ShaderNodeVertexColor');fac.layer_name='Tint';base=fac.outputs['Color'];metal= name in ['steel','panel','blackMetal','shutter','tread','barrel','rivets','greenHull','redPaint','drain','grate'];bs.inputs['Metallic'].default_value=.36 if metal else .035;bs.inputs['Roughness'].default_value=.45 if metal else .72
+ name=names[ni];m=bpy.data.materials.new(name);m.use_nodes=True;nt=m.node_tree;nodes=nt.nodes;ln=nt.links;bs=nodes.get('Principled BSDF');fac=nodes.new('ShaderNodeVertexColor');fac.layer_name='Tint';base=fac.outputs['Color'];metal= name in ['steel','panel','blackMetal','slatDoor','tread','barrel','greenHull','redPaint','drain','grate','workTin','portBlue','saltCladding','portHardware','portPanels','portWindows'];bs.inputs['Metallic'].default_value=.36 if metal else .035;bs.inputs['Roughness'].default_value=.45 if metal else .72
  if name!='white':
   tex=nodes.new('ShaderNodeTexImage');pic=bpy.data.images.load(str(p/(name+'.png')));tex.image=pic;mul=nodes.new('ShaderNodeMixRGB');mul.blend_type='MULTIPLY';mul.inputs[0].default_value=1;ln.new(tex.outputs['Color'],mul.inputs[1]);ln.new(base,mul.inputs[2]);base=mul.outputs[0]
   if name.startswith('label'):ln.new(tex.outputs['Alpha'],bs.inputs['Alpha']);bs.inputs['Roughness'].default_value=.64
@@ -30,6 +30,10 @@ scene.use_nodes=True;scene.view_layers[0].use_pass_mist=True;world.mist_settings
 camera=bpy.data.cameras.new('Harbor survey');cam=bpy.data.objects.new('Harbor survey',camera);scene.collection.objects.link(cam);scene.camera=cam;camera.clip_end=1400
 scene.render.image_settings.file_format='JPEG';scene.render.image_settings.quality=94
 # The three cameras use the same metric game world. The broad capture leaves room for the title pan.
-shots=[((12,7.25,98),(-15,9.9,8),76),((-37,8.1,91),(-14,9.6,4),78),((20,6.3,9),(-18,8,-56),68)]
+shots = [
+ ((11.6, 6.4, 96), (-8, 5.3, 42), 76),
+ ((-9.2, 3.85, 25.5), (-20, 2.35, 14.7), 69),
+ ((9.2, 3.45, -26.0), (21.5, 2.85, -35.6), 71)
+]
 for i,(eye,target,fov) in enumerate(shots):
  cam.location=(eye[0],-eye[2],eye[1]);dest=Vector((target[0],-target[2],target[1]));cam.rotation_euler=(dest-cam.location).to_track_quat('-Z','Y').to_euler();camera.lens=36/(2*math.tan(math.radians(fov)/2));scene.render.filepath=str(p/f'harbor-{i+1}.jpg');bpy.ops.render.render(write_still=True)

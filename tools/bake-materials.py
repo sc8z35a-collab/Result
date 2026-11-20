@@ -1,4 +1,5 @@
 from pathlib import Path
+from bake_port import bake as bake_port
 import json
 import numpy as np
 from PIL import Image,ImageDraw
@@ -20,6 +21,7 @@ for i,(name,j,cell) in enumerate(entries):
  sheet.paste(img,(i%cols*tile,i//cols*tile));info.append({'name':name,'source':paths[j].name,'cell':cell+1})
 sheet.save(out/'materials.webp',quality=89,method=5)
 (out/'materials.json').write_text(json.dumps({'tile':tile,'columns':cols,'layers':info},ensure_ascii=False,separators=(',',':')))
+bake_port(base_sheet=sheet)
 # A seamless hemispherical sky. Project cloud layers onto horizontal planes, then light
 # their density fields from a low sun. The runtime adds the solar disc in linear light.
 w,h=2560,640

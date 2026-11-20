@@ -1,4 +1,5 @@
 import {clamp} from './geometry.js';
+import {dockFixtures, dockBounds} from './port-layout.js';
 export const FIELD = {width: 50, length: 200};
 export const WATER_HEIGHT = -1.68;
 // x and z are metres from the centre of the playable wharf. Above-ground cargo
@@ -81,6 +82,9 @@ for (const [kind, x, z, w, h, d] of props)obstacle(x, z, w, d, 0, h, kind === 'b
 for (const t of tankers)obstacle(t.x, t.z, t.w, t.d, 0, t.h, 'steel');
 for (const c of craneSites)for (const dx of [-4.4, 4.4])for (const dz of [-8, 8])obstacle(c.x + dx * c.scale, c.z + dz * c.scale, 1.6 * c.scale, 2.9 * c.scale, 0, 8 * c.scale, 'steel');
 for (let z = -94; z <= 96; z += 19)obstacle(-23.7, z, .9, 1.2, 0, .86, 'concrete');
+for (const fixture of dockFixtures) {
+  for (const part of fixture.parts) obstacles.push(dockBounds(fixture, part));
+}
 // A uniform index keeps visibility, swept shots and navigation queries local.
 const CELL = 8, grid = new Map();
 const cellKey = (x, z) => (x + 50) * 512 + z + 128;
@@ -89,9 +93,13 @@ for (const [i, o] of obstacles.entries())for (let ix = Math.floor(o.x0 / CELL); 
   if (!grid.has(k))grid.set(k, []);
   grid.get(k).push(i)
 }
+const emptyCell = [];
 function nearby(x0, z0, x1, z1) {
+  const left = Math.floor(x0 / CELL), right = Math.floor(x1 / CELL);
+  const near = Math.floor(z0 / CELL), far = Math.floor(z1 / CELL);
+  if (left === right && near === far) return grid.get(cellKey(left, near)) || emptyCell;
   const hits = new Set();
-  for (let ix = Math.floor(x0 / CELL); ix <= Math.floor(x1 / CELL); ix++)for (let iz = Math.floor(z0 / CELL); iz <= Math.floor(z1 / CELL); iz++) {
+  for (let ix = left; ix <= right; ix++)for (let iz = near; iz <= far; iz++) {
     const ids = grid.get(cellKey(ix, iz));
     if (ids)for (const i of ids)hits.add(i)
   }

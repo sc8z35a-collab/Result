@@ -1,4 +1,5 @@
 import {Mesh, random, blend, add, sub, scale, unit} from './geometry.js';
+import {dockFace, drawDockFixtures, quayEdge, breakwater} from './dockworks.js';
 import {cargo, props, craneSites, tankers} from './yard.js';
 const paint = {red: '#ba6049', blue: '#547486', teal: '#478381', green: '#657d6e', ivory: '#c4bd9f', ochre: '#c29a58'};
 const trim = {red: '#9c493a', blue: '#415e6a', teal: '#436b66', green: '#4a635b', ivory: '#a5a18d', ochre: '#987240'};
@@ -12,7 +13,12 @@ function side(m, x, y, z, w, h, label, dir) {
 }
 function container(m, x, z, w, d, y, key, brand, detail = 1) {
   const h = 2.59, col = paint[key], edge = trim[key], longX = w > d;
-  m.box(x, y + h / 2, z, w, h, d, 'panel', col, 2.55, 1);
+  const coldUnit = key === 'ivory' && Math.abs(x) < 25;
+  m.box(x, y + h / 2, z, w, h, d, coldUnit ? 'saltCladding' : 'panel', col, 2.55, 1, y > 0);
+  if (coldUnit) {
+    if (longX) dockFace(m, x-w/2-.018, y+h/2, z, d-.14, h-.15, 'west', 'chiller');
+    else dockFace(m, x, y+h/2, z-d/2-.018, w-.14, h-.15, 'north', 'chiller');
+  }
   if (!detail)return;
   // Rolled corner posts, frame rails, paired locking rods and the small end doors.
   for (const sx of [-1, 1])for (const sz of [-1, 1]) {
@@ -47,7 +53,19 @@ function crane(m, x, z, s = 1, num = '04', detailed = true, lite = false) {
     steel = '#596a6b';
   const P = (a, b, c) => [x + a * s, b * s, z + c * s],
     box = (a, b, c, w, h, d, mat, c0) => m.box(...P(a, b, c), w * s, h * s, d * s, mat, c0, mat === 'panel' ? 3 : 0, 1),
-    beam = (a, b, w, d = w, c = col) => m.beam(P(...a), P(...b), w * s, d * s, 'white', c, 1);
+    beam = (a, b, w, d = w, c = col) => {
+      // Narrow webs in the boom are seen edge-on from the deck. Two facing
+      // ribbons retain the open lattice in the software and lightweight views.
+      if (lite && w <= .65 && a[2] === b[2]) {
+        const dx = b[0]-a[0], dy = b[1]-a[1], len = Math.hypot(dx,dy);
+        if (!len) return;
+        const ex = -dy*w/(2*len), ey = dx*w/(2*len);
+        const p = [P(a[0]-ex,a[1]-ey,a[2]), P(b[0]-ex,b[1]-ey,b[2]),
+          P(b[0]+ex,b[1]+ey,b[2]), P(a[0]+ex,a[1]+ey,a[2])];
+        m.quad(...p,'white',c,1,1,1,[0,0,1]);
+        m.quad(p[3],p[2],p[1],p[0],'white',c,1,1,1,[0,0,-1]);
+      } else m.beam(P(...a), P(...b), w*s, d*s, 'white', c, 1);
+    };
   for (const dz of [-8, 8]) {
     for (const dx of [-4.4, 4.4]) {
       box(dx, .65, dz, 1.4, 1.2, 2.8, 'blackMetal', '#d0c7ad');
@@ -121,23 +139,75 @@ function crane(m, x, z, s = 1, num = '04', detailed = true, lite = false) {
     for (let j = 0; j < 5; j++)box(2 + j * 1.4, 26.88, 2.245, 1.02, .64, .05, 'white', '#42616a')
   }
 }
-function warehouse(m, x, z, w, d, h, base, metal, lite = false) {
-  m.box(x, h / 2, z, w, h, d, 'panel', metal, 3.1, 1);
-  m.box(x, 1.45, z, w + .16, 2.9, d + .16, 'bricks', base, 2.2);
-  const y = h + .15, peak = h + 3.2, a = x - w / 2 - .7, b = x + w / 2 + .7, f = z - d / 2 - .6, g = z + d / 2 + .6;
-  m.quad([a, y, g], [x, peak, g], [x, peak, f], [a, y, f], 'panel', '#86908d', w / 4, d / 4, 1);
-  m.quad([x, peak, g], [b, y, g], [b, y, f], [x, peak, f], 'panel', '#9eaaa5', w / 4, d / 4, 1);
-  m.tri([a, y, g], [b, y, g], [x, peak, g], 'panel', metal);
-  m.tri([b, y, f], [a, y, f], [x, peak, f], 'panel', metal);
-  if (lite) return;
-  for (let dz = -d / 2 + 5; dz < d / 2 - 2; dz += 10.5) {
-    m.box(x - w / 2 - .12, 2.6, z + dz, .15, 4.95, 5.3, 'steel', '#788887', 1.25, 1);
-    for (let j = 0; j < 4; j++)m.box(x - w / 2 - .16, h - 1.2, z + dz - 2.5 + j * 1.7, .09, 1.46, 1.48, 'white', '#526a70', 0, 1);
-    m.box(x - w / 2 - .56, 5.25, z + dz, 1.3, .16, 6.12, 'white', '#777f78');
-    m.box(x - w / 2 - .23, .27, z + dz, .45, .52, 6.1, 'concrete', '#c4c0a9');
+const warehouses = {
+  cold: {wall: 'saltCladding', base: 'cement', roof: 'panel', sign: 'coldSign', trim: '#688b89'},
+  works: {wall: 'workTin', base: 'bricks', roof: 'workTin', sign: 'worksSign', trim: '#915b43'},
+  bonded: {wall: 'bondTimber', base: 'stoneWall', roof: 'slateRoof', sign: 'labelgate', trim: '#828074'}
+};
+function warehouse(m, x, z, w, d, h, base, metal, type, lite) {
+  const style = warehouses[type];
+  m.box(x, h/2, z, w, h, d, style.wall, metal, 3.10, 1, false);
+  m.box(x, 1.45, z, w+.16, 2.9, d+.16, style.base, base, 2.4, 0, false);
+  const y = h+.02, peak = h+3.2, a = x-w/2-.48, b = x+w/2+.48, f = z-d/2-.40, g = z+d/2+.40;
+  if (type === 'works') {
+    for (let i=0; i<3; i++) {
+      const start = f+(g-f)*i/3, end = f+(g-f)*(i+1)/3;
+      m.quad([a,y,start], [a,peak,end], [b,peak,end], [b,y,start], style.roof, '#a7ada2', 5, 6, 1);
+      // Vertical north light at each ridge, with a closed cheek on either side.
+      for (let j=0; j<4; j++) dockFace(m, a+(b-a)*(j+.5)/4, (y+peak)/2, end, (b-a)/4, peak-y, 'south', 'wiredGlass');
+      m.tri([a,y,start], [a,y,end], [a,peak,end], 'workTin', metal, 1, [-1,0,0]);
+      m.tri([b,y,end], [b,y,start], [b,peak,end], 'workTin', metal, 1, [1,0,0]);
+    }
+  } else {
+    m.quad([a,y,g], [x,peak,g], [x,peak,f], [a,y,f], style.roof, '#a9b2aa', w/4, d/4, 1);
+    m.quad([x,peak,g], [b,y,g], [b,y,f], [x,peak,f], style.roof, '#b7bfb5', w/4, d/4, 1);
+    m.tri([a,y,g], [b,y,g], [x,peak,g], style.wall, metal);
+    m.tri([b,y,f], [a,y,f], [x,peak,f], style.wall, metal);
   }
-  for (const sz of [-1, 1])for (let k = -w / 2 + 3; k < w / 2; k += 4.5)m.box(x + k, h - 1.28, z + sz * (d / 2 + .055), 3.65, 1.48, .09, 'white', '#52696c', 0, 1);
-  front(m, x - w * .25, h * .57, z + d / 2 + .13, 2.7, 2.5, 'door');
+  const west = x-w/2;
+  for (let dz = -d/2+5; dz < d/2-2; dz += 10.5) {
+    const bay = z+dz;
+    dockFace(m, west-.10, 2.58, bay, 5.35, 4.96, 'west', 'slatDoor', '#b4b9ae', 1, 2);
+    dockFace(m, west-.10, h-1.35, bay, 6.05, 1.34, 'west', 'wiredGlass');
+    if (!lite) {
+      m.box(west-.52, 5.22, bay, 1.26, .14, 6.12, 'workTin', '#b3b8a8', 2, 1);
+      m.box(west-.23, .21, bay, .47, .42, 6.04, 'saltConcrete', '#ccc5a9', 2.6);
+      for (const dz of [-2.5,2.5]) m.box(west-.49,.56,bay+dz,.21,.79,.22,'yardStripes','#dbd0ad',1);
+    }
+  }
+  // Large enamel fascia faces the playing area and one end approach.
+  const signHeight = type === 'bonded' ? 2.2 : 1.60, signWidth = type === 'bonded' ? 3.6 : 6.65;
+  dockFace(m, west-.13, h-1.47, z+3.6, signWidth, signHeight, 'west', style.sign);
+  dockFace(m, x, h-.42, g+.016, signWidth, signHeight, 'south', style.sign);
+  if (lite) return;
+  if (type === 'cold') {
+    // Refrigerated transshipment shed: a loading marquee and an insulated dock wall.
+    m.box(west-2.3, 4.63, z-7, 4.45,.22,17.6,'saltCladding','#bbc9b9',2.8,1);
+    m.box(west-4.54,4.54,z-7,.13,.39,17.74,'portBlue',style.trim,1.5,1);
+    for (const dz of [-14,-7,0]) {
+      m.box(west-4.22,2.25,z+dz,.17,4.5,.17,'saltCladding','#92b0a8',1.3,1);
+      m.beam([west-4.20,3.62,z+dz], [west-3.1,4.55,z+dz], .10,.11,'workTin');
+    }
+    for (const dz of [-10,9]) {
+      m.box(x+3,h+3.32,z+dz,3.4,1.45,4.5,'slatDoor','#acb9ae',1.7,1);
+      dockFace(m,x+1.28,h+3.38,z+dz,3.6,.95,'west','chiller');
+    }
+  } else if (type === 'works') {
+    // Exterior crane runway: the cast feet, overhead rail and weather hood read
+    // as one loading bay from the far side of the field.
+    for (const dz of [-8,8]) {
+      for (const dx of [1.3,5.0]) m.box(west-dx,3.72,z+dz,.27,7.44,.34,'workTin','#a7866e',1.6,1);
+      m.box(west-3.15,7.40,z+dz,4.45,.35,.43,'workTin','#ad856a',1.7,1);
+    }
+    m.box(west-4.8,7.64,z,.43,.38,18.6,'workTin','#c19779',2,1);
+    m.box(west-4.8,7.18,z+3,.82,.64,1.24,'yardStripes','#dcca96',1,1);
+    m.beam([west-4.8,6.88,z+3], [west-4.8,5.15,z+3], .052,.052,'blackMetal');
+  } else {
+    for (const dz of [-8,0,8]) {
+      m.box(west-.26, h*.49, z+dz, .42,h,.45,'stoneWall','#b3ad99',1.7);
+      dockFace(m,west-.23,h-2.24,z+dz+2.3,2.28,1.48,'west','officeGlass');
+    }
+  }
 }
 function ship(m, lite = false) {
   const x = -50, z = -5;
@@ -188,9 +258,9 @@ function ship(m, lite = false) {
   side(m, x + 8.87, 2.95, z + 29, 9, 2.45, 'ship', 1);
 }
 function spool(m, x, z, w, h, lite = false) {
-  const rr = w * .5, seg = lite ? 8 : 14;
+  const rr = w * .5, seg = lite ? 7 : 14;
   for (const k of [-1, 1])m.tube([x + k * (w * .35), h * .51, z], [x + k * (w * .35 + .11), h * .51, z], rr, rr, 'wood', '#b89b75', seg);
-  m.tube([x - w * .35, h * .51, z], [x + w * .35, h * .51, z], rr * .74, rr * .74, 'blackMetal', '#8e8574', seg);
+  m.tube([x - w * .35, h * .51, z], [x + w * .35, h * .51, z], rr * .74, rr * .74, 'blackMetal', '#8e8574', seg, 1, 'none');
   if (!lite) side(m, x + w * .35 + .12, h * .51, z, w * .93, h * .96, 'serial', 1)
 }
 function prop(m, p, lite = false) {
@@ -200,12 +270,21 @@ function prop(m, p, lite = false) {
     for (let j = 0; j < k; j++) {
       const ww = w * (1 - j * .23), xx = x + j * .21;
       m.box(xx, (j + .5) * h / k, z, ww, h / k, d * (1 - j * .2), 'crate', '#d3c8aa');
+      if (j > 0 || x > 0) {
+        const face = j > 0 && x < 0 ? 'tarp' : 'timberBands';
+        for (const sign of [-1,1]) dockFace(m,xx,(j+.5)*h/k,z+sign*(d*(1-j*.2)/2+.008),ww,h/k,
+          sign>0?'south':'north',face,'#d5c9b4');
+      }
       if (!lite) for (const s of [-1, 1])m.box(xx + s * ww * .28, (j + .5) * h / k, z, .085, h / k + .025, d * (1 - j * .2) + .027, 'white', '#5f6862')
     }
   } else if (type === 'spool')spool(m, x, z, w, h, lite); else if (type === 'barrier') {
     m.box(x, .18, z, w, .35, d, 'concrete', '#b1ada2', 1.4);
-    m.box(x, .39 + h * .23, z, w * .94, h * .55, d * .63, 'cement', '#bcbbac', 1.8);
-    if (!lite) m.box(x, h - .08, z, w * .93, .15, d * .63 + .02, 'labelhazard', '#bcb382', .85)
+    m.box(x, (.35 + h)/2, z, w*.94, h-.35, d*.71, 'saltConcrete', '#cfccbc', 1.8);
+    if (w > d) {
+      for (const s of [-1,1]) dockFace(m,x,h-.12,z+s*(d*.355+.009),w*.89,.19,s>0?'south':'north','yardStripes','#dac59a',w/1.8,.54);
+    } else {
+      for (const s of [-1,1]) dockFace(m,x+s*(w*.47+.009),h-.12,z,d*.68,.19,s>0?'east':'west','yardStripes','#dac59a',d/1.8,.54);
+    }
   } else {
     m.box(x, .78, z, 1.75, 1.05, 2.55, 'barrel', '#ceab67');
     m.box(x, 1.53, z + .3, 1.52, 1.12, 1.18, 'white', '#bfa466');
@@ -227,11 +306,11 @@ function lamp(m, x, z, direction, height = 12, lite = false) {
   if (!lite) m.box(x + direction * 2.25, height + .404, z, .78, .045, .44, 'white', '#fce4a2', 0, 3)
 }
 function tanks(m, x, z, rad, hh, lite = false) {
-  const seg = lite ? 12 : 32;
-  m.tube([x, .15, z], [x, hh, z], rad, rad, 'paint', '#cccdbb', seg);
-  m.tube([x, hh, z], [x, hh + 1.45, z], rad, .55, 'white', '#b2b9aa', seg);
+  const seg = lite ? 10 : 32;
+  m.tube([x, .15, z], [x, hh, z], rad, rad, 'saltCladding', '#cccdbb', seg, 1, 'none');
+  m.tube([x, hh, z], [x, hh + 1.45, z], rad, .55, 'white', '#b2b9aa', seg, 1, 'end');
   if (lite) return;
-  for (const f of [.24, .49, .75, .98])m.tube([x, hh * f, z], [x, hh * f + .075, z], rad + .045, rad + .045, 'white', '#8e9d92', 32);
+  for (const f of [.24, .49, .75, .98])m.tube([x, hh * f, z], [x, hh * f + .075, z], rad + .045, rad + .045, 'white', '#8e9d92', 32, 1, 'none');
   for (let i = 0; i < 20; i++) {
     const t = i / 20 * Math.PI * 2, tt = (i + 1) / 20 * Math.PI * 2;
     let a = [x + Math.cos(t) * (rad + .28), hh + .82, z + Math.sin(t) * (rad + .28)],
@@ -250,15 +329,15 @@ function supplyTanker(m, t, lite = false) {
     m.box(x, .64, z, 2.08, .30, 5.25, 'blackMetal', '#566163', 1, 1);
     const cz = z + f * 1.88;
     m.box(x, 1.48, cz, 2.14, 1.38, 1.56, 'panel', '#d5a84e', 2, 1);
-    m.box(x, 1.72, cz + f * .79, 1.88, .58, .06, 'white', '#2c4850', 0, 1);
+    dockFace(m,x,1.72,cz+f*.79,1.88,.58,f>0?'south':'north','officeGlass');
     const ta = z - f * 2.26, tb = z + f * .86;
-    m.tube([x, 1.66, ta], [x, 1.66, tb], .96, .96, 'steel', '#d7d9cb', 10, 1);
+    m.tube([x, 1.66, ta], [x, 1.66, tb], .96, .96, 'steel', '#d7d9cb', 8, 1);
     for (const dz of [-1.72, 1.65]) {
-      for (const sx of [-1, 1]) m.tube([x + sx * .88, .46, z + f * dz], [x + sx * 1.18, .46, z + f * dz], .45, .45, 'rubber', '#373e40', 8);
+      for (const sx of [-1, 1]) m.tube([x + sx * .88, .46, z + f * dz], [x + sx * 1.18, .46, z + f * dz], .45, .45, 'rubber', '#373e40', 6, 1, 'end');
     }
-    for (const sx of [-1, 1]) m.box(x + sx * 1.01, 1.08, z - f * .68, .06, .12, 2.7, 'white', '#7de8d8', 0, 3);
+    for (const sx of [-1, 1]) dockFace(m,x+sx*1.04,1.08,z-f*.68,2.7,.12,sx>0?'east':'west','white','#7de8d8',1,1,3);
     const rz = z - f * 2.48;
-    m.box(x, 1.46, rz - f * .20, 1.18, .54, .08, 'white', '#75e4d4', 0, 3);
+    dockFace(m,x,1.46,rz-f*.22,1.18,.54,f>0?'north':'south','white','#75e4d4',1,1,3);
     return;
   }
   for (const sx of [-1, 1])m.plane(x + sx * 1.98, .046, z, .22, 7.4, 'labelhazard', '#e5c16c', 1, 14);
@@ -330,13 +409,18 @@ function shore(m, lite = false) {
   const bCount = lite ? 20 : 85;
   for (let i = 0; i < bCount; i++) {
     const x = -200 + r() * 380, z = -211 - r() * 47, h = 2 + r() * 8;
-    m.box(x, h / 2 - .3, z, 2 + r() * 9, h, 3 + r() * 9, 'white', r() > .6 ? '#a1aaa3' : '#748c91');
+    const w = 2+r()*9, d = 3+r()*9, tint = r()>.6 ? '#a1aaa3' : '#748c91';
+    if (lite) {
+      dockFace(m,x,h/2-.3,z+d/2,w,h,'south','white',tint);
+      const side = x>0 ? -1 : 1;
+      dockFace(m,x+side*w/2,h/2-.3,z,d,h,side<0?'west':'east','white',tint);
+    } else m.box(x, h/2-.3, z, w, h, d, 'white', tint);
     if (!lite && i % 11 === 0)m.tube([x, 0, z], [x, h + 8 + r() * 12, z], .63, .49, 'white', '#9e9890', 8)
   }
 }
 export function buildHarbor(detail = 'full') {
   const lite = detail === 'lite';
-  const m = new Mesh(), r = random(964);
+  const m = new Mesh();
   shore(m, lite);
   // The playable flat apron is exactly 50 by 200 metres; quays beyond its painted limits are scenery.
   m.box(0, -1.55, 0, 50, 3.10, 200, 'seaWall', '#b4b9a9', 4.25);
@@ -384,6 +468,12 @@ export function buildHarbor(detail = 'full') {
       m.box(-25.16, -.63, z, .32, 1.58, 1.1, 'rubber', '#99a297')
     }
   }
+  if (lite) {
+    for (let z = -94; z <= 96; z += 19)
+      m.box(-23.7,.43,z,.81,.86,1.1,'blackMetal','#939a88',1,1,false);
+  }
+  quayEdge(m, lite);
+  drawDockFixtures(m, lite);
   for (const c of cargo)container(m, c[0], c[1], c[2], c[3], c[4], c[5], c[6], lite ? 0 : 1);
   for (const p of props)prop(m, p, lite);
   for (const t of tankers)supplyTanker(m, t, lite);
@@ -397,17 +487,24 @@ export function buildHarbor(detail = 'full') {
     m.plane(32, .011, 0, 2.4, 198, 'chip', '#acaa9f', 1.2, 90);
     m.plane(30, .013, 26, 1.25, 20, 'moss', '#a5a783', 1, 16);
     m.plane(30, .015, -33, 2.7, 29, 'bank', '#a99d80', 2, 22);
-    for (let z = -99; z <= 99; z += 5.4) {
-      m.tube([25.12, .04, z], [25.12, 2.53, z], .071, .064, 'white', '#85948a', 7);
-      m.beam([25.12, 2.49, z], [25.12, 2.49, z + 5.4], .056, .057, 'white', '#8f9b91');
-      for (let y = .53; y < 2.45; y += .54)m.beam([25.12, y, z], [25.12, y, z + 5.4], .022, .022, 'white', '#84918a')
-    }
-  } else {
-    m.box(25.12, 1.30, 0, .08, 2.45, 198, 'white', '#6d7a74');
   }
-  warehouse(m, 45, 63, 21, 50, 8.3, '#b1a497', '#b6c0b3', lite);
-  warehouse(m, 48, 3, 26, 45, 10.5, '#b0aa9a', '#aab5aa', lite);
-  warehouse(m, 49, -90, 27, 35, 9.5, '#a99e90', '#b3b5a4', lite);
+  // The rails are continuous extrusions; only fence posts need separate geometry.
+  for (const y of (lite ? [1.1, 2.49] : [.53, 1.07, 1.61, 2.15, 2.49])) {
+    const gauge = y > 2.4 ? .063 : .026;
+    m.box(25.12,y,0,gauge,gauge,198,'white','#89998e');
+  }
+  const postCount = lite ? 19 : 36;
+  for (let i=0; i<=postCount; i++) {
+    const z = -99+i*(lite ? 198/postCount : 5.4);
+    if (lite) {
+      // The landward face is outside every playable camera angle.
+      dockFace(m,25.06,1.27,z,.126,2.53,'west','white','#89978a');
+      for (const s of [-1,1]) dockFace(m,25.12,1.27,z+s*.063,.126,2.53,s>0?'south':'north','white','#89978a');
+    } else m.box(25.12,1.27,z,.126,2.53,.126,'white','#89978a',0,1,false);
+  }
+  warehouse(m, 45, 63, 21, 50, 8.3, '#b1ad9e', '#cdd4c8', 'cold', lite);
+  warehouse(m, 48, 3, 26, 45, 10.5, '#b0aa9a', '#b9c2b9', 'works', lite);
+  warehouse(m, 49, -90, 27, 35, 9.5, '#b4b09f', '#c6bba4', 'bonded', lite);
   for (const [x, z, rad, h] of [[43, -43, 6.2, 11], [58, -55, 7.5, 14], [73, -40, 7, 12], [63, -118, 5, 16]])tanks(m, x, z, rad, h, lite);
   if (!lite) {
     for (let z = -87; z < 98; z += 30)lamp(m, 24.15, z, -1, 12.4);
@@ -422,11 +519,6 @@ export function buildHarbor(detail = 'full') {
     crane(m, -11, -136, .82, '07', false);
     crane(m, -83, -186, .56, '05', false);
     m.box(-93, -1.6, -187, 94, 3.0, 19, 'seaWall', '#aeb3ac', 5);
-    // Riprap and salt-stained masonry are made from the geological and reservoir sheets.
-    for (let i = 0; i < 95; i++) {
-      let z = -160 + r() * 58, x = -26 - r() * 4, sz = .48 + r() * 1.35;
-      m.ellipsoid(x, -1.46 + r() * .47, z, sz, sz * .67, sz * .78, ['darkRock', 'wetStone', 'quarry', 'stoneMoss'][i % 4], '#b7b5a2', 0, 6, 3)
-    }
     for (const x of [-3, 20]) {
       m.box(x, .96, 99.8, .17, 1.92, .15, 'white', iron);
       front(m, x, 1.66, 99.9, 1.18, .66, 'berth')
@@ -435,6 +527,7 @@ export function buildHarbor(detail = 'full') {
     for (let z = -75; z < 90; z += 60)lamp(m, 24.15, z, -1, 12.4, true);
     m.box(23, -1.55, -136, 90, 3.1, 56, 'seaWall', '#adb0a1', 4);
   }
+  breakwater(m, lite);
   return m
 }
 export function titleCamera(time) {

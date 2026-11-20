@@ -12,7 +12,7 @@ python -m http.server 8000 --directory dist
 
 ## 開発用ツール
 
-`tools/` に素材の生成、港の3Dシーンの書き出し、Blenderでのタイトル背景のレンダリング、ゲームと描画の検証に使ったコードがあります。配布用のテクスチャと背景画像は `dist/assets/` に、元のPNGテクスチャアトラス15枚は `upload/` に収録しています。
+`tools/` に素材の生成、港の3Dシーンの書き出し、Blenderでのタイトル背景のレンダリング、ゲームと描画の検証に使ったコードがあります。配布用のテクスチャとタイトル背景は `dist/assets/` にあります。港の追加素材は `production-assets/port-sources/` の10枚から作成しています。`python tools/bake_port.py` で配布用アトラスを再生成できます（PillowとDejaVuフォントを使用）。
 
 ゲームロジックと熱映像の検証は、リポジトリ直下で次を実行します。
 

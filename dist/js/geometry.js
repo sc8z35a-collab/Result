@@ -107,7 +107,7 @@ export class Mesh {
     const n = normal || unit(cross(sub(b, a), sub(c, a))), co = color(tint), uv = [[0, v], [u, v], [u, 0], [0, 0]];
     for (const i of [0, 1, 2, 0, 2, 3])this.vertex([a, b, c, d][i], n, uv[i], mat, co, kind)
   }
-  box(x, y, z, w, h, d, mat = 'white', tint = '#ffffff', repeat = 0, kind = 0) {
+  box(x, y, z, w, h, d, mat = 'white', tint = '#ffffff', repeat = 0, kind = 0, bottom = true) {
     const a = x - w / 2, b = x + w / 2, c = y - h / 2, e = y + h / 2, f = z - d / 2, g = z + d / 2;
     const U = repeat ? w / repeat : 1, V = repeat ? h / repeat : 1, D = repeat ? d / repeat : 1;
     this.quad([a, c, g], [b, c, g], [b, e, g], [a, e, g], mat, tint, U, V, kind, [0, 0, 1]);
@@ -115,7 +115,7 @@ export class Mesh {
     this.quad([b, c, g], [b, c, f], [b, e, f], [b, e, g], mat, tint, D, V, kind, [1, 0, 0]);
     this.quad([a, c, f], [a, c, g], [a, e, g], [a, e, f], mat, tint, D, V, kind, [-1, 0, 0]);
     this.quad([a, e, g], [b, e, g], [b, e, f], [a, e, f], mat, tint, U, D, kind, [0, 1, 0]);
-    this.quad([a, c, f], [b, c, f], [b, c, g], [a, c, g], mat, tint, U, D, kind, [0, -1, 0])
+    if (bottom) this.quad([a, c, f], [b, c, f], [b, c, g], [a, c, g], mat, tint, U, D, kind, [0, -1, 0])
   }
   plane(x, y, z, w, d, mat, tint = '#ffffff', u = 1, v = 1, kind = 0) {
     this.quad([x - w / 2, y, z + d / 2], [x + w / 2, y, z + d / 2], [x + w / 2, y, z - d / 2], [x - w / 2, y, z - d / 2], mat, tint, u, v, kind, [0, 1, 0])
@@ -132,7 +132,7 @@ export class Mesh {
     }
     this.quad(...rb, mat, tint, 1, 1, kind, axis)
   }
-  tube(a, b, ra, rb = ra, mat = 'white', tint = '#ffffff', sides = 10, kind = 1) {
+  tube(a, b, ra, rb = ra, mat = 'white', tint = '#ffffff', sides = 10, kind = 1, caps = 'both') {
     const axis = unit(sub(b, a)),
       v = unit(cross(axis, Math.abs(axis[1]) > .92 ? [0, 0, 1] : [0, 1, 0])),
       w = unit(cross(axis, v)),
@@ -144,8 +144,8 @@ export class Mesh {
         ps = [add(a, scale(prev, ra)), add(a, scale(n, ra)), add(b, scale(n, rb)), add(b, scale(prev, rb))];
       const ns = [prev, n, n, prev];
       for (const j of [0, 1, 2, 0, 2, 3])this.vertex(ps[j], ns[j], [[i / sides, 1], [(i + 1) / sides, 1], [(i + 1) / sides, 0], [i / sides, 0]][j], mat, co, kind);
-      this.tri(b, ps[3], ps[2], mat, tint, kind, axis);
-      this.tri(a, ps[1], ps[0], mat, tint, kind, scale(axis, -1));
+      if (caps === 'both' || caps === 'end') this.tri(b, ps[3], ps[2], mat, tint, kind, axis);
+      if (caps === 'both' || caps === 'start') this.tri(a, ps[1], ps[0], mat, tint, kind, scale(axis, -1));
       prev = n
     }
   }
