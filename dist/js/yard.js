@@ -215,6 +215,11 @@ export function obstruction(a, b) {
   return nearest;
 }
 
+export function clearOpticalPath(a, b, aero) {
+  return obstruction(a, b) > 1 &&
+    !(aero?.stats.totalSmoke > 1.8 && aero.smokeOcclusion(a, b) > .86);
+}
+
 export function moveActor(a, dx, dz) {
   const tx = clamp(a.x + dx, -24.58, 24.58), tz = clamp(a.z + dz, -99.58, 99.58);
   if (walkable(tx, a.z, .4, a.y)) {

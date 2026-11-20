@@ -20,9 +20,10 @@
 //       shield-break / low-HP coordinated EXECUTE collapse, and time-normalized 360Hz Bayesian belief maintenance.
 
 import {NV13Pro, getTacticalGraph, canSeeNode, WEAPON_BAND, cellOf, CELLS, lowCover} from './nv13pro.js';
-import {clamp, mix, angleDiff, random} from './geometry.js';
-import {walkable, obstruction, rayBox, moveActor, floorAt} from './yard.js';
+import {clamp, mix, angleDiff, random, dot, forward, sub, unit} from './geometry.js';
+import {walkable, obstruction, clearOpticalPath, rayBox, moveActor, floorAt} from './yard.js';
 import {eyeOf, targetPoint, postureStep, vertical} from './posture.js';
+import {incomingPathClear} from './ballistics.js';
 import {
   HumanAimController,
   SpyAgentState,
@@ -673,15 +674,14 @@ export class NV2NeuralCore {
       if (!raw) return;
       const obj = JSON.parse(raw);
       if (obj?.v !== 1 || !Array.isArray(obj.w) || obj.w.length !== this.trainable.length) return;
+      if (!Number.isSafeInteger(obj.step) || obj.step < 0 || !Number.isSafeInteger(obj.updates) || obj.updates < 0 ||
+          obj.w.some((src, i) => !Array.isArray(src) || src.length !== this.trainable[i].w.length || src.some(n => !Number.isFinite(n)))) return;
       for (let k = 0; k < this.trainable.length; k++) {
         const src = obj.w[k], dst = this.trainable[k].w;
-        if (!Array.isArray(src) || src.length !== dst.length) return;
-        for (let i = 0; i < dst.length; i++) {
-          if (Number.isFinite(src[i])) dst[i] = clamp(src[i], -3.5, 3.5);
-        }
+        for (let i = 0; i < dst.length; i++) dst[i] = clamp(src[i], -3.5, 3.5);
       }
-      this.stepCount = obj.step || 0;
-      this.updates = obj.updates || 0;
+      this.stepCount = obj.step;
+      this.updates = obj.updates;
     } catch {}
   }
 }
@@ -963,7 +963,14 @@ export class NV2 extends NV13Pro {
   }
 
   onHit(victim, attacker, dir, power) {
-    super.onHit(victim, attacker, dir, power);
+    const from = eyeOf(victim);
+    const to = attacker?.alive ? targetPoint(attacker) : null;
+    const bearing = to && sub(to, from);
+    const visible = bearing && Math.hypot(...bearing) <= 85 &&
+      dot(forward(victim.yaw, victim.pitch), unit(bearing)) > .12 &&
+      clearOpticalPath(from, to, this.match.aeroVortex);
+    const seenAttacker = visible ? attacker : null;
+    super.onHit(victim, seenAttacker, dir, power);
     const t = this.match.time;
     const shieldBroken = victim.shield <= 0 && power > 0 && (victim.hp < 100 && victim.hp >= 100 - power - 0.5 || victim.shieldFlash > 0.9);
     const lowHp = victim.hp <= 46;
@@ -999,15 +1006,15 @@ export class NV2 extends NV13Pro {
 
     // Victim team observes hit taken -> negative reward + survival token + NV2 Human startle/flinch!
     const stV = this.nv2Teams[victim.team];
-    stV.pushToken(this.buildToken(victim.team, 3, victim, attacker));
+    stV.pushToken(this.buildToken(victim.team, 3, victim, seenAttacker));
     stV.lastReward -= shieldBroken ? 0.45 : 0.14;
     const bV = this.brains.get(victim.id);
     if (bV) {
       bV.stepReward -= shieldBroken ? 0.55 : 0.18;
-      const stRes = bV.mind ? bV.mind.onDamaged(victim, attacker, power, t, this.metrics) : null;
+      const stRes = bV.mind ? bV.mind.onDamaged(victim, seenAttacker, power, t, this.metrics, dir) : null;
       if (bV.humanAim) bV.humanAim.onHitShock(power, !!stRes?.startled);
-      if (stRes?.startled && attacker && this.humanMode) {
-        this.comms.emitCallout(victim.team, victim.id, attacker.id, attacker.x, attacker.z, 'ambush', t, this.metrics);
+      if (stRes?.startled && seenAttacker && this.humanMode) {
+        this.comms.emitCallout(victim.team, victim.id, seenAttacker.id, seenAttacker.x, seenAttacker.z, 'ambush', t, this.metrics);
       }
     }
   }
@@ -1040,23 +1047,20 @@ export class NV2 extends NV13Pro {
     const bV = this.brains.get(victim.id);
     if (bV) bV.stepReward -= 1.35;
 
-    // Immediately trigger online Adam update + save on match end
+    // Reinforce the outcome before the final match checkpoint.
     if (this.neural.trainMiniBatch(10, 0.0032)) {
       this.metrics.neuralUpdates = this.neural.updates;
     }
-    if (this.match.ended) this.neural.saveWeights();
+  }
+
+  onMatchEnd() {
+    this.neural.saveWeights();
   }
 
   onReload(actor) {
-    super.onReload(actor);
-    const enemyTeam = 1 - actor.team;
-    const hears = this.match.actors.some(m => m.alive && m.team === enemyTeam && dist2(m.x, m.z, actor.x, actor.z) < 34);
-    if (hears) {
-      const stE = this.nv2Teams[enemyTeam];
-      stE.pushToken(this.buildToken(enemyTeam, 5, null, actor));
-      stE.executeTargetId = actor.id;
-      stE.executeUntil = this.match.time + 2.2;
-    }
+    this.match.echoPulse.emit(this.match, {
+      kind: 'reload', pos: eyeOf(actor), actor, team: actor.team, loudness: .5
+    });
   }
 
   onTanker(actor, tanker) {
@@ -1276,7 +1280,8 @@ export class NV2 extends NV13Pro {
       const cy = s.p[1] + s.dir[1] * along - ay;
       const cz = s.p[2] + s.dir[2] * along - az;
       const missH = Math.hypot(cx, cz);
-      if (missH < 0.72 && Math.abs(cy) < 0.88) {
+      if (missH < 0.72 && Math.abs(cy) < 0.88 &&
+          incomingPathClear(s, along, [cx + ax, cy + ay, cz + az])) {
         bestImp = tImp;
         const px = -s.dir[2], pz = s.dir[0];
         const sideDot = cx * px + cz * pz;
@@ -1386,6 +1391,24 @@ export class NV2 extends NV13Pro {
     const cog = this.teams[listener.team];
     const t = this.match.time;
     const px = rep.perceivedPos[0], pz = rep.perceivedPos[2];
+    if (rep.kind === 'reload') {
+      const source = rep.sourceActor;
+      if (!source?.alive || source.spawnId !== rep.sourceSpawnId || rep.reloadUntil <= t) return;
+      const {pr} = cog.ensureEnemy(source.id);
+      if (pr.lastReloadCue === rep.emittedAt) return;
+      pr.lastReloadCue = rep.emittedAt;
+      pr.reloadUntil = Math.max(pr.reloadUntil, rep.reloadUntil);
+      pr.shotsSinceReload = 0;
+      const team = this.nv2Teams[listener.team];
+      team.pushToken(this.buildToken(listener.team, 5, null, {x: px, z: pz}));
+      if (cog.beliefs.get(source.id)?.conf > .34) {
+        team.executeTargetId = source.id;
+        team.executeUntil = pr.reloadUntil;
+      }
+      if (source.human) this.match.synapse?.observeReload();
+      return;
+    }
+
     if (b) {
       // Only let acoustic arrivals update suspicion if NPC does not currently have direct visual LOS
       if (!b.seen) {

@@ -188,10 +188,6 @@ export class Match {
     if (!a.alive || this.ended || a.reload > 0 || a.burstLeft || a.mag >= this.weapon(a).capacity || a.stock <= 0)return false;
     a.reload = this.weapon(a).reload;
     this.nv.onReload?.(a);
-    if (a.human && this.synapse) {
-      const heard = this.actors.some(e => e.alive && e.team !== a.team && Math.hypot(e.x - a.x, e.z - a.z) <= 28);
-      if (heard) this.synapse.observeReload();
-    }
     this.event('reload', {actor: a});
     return true;
   }
@@ -255,6 +251,7 @@ export class Match {
         trail: [[...p]],
         trailClock: 0,
         guided: !!guidedInfo?.guided,
+        thermalGuidance: !!(a.df?.ads && a.df.scope === 'thermal'),
         homingTargetId: guidedInfo?.targetId ?? -1,
         homingSpawnId: this.actors[guidedInfo?.targetId]?.spawnId,
         homingBudget: guidedInfo ? guidedInfo.homingBudget : 0,
@@ -385,6 +382,7 @@ export class Match {
     this.ended = true;
     this.shots.length = 0;
     this.synapse?.save();
+    this.nv.onMatchEnd?.();
     this.event('end', {winner});
   }
 
@@ -521,7 +519,76 @@ export class Match {
       }
     }
   }
+  beginPenetration(s, ball, normal, mat, time) {
+    const entry = ball.entryPos;
+    s.materialPass = {ball, normal, mat, time, remaining: ball.thickness / ((s.speed + ball.speed) * .5)};
+    s.guided = false;
+    this.effects.push({
+      kind: 'wall', p: [...entry], dir: [...s.dir], normal, gun: s.gun, source: s.source,
+      team: s.team, metal: mat === 'steel', mat, life: .34, max: .34, actor: s.owner.id, target: false, seed: ++this.seq
+    });
+    this.scorches.push({
+      p: add(entry, scale(normal, .014)), normal, mat, gun: s.gun, source: s.source,
+      life: 1.85, max: 1.85, seed: this.seq
+    });
+    if (this.scorches.length > 26) this.scorches.shift();
+    if (mat === 'steel') {
+      const resHit = this.resonance.exciteStrike(entry, 0.9, s.owner, this);
+      if (resHit) this.event('resonate', {...resHit, actor: s.owner, mat});
+    }
+  }
+
+  advancePenetration(s, dt) {
+    const pass = s.materialPass;
+    const elapsed = Math.min(pass.remaining, s.life, dt);
+    pass.remaining -= elapsed;
+    s.life -= elapsed;
+    s.age += elapsed;
+    const time = Math.max(pass.time, this.time - dt + elapsed);
+    if (pass.remaining > 0) {
+      if (s.life > 0) return true;
+      this.chronoTrace.finishShot(s, pass.ball.entryPos, 'wall', time);
+      return false;
+    }
+
+    const {ball, normal, mat} = pass;
+    s.materialPass = null;
+    this.techStats.penetrations++;
+    this.chronoTrace.recordPenetration(s, ball.entryPos, ball.exitPos, normal, ball.thickness, mat, pass.time, time);
+    s.old = [...ball.entryPos];
+    s.p = ball.exitPos;
+    s.dir = ball.dir;
+    s.speed = ball.speed;
+    s.damage = ball.damage;
+    s.penetrations = (s.penetrations || 0) + 1;
+    s.penetrated = true;
+    if (s.trail) {
+      s.trail.push([...ball.entryPos], [...ball.exitPos]);
+      while (s.trail.length > 10) s.trail.shift();
+    }
+    this.effects.push({
+      kind: 'penetrate', p: [...ball.exitPos], dir: [...ball.dir], normal: ball.exitNormal, gun: s.gun, source: s.source,
+      team: s.team, metal: mat === 'steel', mat, life: .44, max: .44, actor: s.owner.id, target: false, seed: ++this.seq
+    });
+    this.scorches.push({
+      p: add(ball.exitPos, scale(ball.exitNormal, .014)), normal: ball.exitNormal, mat, gun: s.gun, source: s.source,
+      life: 1.85, max: 1.85, seed: ++this.seq
+    });
+    if (this.scorches.length > 26) this.scorches.shift();
+    this.aeroVortex.injectSmoke(ball.exitPos[0], ball.exitPos[2], 0.52, 0.55, 1, ball.dir[0] * 2.2, ball.dir[2] * 2.2);
+    this.thermoFlux.depositHeat(ball.exitPos[0], ball.exitPos[2], 0.78, 1);
+    this.echoPulse.emit(this, {kind: 'penetrate', pos: ball.exitPos, actor: s.owner, team: s.team, loudness: 0.76, gun: s.gun});
+    this.event('penetrate', {point: ball.exitPos, entry: ball.entryPos, dir: ball.dir, mat, thickness: ball.thickness, gun: s.gun, actor: s.owner});
+    if (s.life <= 0) {
+      this.chronoTrace.finishShot(s, s.p, 'miss', time);
+      return false;
+    }
+    const left = dt - elapsed;
+    return left <= 1e-8 || this.projectile(s, left);
+  }
+
   projectile(s, dt) {
+    if (s.materialPass) return this.advancePenetration(s, dt);
     if (s.guided)steerGuidedShot(this, s, dt);
     const a = s.p;
     // AeroVortex 1.0 physical harbor crosswind coupling (subtle caliber-scaled aerodynamic drift)
@@ -605,8 +672,9 @@ export class Match {
     }
     s.old = a;
     s.p = point;
-    s.life -= dt;
-    s.age = (s.age || 0) + travel * Math.min(1, at);
+    const flight = travel * Math.min(1, at);
+    s.life -= flight;
+    s.age = (s.age || 0) + flight;
     // Supersonic Mach shockwave aero-acoustic coupling to nearby hollow steel shipping containers
     if (s.speed >= 340 && s.age >= (s._nextMachAt || 0.008)) {
       s._nextMachAt = s.age + 0.045;
@@ -651,6 +719,7 @@ export class Match {
         const ball = !isWater && hitInfo ? solveBallisticImpact(s, hitInfo, this.rng) : {action: 'stop'};
 
         if (ball.action === 'ricochet') {
+          s.life -= travel - flight;
           this.techStats.ricochets++;
           this.chronoTrace.recordRicochet(s, hitInfo.point, normal, ball.grazingSin, impactTime);
           s.old = [...hitInfo.point];
@@ -696,49 +765,8 @@ export class Match {
         }
 
         if (ball.action === 'penetrate') {
-          this.techStats.penetrations++;
-          this.chronoTrace.recordPenetration(s, ball.entryPos, ball.exitPos, normal, ball.thickness, mat, impactTime);
-          s.old = [...ball.entryPos];
-          s.p = ball.exitPos;
-          s.dir = ball.dir;
-          s.speed = ball.speed;
-          s.damage = ball.damage;
-          s.guided = false;
-          s.penetrations = (s.penetrations || 0) + 1;
-          s.penetrated = true;
-          if (s.trail) {
-            s.trail.push([...ball.entryPos], [...ball.exitPos]);
-            while (s.trail.length > 10) s.trail.shift();
-          }
-          // Entry crater + far-side exit splinter/ember plume!
-          this.effects.push({
-            kind: 'wall',
-            p: [...ball.entryPos], dir: [...s.dir], normal, gun: s.gun, source: s.source,
-            team: s.team, metal, mat, life: .34, max: .34, actor: s.owner.id, target: false, seed: ++this.seq
-          });
-          this.effects.push({
-            kind: 'penetrate',
-            p: [...ball.exitPos], dir: [...ball.dir], normal: ball.exitNormal, gun: s.gun, source: s.source,
-            team: s.team, metal, mat, life: .44, max: .44, actor: s.owner.id, target: false, seed: ++this.seq
-          });
-          this.scorches.push({
-            p: [ball.entryPos[0] + normal[0] * .014, ball.entryPos[1] + normal[1] * .014, ball.entryPos[2] + normal[2] * .014],
-            normal, mat, gun: s.gun, source: s.source, life: 1.85, max: 1.85, seed: this.seq
-          });
-          this.scorches.push({
-            p: [ball.exitPos[0] + ball.exitNormal[0] * .014, ball.exitPos[1] + ball.exitNormal[1] * .014, ball.exitPos[2] + ball.exitNormal[2] * .014],
-            normal: ball.exitNormal, mat, gun: s.gun, source: s.source, life: 1.85, max: 1.85, seed: ++this.seq
-          });
-          while (this.scorches.length > 26) this.scorches.shift();
-          this.aeroVortex.injectSmoke(ball.exitPos[0], ball.exitPos[2], 0.52, 0.55, 1, ball.dir[0] * 2.2, ball.dir[2] * 2.2);
-          this.thermoFlux.depositHeat(ball.exitPos[0], ball.exitPos[2], 0.78, 1);
-          if (mat === 'steel') {
-            const resHit = this.resonance.exciteStrike(ball.entryPos, 0.9, s.owner, this);
-            if (resHit) this.event('resonate', {...resHit, actor: s.owner, mat});
-          }
-          this.echoPulse.emit(this, {kind: 'penetrate', pos: ball.exitPos, actor: s.owner, team: s.team, loudness: 0.76, gun: s.gun});
-          this.event('penetrate', {point: ball.exitPos, entry: ball.entryPos, dir: ball.dir, mat, thickness: ball.thickness, gun: s.gun, actor: s.owner});
-          return s.life > 0;
+          this.beginPenetration(s, ball, normal, mat, impactTime);
+          return this.advancePenetration(s, dt - flight);
         }
 
         this.chronoTrace.finishShot(s, p, isWater ? 'miss' : 'wall', impactTime);
