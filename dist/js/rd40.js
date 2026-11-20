@@ -88,10 +88,10 @@ export const RD_SPECS = {
   }
 };
 
-export const isRDWeapon = gun => gun in RD_SPECS;
+export const isRDWeapon = gun => Object.hasOwn(RD_SPECS, gun);
 
 export function initialRD(gun = RD) {
-  const spec = RD_SPECS[gun] || RD_SPECS[RD];
+  const spec = isRDWeapon(gun) ? RD_SPECS[gun] : RD_SPECS[RD];
   return {
     gun,
     tier: spec.tier,
@@ -141,7 +141,12 @@ function aimAt(a, e, speed, useLead = false) {
   return {origin, p, raw, range, yaw: Math.atan2(dx, -dz), pitch: Math.atan2(dy, range)};
 }
 
-function clearLock(d) {
+function endWallTrack(d, t) {
+  if (d.d01Active) d.d01Cooldowns[d.focusId] = t + RD40_D01_COOLDOWN;
+}
+
+function clearLock(d, t) {
+  endWallTrack(d, t);
   d.focusId = -1;
   d.focus = 0;
   d.locked = false;
@@ -169,15 +174,15 @@ export function updateRD(match, a, dt) {
   // 1. Validate & maintain active target across the weapon's lock hold cone (plus D01 SENSOR on RD40)
   if (d.focusId >= 0) {
     const cur = match.actors[d.focusId];
-    if (!cur?.alive || cur.team === a.team) {
-      clearLock(d);
+    if (!cur?.alive || cur.team === a.team || cur.spawnId !== d.focusSpawnId) {
+      clearLock(d, t);
     } else {
       const s = aimAt(a, cur, spec.speed, false);
       const sep = Math.hypot(angleDiff(s.yaw, a.yaw) * Math.cos(a.pitch), s.pitch - a.pitch);
       const hasLOS = obstruction(s.origin, s.raw) > 1;
       d.targetDist = s.range;
-      if (s.range > spec.maxRange || sep >= spec.lockHold) {
-        clearLock(d);
+      if (s.range > spec.maxRange || sep >= (d.locked ? spec.lockHold : spec.lockAcquire)) {
+        clearLock(d, t);
       } else if (hasLOS) {
         d.occluded = false;
         d.d01Active = false;
@@ -193,53 +198,52 @@ export function updateRD(match, a, dt) {
         d.focus = Math.min(1, d.focus + dt / spec.focusTime);
         d.locked = d.focus >= 1;
         if (d.d01Timer <= 1e-6) {
-          d.d01Cooldowns[cur.id] = t + RD40_D01_COOLDOWN;
-          clearLock(d);
+          clearLock(d, t);
         }
       } else {
-        clearLock(d);
+        clearLock(d, t);
       }
     }
   }
 
   // 2. Scan for new target inside the weapon's lock acquisition cone
-  if (d.focusId < 0 || (!d.locked && t >= d.scanAt)) {
-    if (t >= d.scanAt || d.focusId < 0) {
-      d.scanAt = t + 0.04;
-      let best = -1, bestCost = Infinity, bestOccluded = false, bestRange = 0;
-      for (const e of match.actors) {
-        if (!e.alive || e.team === a.team) continue;
-        const s = aimAt(a, e, spec.speed, false);
-        if (s.range > spec.maxRange) continue;
-        const sep = Math.hypot(angleDiff(s.yaw, a.yaw) * Math.cos(a.pitch), s.pitch - a.pitch);
-        if (sep >= spec.lockAcquire) continue;
-        const hasLOS = obstruction(s.origin, s.raw) > 1;
-        if (hasLOS) {
-          if (sep < bestCost) {
-            best = e.id;
-            bestCost = sep;
-            bestOccluded = false;
-            bestRange = s.range;
-          }
-        } else if (spec.d01Duration > 0 && s.range <= RD40_D01_PROX_RANGE && (d.d01Cooldowns[e.id] || 0) <= t) {
-          const sensorCost = sep + 0.08;
-          if (sensorCost < bestCost) {
-            best = e.id;
-            bestCost = sensorCost;
-            bestOccluded = true;
-            bestRange = s.range;
-          }
+  if (!d.locked && t >= d.scanAt) {
+    d.scanAt = t + 0.04;
+    let best = -1, bestCost = Infinity, bestOccluded = false, bestRange = 0;
+    for (const e of match.actors) {
+      if (!e.alive || e.team === a.team) continue;
+      const s = aimAt(a, e, spec.speed, false);
+      if (s.range > spec.maxRange) continue;
+      const sep = Math.hypot(angleDiff(s.yaw, a.yaw) * Math.cos(a.pitch), s.pitch - a.pitch);
+      if (sep >= spec.lockAcquire) continue;
+      const hasLOS = obstruction(s.origin, s.raw) > 1;
+      if (hasLOS) {
+        if (sep < bestCost) {
+          best = e.id;
+          bestCost = sep;
+          bestOccluded = false;
+          bestRange = s.range;
+        }
+      } else if (spec.d01Duration > 0 && s.range <= RD40_D01_PROX_RANGE && (d.d01Cooldowns[e.id] || 0) <= t) {
+        const sensorCost = sep + 0.08;
+        if (sensorCost < bestCost) {
+          best = e.id;
+          bestCost = sensorCost;
+          bestOccluded = true;
+          bestRange = s.range;
         }
       }
-      if (best >= 0 && best !== d.focusId) {
-        d.focusId = best;
-        d.focus = 0;
-        d.locked = false;
-        d.occluded = bestOccluded;
-        d.d01Active = bestOccluded;
-        d.d01Timer = spec.d01Duration;
-        d.targetDist = bestRange;
-      }
+    }
+    if (best >= 0 && best !== d.focusId) {
+      endWallTrack(d, t);
+      d.focusId = best;
+      d.focusSpawnId = match.actors[best].spawnId;
+      d.focus = 0;
+      d.locked = false;
+      d.occluded = bestOccluded;
+      d.d01Active = bestOccluded;
+      d.d01Timer = spec.d01Duration;
+      d.targetDist = bestRange;
     }
   }
 
@@ -295,7 +299,7 @@ export function bulletGuidanceRD(match, a, barrelSide = 0) {
   const spec = RD_SPECS[d?.gun || a.gun] || RD_SPECS[RD];
   const microFan = barrelSide * (a.gun === RD ? 0.0022 : 0.0042);
   const e = d && d.focusId >= 0 ? match.actors[d.focusId] : null;
-  if (!d || !d.locked || !e?.alive || e.team === a.team) {
+  if (!d || !d.locked || !e?.alive || e.team === a.team || e.spawnId !== d.focusSpawnId) {
     return {
       dir: forward(a.yaw + microFan, clamp(a.pitch, -1.31, 1.31)),
       guided: false,
@@ -305,12 +309,13 @@ export function bulletGuidanceRD(match, a, barrelSide = 0) {
       homingCos: spec.homingCos
     };
   }
+  const raw = aimAt(a, e, spec.speed);
   const s = aimAt(a, e, spec.speed, true);
   const yaw = angleDiff(s.yaw, a.yaw);
   const pitch = s.pitch - a.pitch;
   const ang = Math.hypot(yaw, pitch);
-  const hasLOS = obstruction(s.origin, s.raw) > 1;
-  if (!hasLOS || ang > spec.lockHold) {
+  const separation = Math.hypot(angleDiff(raw.yaw, a.yaw) * Math.cos(a.pitch), raw.pitch - a.pitch);
+  if (raw.range > spec.maxRange || separation >= spec.lockHold || obstruction(raw.origin, raw.raw) <= 1) {
     return {
       dir: forward(a.yaw + microFan, clamp(a.pitch, -1.31, 1.31)),
       guided: false,

@@ -51,7 +51,7 @@ vec3 ironbowPalette(float t){
 }
 
 // Applies physical GPU Cyber-FLIR thermal imaging over reconstructed 3D world geometry (pierces smoke, respects solid cover!)
-vec3 applyThermoFluxFLIR(vec2 uv, float worldMask, float depth, float time, vec3 hdrColor){
+vec3 applyThermoFluxFLIR(vec2 uv, float worldMask, float actorMask, float depth, float time, vec3 hdrColor){
   if(uFlirBlend<=.005)return hdrColor;
   float lum=dot(max(hdrColor,vec3(0.)),vec3(.2126,.7152,.0722));
   // Keep first-person weapon cleanly styled as cool dark-indigo metallic silhouette + warm glowing barrel
@@ -68,7 +68,8 @@ vec3 applyThermoFluxFLIR(vec2 uv, float worldMask, float depth, float time, vec3
 
   vec3 wPos=reconstructWorldPos(uv,depth);
   vec2 tuv=vec2((wPos.x+25.)/50.,(wPos.z+100.)/200.);
-  vec4 th=texture(uThermoTex,clamp(tuv,vec2(.006),vec2(.994)));
+  bool inYard=all(greaterThanEqual(tuv,vec2(0.)))&&all(lessThanEqual(tuv,vec2(1.)));
+  vec4 th=inYard?texture(uThermoTex,tuv):vec4(0.);
   float baseT=th.r;       // Solar-baked + diffused surface temperature
   float spoor=th.g;       // Dynamic footprints, hot craters, ricochet streaks, hot brass!
   float gradMag=th.b;     // Thermal gradient contour edge
@@ -87,7 +88,7 @@ vec3 applyThermoFluxFLIR(vec2 uv, float worldMask, float depth, float time, vec3
     float hDist=length(d.xz);
     float vDist=abs(d.y);
     if(hDist<.62 && vDist<1.12){
-      float body=smoothstep(.62,.15,hDist)*smoothstep(1.12,.20,vDist);
+      float body=(1.-smoothstep(.15,.62,hDist))*(1.-smoothstep(.20,1.12,vDist))*actorMask;
       actorGlow=max(actorGlow,body*ac.w);
     }
   }

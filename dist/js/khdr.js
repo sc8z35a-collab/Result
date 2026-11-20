@@ -421,7 +421,8 @@ void main(){
       base=mix(smokeCol,base,smoothstep(.15,.85,uFlirBlend));
     }
     if(uFlirBlend>.005){
-      base=applyThermoFluxFLIR(vUV,worldMask,sceneDepth,uTime,base);
+      float actorMask=1.-step(.055,abs(rawM.a-.8));
+      base=applyThermoFluxFLIR(vUV,worldMask,actorMask,sceneDepth,uTime,base);
     }
   }
 
@@ -496,7 +497,6 @@ export class KHDRPipeline {
         destroyTarget(gl, probe);
       }
     }
-    this.sceneFormat = this.floatHDR ? gl.RGBA16F : gl.RGBA8;
 
     this.adapt16P = makeProgram(gl, postVS, khdrAdapt16FS);
     this.adapt4P = makeProgram(gl, postVS, khdrAdapt4FS);
@@ -551,20 +551,36 @@ export class KHDRPipeline {
   ensure(w, h) {
     if (this.targets && this.size[0] === w && this.size[1] === h) return;
     const gl = this.gl;
-    if (this.targets) for (const t of Object.values(this.targets)) destroyTarget(gl, t);
+    this.releaseTargets();
     const hw = Math.max(64, w >> 1), hh = Math.max(64, h >> 1);
     const qw = Math.max(32, w >> 2), qh = Math.max(32, h >> 2);
-    const fmt = this.sceneFormat;
-    this.targets = {
-      scene: makeTarget(gl, w, h, fmt, true),
-      a0: makeTarget(gl, hw, hh, fmt, false),
-      a1: makeTarget(gl, hw, hh, fmt, false),
-      b0: makeTarget(gl, qw, qh, fmt, false),
-      b1: makeTarget(gl, qw, qh, fmt, false),
-      s0: makeTarget(gl, qw, qh, fmt, false),
-      s1: makeTarget(gl, qw, qh, fmt, false)
-    };
-    this.size = [w, h];
+    const formats = this.floatHDR ? [gl.RGBA16F, gl.RGBA8] : [gl.RGBA8];
+    for (const fmt of formats) {
+      const targets = {};
+      for (const [name, width, height] of [
+        ['scene', w, h], ['a0', hw, hh], ['a1', hw, hh],
+        ['b0', qw, qh], ['b1', qw, qh], ['s0', qw, qh], ['s1', qw, qh]
+      ]) {
+        const target = makeTarget(gl, width, height, fmt, name === 'scene');
+        if (!target) break;
+        targets[name] = target;
+      }
+      if (targets.s1) {
+        this.targets = targets;
+        this.size = [w, h];
+        this.floatHDR = fmt === gl.RGBA16F;
+        this.resetAdaptation();
+        return;
+      }
+      for (const target of Object.values(targets)) destroyTarget(gl, target);
+    }
+    throw new Error('画面処理用の WebGL バッファを作成できません');
+  }
+
+  releaseTargets() {
+    if (!this.targets) return;
+    for (const target of Object.values(this.targets)) destroyTarget(this.gl, target);
+    this.targets = null;
   }
 
   resetAdaptation() {

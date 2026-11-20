@@ -503,6 +503,12 @@ export class ShadowFlame {
     this.screenDim = [hw, hh];
   }
 
+  releaseScreen() {
+    destroyColorTarget(this.gl, this.screenA);
+    destroyColorTarget(this.gl, this.screenB);
+    this.screenA = this.screenB = null;
+  }
+
   // Texel-snapped light-space orthographic projection (eliminates shadow shimmering when moving/turning!)
   snappedOrtho(center, halfExtent, texSize, depthHalf) {
     const lv = this.lightView;
@@ -513,7 +519,7 @@ export class ShadowFlame {
     const texel = (2 * halfExtent) / texSize;
     const sx = Math.floor(lx / texel) * texel;
     const sy = Math.floor(ly / texel) * texel;
-    const dist = -lz;
+    const dist = Math.round(-lz);
     const near = Math.max(4, dist - depthHalf);
     const far = dist + depthHalf;
     return {

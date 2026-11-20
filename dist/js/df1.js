@@ -62,23 +62,36 @@ function aimAt(a, e, useLead = false) {
 
 export function senseFocus(match, a, dt) {
   const d = a.df, t = match.time;
+  const current = match.actors[d.focusId];
+  const usable = (e, cone) => {
+    if (!e?.alive || e.team === a.team) return Infinity;
+    const s = aimAt(a, e);
+    const sep = Math.hypot(angleDiff(s.yaw, a.yaw) * Math.cos(a.pitch), s.pitch - a.pitch);
+    return s.range <= 104 && sep < cone && obstruction(s.origin, s.raw) > 1 ? sep : Infinity;
+  };
+  if (current && (!current.alive || current.spawnId !== d.focusSpawnId)) {
+    d.focusId = -1;
+    d.focus = 0;
+    d.locked = false;
+  }
   if (t >= d.scanAt) {
     d.scanAt = t + .048;
-    let best = -1, cost = Infinity;
-    for (const e of match.actors) {
-      if (!e.alive || e.team === a.team)continue;
-      const s = aimAt(a, e, false);
-      if (s.range > 104)continue;
-      const sep = Math.hypot(angleDiff(s.yaw, a.yaw) * Math.cos(a.pitch), s.pitch - a.pitch),
-        cone = e.id === d.focusId ? ARV1_LOCK_HOLD : ARV1_LOCK_ACQUIRE;
-      if (sep >= cone || sep >= cost || obstruction(s.origin, s.raw) <= 1)continue;
-      best = e.id;
-      cost = sep
+    let best = d.focusId, cost = usable(match.actors[best], d.locked ? ARV1_LOCK_HOLD : ARV1_LOCK_ACQUIRE);
+    if (!d.locked || !Number.isFinite(cost)) {
+      if (!Number.isFinite(cost)) best = -1;
+      for (const e of match.actors) {
+        const sep = usable(e, ARV1_LOCK_ACQUIRE);
+        if (sep < cost) {
+          best = e.id;
+          cost = sep;
+        }
+      }
     }
     if (best !== d.focusId) {
       d.focus = 0;
       d.locked = false;
-      d.focusId = best
+      d.focusId = best;
+      d.focusSpawnId = match.actors[best]?.spawnId;
     }
   }
   if (d.focusId >= 0) {
@@ -94,9 +107,11 @@ export function senseFocus(match, a, dt) {
 // All auto-aim redirection happens strictly on the fired projectile side (bulletGuidanceDF + steerGuidedShot).
 export function assist(match, a) {
   const d = a.df, e = match.actors[d.focusId];
-  if (!d.locked || !e?.alive || e.team === a.team)return null;
+  if (!d.locked || !e?.alive || e.team === a.team || e.spawnId !== d.focusSpawnId) return null;
+  const raw = aimAt(a, e);
   const s = aimAt(a, e, true), yaw = angleDiff(s.yaw, a.yaw), pitch = s.pitch - a.pitch, ang = Math.hypot(yaw, pitch);
-  if (ang > ARV1_ASSIST_MAX_ANG || obstruction(s.origin, s.raw) <= 1) {
+  const separation = Math.hypot(angleDiff(raw.yaw, a.yaw) * Math.cos(a.pitch), raw.pitch - a.pitch);
+  if (raw.range > 104 || separation >= ARV1_LOCK_HOLD || obstruction(raw.origin, raw.raw) <= 1) {
     d.locked = false;
     d.focus = 0;
     d.focusId = -1;
@@ -161,7 +176,7 @@ export function bulletGuidanceDF(match, a) {
 export function steerGuidedShot(match, s, dt) {
   if (!s.guided || s.homingTargetId < 0 || s.homingBudget <= 1e-5)return;
   const e = match.actors[s.homingTargetId];
-  if (!e?.alive || e.team === s.team) {
+  if (!e?.alive || e.team === s.team || (s.homingSpawnId !== undefined && e.spawnId !== s.homingSpawnId)) {
     s.homingBudget = 0;
     return
   }

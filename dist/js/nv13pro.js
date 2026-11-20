@@ -247,7 +247,7 @@ class TeamCognition {
   }
 
   // Negative observation: clear visible cells where enemy is NOT seen -> probability flows to unseen flank lanes!
-  suppressVisible(origin, yaw, seenEnemyIds, t) {
+  suppressVisible(origin, yaw, seenEnemyIds, t, obscured = () => false) {
     const wm = this.graph.walkMask;
     const fx = Math.sin(yaw), fz = -Math.cos(yaw);
     const rx = Math.cos(yaw), rz = Math.sin(yaw);
@@ -260,7 +260,8 @@ class TeamCognition {
         if (Math.abs(px) > 24 || Math.abs(pz) > 98) break;
         const c = cellOf(px, pz);
         if (!wm[c]) break;
-        if (obstruction(origin, [px, 1.38, pz]) <= 1) break;
+        const sample = [px, 1.38, pz];
+        if (obstruction(origin, sample) <= 1 || obscured(sample)) break;
         cleared.push(c);
       }
     }
@@ -681,7 +682,7 @@ export class NV13Pro extends NV12 {
   }
 
   // Upgrade perception: integrates Bayesian Belief updates, Opponent Profiling, and Negative Observation!
-  perceive(a, b) {
+  perceive(a, b, obscured = () => false, recognize = () => true) {
     const t = this.match.time;
     const cog = this.teams[a.team];
     const eye = eyeOf(a);
@@ -696,12 +697,12 @@ export class NV13Pro extends NV12 {
       const dx = e.x - a.x, dz = e.z - a.z, d = Math.hypot(dx, dz);
       const aimYaw = Math.atan2(dx, -dz);
       const fovDiff = Math.abs(angleDiff(a.yaw, aimYaw));
-      const inView = d < 12 || (d < 82 && fovDiff < 1.48);
-      if (inView && obstruction(eye, tp) > 1) {
+      const inView = b.spy ? d < 16 || (d < 86 && fovDiff < 1.72) : d < 12 || (d < 82 && fovDiff < 1.48);
+      if (inView && obstruction(eye, tp) > 1 && !obscured(tp) && recognize(e)) {
         seenIds.add(e.id);
         b.contacts.set(e.id, {
           x: e.x, y: e.y, z: e.z, vx: e.vx || 0, vz: e.vz || 0,
-          t, seen: true, gun: e.gun, hp: e.hp + e.shield
+          t, spawnId: e.spawnId, seen: true, gun: e.gun, hp: e.hp + e.shield
         });
         this.intel[a.team].set(e.id, {x: e.x, z: e.z, t, by: a.id});
         cog.collapseBelief(e.id, e.x, e.z, e.vx || 0, e.vz || 0, 1.0, t, 2.2);
@@ -725,14 +726,14 @@ export class NV13Pro extends NV12 {
 
     // Periodic Negative Observation sweep -> shifts Bayesian mass to unseen flanks!
     if (t >= b.negObsAt) {
-      cog.suppressVisible(eye, a.yaw, seenIds, t);
+      cog.suppressVisible(eye, a.yaw, seenIds, t, obscured);
       b.negObsAt = t + .28 + b.rng() * .16;
     }
 
     // Expire dead/stale contacts
     for (const [id, c] of b.contacts) {
       const e = this.match.actors[id];
-      if (!e?.alive || t - c.t > 12) b.contacts.delete(id);
+      if (!e?.alive || e.spawnId !== c.spawnId || t - c.t > 12) b.contacts.delete(id);
     }
 
     // Pick best target combining live contacts, squad intel, reload vulnerability, and threat priority!
@@ -749,11 +750,11 @@ export class NV13Pro extends NV12 {
       const d = dist2(a.x, a.z, tx, tz);
       const band = WEAPON_BAND[a.gun] || WEAPON_BAND['SW T'];
       let sc = (seen ? 62 : bf.conf * 34) - Math.abs(d - band.ideal) * .42;
-      if (e.hp + e.shield < 45) sc += 26;
+      if (c && c.hp < 45) sc += 26;
       if (e.id === cog.primaryTargetId) sc += 16; // Squad focus fire
       if (pr.reloadUntil > t) sc += 22; // Punish reloading enemy!
-      if (e.gun === 'MS10') sc += 14;
-      if (e.gun === 'DF1 OUT') sc += 12;
+      if (c?.gun === 'MS10' || pr.gun === 'MS10') sc += 14;
+      if (c?.gun === 'DF1 OUT' || pr.gun === 'DF1 OUT') sc += 12;
       if (seen) {
         const eFwdX = Math.sin(e.yaw), eFwdZ = -Math.cos(e.yaw);
         const toMe = ((a.x - e.x) * eFwdX + (a.z - e.z) * eFwdZ) / Math.max(1, d);

@@ -1,5 +1,6 @@
 import {clamp} from './geometry.js';
 export const FIELD = {width: 50, length: 200};
+export const WATER_HEIGHT = -1.68;
 // x and z are metres from the centre of the playable wharf. Above-ground cargo
 // is listed separately so the visible stacks and the occupied volumes agree.
 export const cargo = [
@@ -100,7 +101,7 @@ export function walkable(x, z, r = .41, feet = 0) {
   if (Math.abs(x) > 25 - r || Math.abs(z) > 100 - r)return false;
   for (const i of nearby(x - r, z - r, x + r, z + r)) {
     const o = obstacles[i];
-    if (feet >= o.y1 - .018 || feet + 1.7 <= o.y0)continue;
+    if (feet >= o.y1 - .018 || feet + 1.7 <= o.y0) continue;
     const dx = x - clamp(x, o.x0, o.x1), dz = z - clamp(z, o.z0, o.z1);
     if (dx * dx + dz * dz < r * r)return false
   }
@@ -110,8 +111,9 @@ export function floorAt(x, z, oldY) {
   let h = 0;
   for (const i of nearby(x - .29, z - .29, x + .29, z + .29)) {
     const o = obstacles[i];
-    if (o.y1 > oldY + .04 || x < o.x0 - .24 || x > o.x1 + .24 || z < o.z0 - .24 || z > o.z1 + .24)continue;
-    h = Math.max(h, o.y1)
+    if (o.y1 > oldY + .04) continue;
+    const dx = x - clamp(x, o.x0, o.x1), dz = z - clamp(z, o.z0, o.z1);
+    if (dx * dx + dz * dz <= .24 ** 2) h = Math.max(h, o.y1);
   }
   return h
 }
@@ -129,86 +131,98 @@ export function surfaceAt(x, z, y) {
   }
   return best
 }
-export function rayBoxSpan(a, b, o) {
-  let enter = 0, exit = 1;
+// Parallel rays on a face may graze it. A segment starting on a face
+// and moving outward, however, travels entirely through free space.
+function boxSpan(a, b, o) {
+  let enter = -Infinity, exit = Infinity, enterAxis = -1, exitAxis = -1;
+  let enterSign = 0, exitSign = 0;
   for (const [k, lo, hi] of [[0, o.x0, o.x1], [1, o.y0, o.y1], [2, o.z0, o.z1]]) {
     const d = b[k] - a[k];
     if (Math.abs(d) < 1e-8) {
-      if (a[k] < lo || a[k] > hi)return null;
-      continue
+      if (a[k] < lo || a[k] > hi) return null;
+      continue;
     }
-    let p = (lo - a[k]) / d, q = (hi - a[k]) / d;
-    if (p > q)[p, q] = [q, p];
-    enter = Math.max(enter, p);
-    exit = Math.min(exit, q);
-    if (enter > exit)return null
+    const sign = d > 0 ? 1 : -1;
+    const p = ((sign > 0 ? lo : hi) - a[k]) / d;
+    const q = ((sign > 0 ? hi : lo) - a[k]) / d;
+    if (p > enter) {
+      enter = p;
+      enterAxis = k;
+      enterSign = -sign;
+    }
+    if (q < exit) {
+      exit = q;
+      exitAxis = k;
+      exitSign = sign;
+    }
+    if (enter > exit) return null;
   }
-  return {enter, exit}
+  if (exit <= 0 || enter > 1) return null;
+  return {enter: Math.max(0, enter), exit, enterAxis, enterSign, exitAxis, exitSign};
 }
+
+export function rayBoxSpan(a, b, o) {
+  const span = boxSpan(a, b, o);
+  return span ? {enter: span.enter, exit: Math.min(1, span.exit)} : null;
+}
+
 export function rayBox(a, b, o) {
-  const s = rayBoxSpan(a, b, o);
-  return s ? s.enter : Infinity
+  return boxSpan(a, b, o)?.enter ?? Infinity;
 }
-function boxFaceNormal(point, o) {
-  const eps = 2e-3;
-  if (Math.abs(point[0] - o.x0) < eps)return [-1, 0, 0];
-  if (Math.abs(point[0] - o.x1) < eps)return [1, 0, 0];
-  if (Math.abs(point[2] - o.z0) < eps)return [0, 0, -1];
-  if (Math.abs(point[2] - o.z1) < eps)return [0, 0, 1];
-  if (Math.abs(point[1] - o.y0) < eps)return [0, -1, 0];
-  return [0, 1, 0]
+
+const at = (a, b, t) => a.map((v, i) => v + (b[i] - v) * t);
+const faceNormal = (axis, sign) => {
+  const n = [0, 0, 0];
+  n[axis < 0 ? 1 : axis] = axis < 0 ? 1 : sign;
+  return n;
+};
+
+const deck = {x0: -25, x1: 25, y0: -3.1, y1: 0, z0: -100, z1: 100, mat: 'concrete'};
+function deckSpan(a, b) {
+  if (a[1] >= 0 && (b[1] > 0 || a[1] === b[1])) return null;
+  return boxSpan(a, b, deck);
+}
+
+export function waterCrossing(a, b) {
+  if (a[1] <= WATER_HEIGHT || b[1] > WATER_HEIGHT) return null;
+  return (a[1] - WATER_HEIGHT) / (a[1] - b[1]);
 }
 export function raycastMaterial(a, b) {
-  let nearest = Infinity, hitObj = null, hitSpan = null;
+  let hitSpan = deckSpan(a, b), nearest = hitSpan?.enter ?? Infinity, hitObj = hitSpan ? deck : null;
   for (const i of nearby(Math.min(a[0], b[0]), Math.min(a[2], b[2]), Math.max(a[0], b[0]), Math.max(a[2], b[2]))) {
-    const o = obstacles[i];
-    const span = rayBoxSpan(a, b, o);
+    const o = obstacles[i], span = boxSpan(a, b, o);
     if (span && span.enter < nearest) {
       nearest = span.enter;
       hitObj = o;
-      hitSpan = span
+      hitSpan = span;
     }
   }
-  let groundHit = false;
-  if (b[1] < 0 && a[1] >= 0) {
-    const tg = a[1] / (a[1] - b[1]);
-    if (tg < nearest) {
-      nearest = tg;
-      hitObj = null;
-      hitSpan = null;
-      groundHit = true
-    }
-  }
-  if (!(nearest <= 1))return null;
-  const dx = b[0] - a[0], dy = b[1] - a[1], dz = b[2] - a[2];
-  const point = [a[0] + dx * nearest, a[1] + dy * nearest, a[2] + dz * nearest];
-  if (groundHit || !hitObj)return {t: nearest, point, normal: [0, 1, 0], mat: 'concrete', thickness: Infinity, exitPoint: null, exitNormal: null};
-  const normal = boxFaceNormal(point, hitObj);
-  // Compute true full-slab exit along the ray direction (even if segment b ends inside the box!)
-  let exitT = hitSpan.exit, exitPoint = null, exitNormal = null, thickness = Infinity;
-  const segLen = Math.hypot(dx, dy, dz);
-  if (segLen > 1e-6) {
-    const invL = 1 / segLen;
-    const ux = dx * invL, uy = dy * invL, uz = dz * invL;
-    const far = [point[0] + ux * 16, point[1] + uy * 16, point[2] + uz * 16];
-    const fullSpan = rayBoxSpan(point, far, hitObj);
-    if (fullSpan && fullSpan.exit > 1e-4 && fullSpan.exit < 0.999) {
-      thickness = fullSpan.exit * 16;
-      exitPoint = [point[0] + ux * thickness, point[1] + uy * thickness, point[2] + uz * thickness];
-      exitNormal = boxFaceNormal(exitPoint, hitObj);
-      exitT = nearest + thickness * invL;
-    }
-  }
-  return {t: nearest, tExit: exitT, point, normal, exitPoint, exitNormal, thickness, mat: hitObj.mat || 'steel', box: hitObj}
+  if (!Number.isFinite(nearest)) return null;
+  const point = at(a, b, nearest);
+  const {enterAxis, enterSign, exitAxis, exitSign, exit: tExit} = hitSpan;
+  const exitPoint = hitObj !== deck && Number.isFinite(tExit) ? at(a, b, tExit) : null;
+  const thickness = exitPoint ? Math.hypot(...exitPoint.map((x, i) => x - point[i])) : Infinity;
+  return {
+    t: nearest, tExit, point, normal: faceNormal(enterAxis, enterSign),
+    exitPoint, exitNormal: exitPoint && faceNormal(exitAxis, exitSign),
+    thickness, mat: hitObj.mat || 'steel', box: hitObj
+  };
 }
+
 export function obstruction(a, b) {
-  let nearest = Infinity;
-  for (const i of nearby(Math.min(a[0], b[0]), Math.min(a[2], b[2]), Math.max(a[0], b[0]), Math.max(a[2], b[2])))nearest = Math.min(nearest, rayBox(a, b, obstacles[i]));
-  if (b[1] < 0 && a[1] >= 0)nearest = Math.min(nearest, a[1] / (a[1] - b[1]));
-  return nearest
+  let nearest = deckSpan(a, b)?.enter ?? Infinity;
+  for (const i of nearby(Math.min(a[0], b[0]), Math.min(a[2], b[2]), Math.max(a[0], b[0]), Math.max(a[2], b[2]))) nearest = Math.min(nearest, rayBox(a, b, obstacles[i]));
+  return nearest;
 }
+
 export function moveActor(a, dx, dz) {
   const tx = clamp(a.x + dx, -24.58, 24.58), tz = clamp(a.z + dz, -99.58, 99.58);
-  if (walkable(tx, a.z, .4, a.y))a.x = tx;
-  if (walkable(a.x, tz, .4, a.y))a.z = tz
+  if (walkable(tx, a.z, .4, a.y)) {
+    if (a.x === tx && dx) a.vx = 0;
+    a.x = tx;
+  } else a.vx = 0;
+  if (walkable(a.x, tz, .4, a.y)) {
+    if (a.z === tz && dz) a.vz = 0;
+    a.z = tz;
+  } else a.vz = 0;
 }

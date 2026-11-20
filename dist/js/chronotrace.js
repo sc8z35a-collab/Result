@@ -170,10 +170,11 @@ export class ChronoTrace {
       outcome === 'kill' ||
       outcome === 'break' ||
       outcome === 'hit' ||
+      outcome === 'shield' ||
       rec.ricochets.length > 0 ||
       rec.penetrations.length > 0 ||
       rec.guided;
-    if (!interesting || rec.distM < 1.2) return;
+    if (!interesting) return;
 
     if (rec.ricochets.length > 0) this.stats.ricochetTraces++;
     if (rec.penetrations.length > 0) this.stats.wallbangTraces++;
@@ -195,10 +196,12 @@ export class ChronoTrace {
     while (this.traces.length && now - this.traces[0].endTime > TRACE_RETENTION) {
       this.traces.shift();
     }
+    if (this.lastPlayerDeathTrace && now - this.lastPlayerDeathTrace.endTime > TRACE_RETENTION) this.lastPlayerDeathTrace = null;
+    if (this.lastPlayerKillTrace && now - this.lastPlayerKillTrace.endTime > TRACE_RETENTION) this.lastPlayerKillTrace = null;
   }
 
   /** Formats a crisp Japanese forensic readout for the active death/kill/highlighted trace. */
-  formatTelemetry(trace = this.lastPlayerDeathTrace || this.lastPlayerKillTrace || this.traces[this.traces.length - 1]) {
+  formatTelemetry(trace = this.traces.at(-1)) {
     if (!trace) return '';
     const tags = [
       `CHRONOTRACE 1.0`,

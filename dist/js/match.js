@@ -1,8 +1,8 @@
 import {clamp, forward, dot, sub, add, scale, random, cross, unit} from './geometry.js';
-import {teams, tankers, walkable, moveActor, floorAt, obstruction, raycastMaterial} from './yard.js';
+import {teams, tankers, walkable, moveActor, floorAt, obstruction, raycastMaterial, waterCrossing} from './yard.js';
 import {NV2} from './nv2.js';
-import {eyeOf, torso, bodyCenter, postureStep} from './posture.js';
-import {DF, initialDF, assist, scheduleDF, bulletGuidanceDF, steerGuidedShot, spendP1, updateDF} from './df1.js';
+import {eyeOf, torso, bodyCenter, postureStep, vertical} from './posture.js';
+import {DF, initialDF, scheduleDF, bulletGuidanceDF, steerGuidedShot, spendP1, updateDF} from './df1.js';
 import {RD, RD20, RD30, isRDWeapon, initialRD, updateRD, bulletGuidanceRD} from './rd40.js';
 import {solveBallisticImpact} from './ballistics.js';
 import {EchoPulseField} from './echopulse.js';
@@ -58,8 +58,10 @@ export function bodyHit(a, b, actor) {
   return Math.min(t, sphereHit(a, d, [center[0], lo, center[1]], rr), sphereHit(a, d, [center[0], hi, center[1]], rr))
 }
 export class Match {
-  constructor(config, onEvent = () => {}) {
-    this.config = {...config};
+  constructor(config = {}, onEvent = () => {}) {
+    const mode = Object.hasOwn(modes, config.mode) ? config.mode : '3v3';
+    const loadout = Object.hasOwn(weapons, config.loadout) ? config.loadout : 'SW T';
+    this.config = {...config, mode, loadout};
     this.time = 0;
     this.tremorAt = 68;
     this.groundMotion = 0;
@@ -85,16 +87,16 @@ export class Match {
     this.fermat = new FermatCore();
     this.smokeCooldown = 0;
     this.techStats = {ricochets: 0, ricochetHits: 0, penetrations: 0, wallbangHits: 0};
-    const counts = modes[config.mode] || modes['3v3'];
-    this.goals = counts.map(n => config.limit === 'unlimited' ? Infinity : n * clamp(Math.round(config.multiplier) || 5, 1, 99));
+    const counts = modes[mode], multiplier = Number(config.multiplier ?? 5);
+    this.goals = counts.map(n => config.limit === 'unlimited' ? Infinity : n * clamp(Number.isFinite(multiplier) ? Math.round(multiplier) : 5, 1, 99));
     this.receiptId = globalThis.crypto?.randomUUID?.() || Date.now().toString(36) + Math.random().toString(36).slice(2);
     this.aiModel = config.aiModel === 'classic' ? 'classic' : 'human';
     this.nv = new NV2(this);
     const rawSpy = config.allyNv21 === true ? 1 : Number(config.allyNv21 || 0);
-    this.allyNv21Slot = config.mode === '3v3' && (rawSpy === 1 || rawSpy === 2) ? rawSpy : 0;
+    this.allyNv21Slot = mode === '3v3' && (rawSpy === 1 || rawSpy === 2) ? rawSpy : 0;
     for (let team = 0; team < 2; team++)for (let slot = 0; slot < counts[team]; slot++) {
       const human = team === 0 && slot === 0;
-      const gun = human ? config.loadout : npcWeapons[(slot + team + 1) % npcWeapons.length];
+      const gun = human ? loadout : npcWeapons[(slot + team + 1) % npcWeapons.length];
       const isSpy = !human && team === 0 && slot === this.allyNv21Slot;
       const aiVersion = human ? 'HUMAN' : isSpy ? 'NV2.1' : (this.aiModel === 'human' ? 'NV2 Human' : 'NV2');
       const a = {id: this.actors.length, team, slot, human, name: names[team][slot], gun, aiVersion, isSpy, kills: 0, deaths: 0, earned: 0};
@@ -121,7 +123,7 @@ export class Match {
         const opponents = nearby.filter(b => a.team !== b.team);
         const enemies = opponents.map(b => Math.hypot(b.x - point[0], b.z - point[1]));
         const seen = opponents.filter(b => Math.hypot(b.x - point[0], b.z - point[1]) < 44 && obstruction([point[0], 1.55, point[1]], [b.x, b.y + 1.4, b.z]) > 1).length;
-        const crowded = nearby.some(b => Math.hypot(b.x - point[0], b.z - point[1]) < 2);
+        const crowded = nearby.some(b => Math.hypot(b.x - point[0], b.z - point[1]) < 2 && b.y < 1.7);
         const s = Math.min(65, ...enemies) + this.rng() * 10 - seen * 24 - (crowded ? 100 : 0);
         if (s > best) {
           best = s;
@@ -145,6 +147,8 @@ export class Match {
       tankerUses: a.tankerUses || 0,
       alive: true,
       respawn: 0,
+      spawnId: (a.spawnId || 0) + 1,
+      dryAt: -Infinity,
       cooldown: 0,
       burstLeft: 0,
       nextBurst: 0,
@@ -158,6 +162,7 @@ export class Match {
       recoilSide: 0,
       hitRecoil: 0,
       seismicRattle: 0,
+      seismicKnockTeam: -1,
       hitFlash: 0,
       shieldFlash: 0,
       hitDir: null,
@@ -193,24 +198,27 @@ export class Match {
   trigger(a) {
     if (this.ended || !a.alive || a.cooldown > 1e-7 || a.reload > 0 || a.burstLeft)return false;
     if (a.mag <= 0) {
-      this.event('dry', {actor: a});
+      if (this.time >= a.dryAt) {
+        a.dryAt = this.time + .28;
+        this.event('dry', {actor: a});
+      }
       return false
     }
     const w = this.weapon(a);
     a.queue = a.df ? scheduleDF(a) : Array(Math.min(w.burst, a.mag)).fill('main');
-    if (a.df)assist(this, a);
     this.fire(a, a.queue.shift());
     a.burstLeft = a.queue.length;
     a.nextBurst = w.interval;
     return true
   }
   fire(a, source = 'main') {
+    if (!a.alive || this.ended || a.reload > 0) return false;
     const w = this.weapon(a);
     const salvo = w.pellets && source === 'main' ? Math.min(w.pellets, a.mag) : 1;
     if (source === 'p1') {
-      if (!spendP1(a, this.time))return
+      if (!a.df || !spendP1(a, this.time)) return false
     } else {
-      if (!a.mag || salvo <= 0)return;
+      if (!a.mag || salvo <= 0) return false;
       a.mag -= salvo
     }
     a.cooldown = w.interval;
@@ -243,11 +251,12 @@ export class Match {
         dir,
         p,
         old: p,
-        origin: [...muzzle],
-        trail: [[...muzzle]],
+        origin: [...p],
+        trail: [[...p]],
         trailClock: 0,
         guided: !!guidedInfo?.guided,
-        homingTargetId: guidedInfo ? guidedInfo.targetId : -1,
+        homingTargetId: guidedInfo?.targetId ?? -1,
+        homingSpawnId: this.actors[guidedInfo?.targetId]?.spawnId,
         homingBudget: guidedInfo ? guidedInfo.homingBudget : 0,
         homingRate: guidedInfo ? guidedInfo.homingRate : 0,
         homingCos: guidedInfo?.homingCos || 0,
@@ -256,7 +265,7 @@ export class Match {
         penetrations: 0,
         ricocheted: false,
         penetrated: false,
-        fermatLocked: this.fermat.isShotFermatAligned(a, dir) || !!a._fermatAiShot,
+        fermatLocked: this.fermat.isShotFermatAligned(a, dir, this) || !!a._fermatAiShot,
         damage: w.damage,
         speed: w.speed,
         life: 1.35,
@@ -306,12 +315,16 @@ export class Match {
       this.thermoFlux.depositHeat(a.x, a.z, 0.14, 0);
     }
     this.nv.onShotFired?.(a, source);
-    this.event('fire', {actor: a, source, gun: a.gun, p: firstMuzzle, dir: firstDir, speed: w.speed, pellets: salvo, burstIndex: a.shotCount})
+    this.event('fire', {actor: a, source, gun: a.gun, p: firstMuzzle, dir: firstDir, speed: w.speed, pellets: salvo, burstIndex: a.shotCount});
+    return true;
   }
   deploySmokeVent(a = this.player) {
     if (!a?.alive || this.ended || (a.human && this.smokeCooldown > 0.01)) return false;
     const fx = Math.sin(a.yaw), fz = -Math.cos(a.yaw);
-    const sx = clamp(a.x + fx * 3.4, -24, 24), sz = clamp(a.z + fz * 3.4, -98, 98);
+    const from = [a.x, a.y + .45, a.z];
+    const to = [clamp(a.x + fx * 3.4, -24, 24), from[1], clamp(a.z + fz * 3.4, -98, 98)];
+    const wall = obstruction(from, to);
+    const [sx, , sz] = wall <= 1 ? add(from, scale(sub(to, from), Math.max(0, wall - .16))) : to;
     this.aeroVortex.deploySmokeVent(sx, sz, fx, fz);
     this.thermoFlux.depositHeat(sx, sz, 0.45, 2);
     if (a.human) this.smokeCooldown = 10.0;
@@ -320,13 +333,19 @@ export class Match {
     return true;
   }
   damage(v, owner, power, dir = null, meta = null) {
-    if (this.ended || !v.alive || owner.team === v.team)return null;
+    if (this.ended || !v.alive || !owner || owner.team === v.team || !Number.isFinite(power) || power <= 0) return null;
     const hadShield = v.shield > 0;
     const absorbed = Math.min(v.shield, power);
     v.shield = Math.round((v.shield - absorbed) * 10) / 10;
     v.hp = Math.max(0, Math.round((v.hp - (power - absorbed)) * 10) / 10);
     const shieldBreak = hadShield && v.shield <= 0;
     const kill = v.hp <= 0;
+    if (meta?.shot) {
+      const outcome = kill ? 'kill' : shieldBreak ? 'break' : absorbed > 0 ? 'shield' : 'hit';
+      this.chronoTrace.finishShot(meta.shot, meta.point, outcome, meta.time, v);
+    } else if (kill && v.human) {
+      this.chronoTrace.lastPlayerDeathTrace = null;
+    }
     v.hitRecoil = Math.min(1, (v.hitRecoil || 0) + .58 + power * .038);
     v.hitFlash = 1;
     if (absorbed > 0)v.shieldFlash = 1;
@@ -349,56 +368,66 @@ export class Match {
     v.respawn = 3;
     v.reload = 0;
     v.burstLeft = 0;
+    v.queue.length = 0;
     v.deaths++;
     owner.kills++;
-    owner.earned += 10;
+    if (owner.human) owner.earned += 10;
     this.nv.learn(owner, true);
     this.nv.onKill?.(owner, v);
     this.scores[owner.team]++;
     this.event('point', {actor: owner, victim: v, receipt: this.receiptId + '/' + owner.id + '/' + owner.kills});
-    if (this.scores[owner.team] >= this.goals[owner.team]) {
-      this.winner = owner.team;
-      this.ended = true;
-      this.synapse?.save();
-      this.event('end', {winner: owner.team})
-    }
+    if (this.scores[owner.team] >= this.goals[owner.team]) this.end(owner.team);
     return {shield: absorbed > 0, shieldBreak, kill: true}
   }
+  end(winner = null) {
+    if (this.ended) return;
+    this.winner = winner;
+    this.ended = true;
+    this.shots.length = 0;
+    this.synapse?.save();
+    this.event('end', {winner});
+  }
+
   updateTankers(dt) {
     for (const tk of this.tankers) {
-      if (tk.cooldown > 0)tk.cooldown = Math.max(0, tk.cooldown - dt);
-      if (tk.pulse > 0)tk.pulse = Math.max(0, tk.pulse - dt * 1.4);
-      if (tk.cooldown > 0)continue;
+      if (tk.cooldown > 0) tk.cooldown = tk.cooldown <= dt + 1e-8 ? 0 : tk.cooldown - dt;
+      if (tk.pulse > 0) tk.pulse = Math.max(0, tk.pulse - dt * 1.4);
+      if (tk.cooldown > 0) continue;
+      let recipient = null, best = tk.radius;
       for (const a of this.actors) {
-        if (!a.alive)continue;
-        const d = Math.hypot(a.x - tk.x, a.z - tk.z);
-        if (d <= tk.radius) {
-          a.stock += 100;
-          a.ammoRate = 1.5;
-          a.tankerUses = (a.tankerUses || 0) + 1;
-          tk.cooldown = tk.maxCooldown;
-          tk.pulse = 1;
-          tk.lastTeam = a.team;
-          this.effects.push({
-            kind: 'tanker',
-            p: [tk.x, 1.55, tk.z],
-            dir: [0, 1, 0],
-            actor: a.id,
-            team: a.team,
-            life: .95,
-            max: .95,
-            seed: ++this.seq
-          });
-          this.aeroVortex.injectBurst(tk.x, tk.z, {smoke: 1.95, heat: 0.72, force: 4.5, radius: 3});
-          this.thermoFlux.depositHeat(tk.x, tk.z, 0.75, 2);
-          this.resonance.exciteBlast([tk.x, 1.5, tk.z], 1.1);
-          this.spectraField.observe(1 - a.team, tk.x, tk.z, {sigma: 5.5, weight: 0.78});
-          this.echoPulse.emit(this, {kind: 'tanker', pos: [tk.x, 1.8, tk.z], actor: a, team: a.team, loudness: 1.4});
-          if (a.human) this.synapse?.observeTankerCapture();
-          this.event('tanker', {actor: a, tanker: tk});
-          this.nv.onTanker?.(a, tk);
-          break
+        if (!a.alive || a.y > 1.2) continue;
+        const distance = Math.hypot(a.x - tk.x, a.z - tk.z);
+        if (distance <= best && (!recipient || distance < best)) {
+          recipient = a;
+          best = distance;
         }
+      }
+      if (recipient) {
+        const a = recipient;
+        a.stock += 100;
+        a.ammoRate = 1.5;
+        a.tankerUses = (a.tankerUses || 0) + 1;
+        tk.cooldown = tk.maxCooldown;
+        tk.pulse = 1;
+        tk.lastTeam = a.team;
+        this.effects.push({
+          kind: 'tanker',
+          p: [tk.x, 1.55, tk.z],
+          dir: [0, 1, 0],
+          actor: a.id,
+          team: a.team,
+          life: .95,
+          max: .95,
+          seed: ++this.seq
+        });
+        this.aeroVortex.injectBurst(tk.x, tk.z, {smoke: 1.95, heat: 0.72, force: 4.5, radius: 3});
+        this.thermoFlux.depositHeat(tk.x, tk.z, 0.75, 2);
+        this.resonance.exciteBlast([tk.x, 1.5, tk.z], 1.1);
+        this.spectraField.observe(1 - a.team, tk.x, tk.z, {sigma: 5.5, weight: 0.78});
+        this.echoPulse.emit(this, {kind: 'tanker', pos: [tk.x, 1.8, tk.z], actor: a, team: a.team, loudness: 1.4});
+        if (a.human) this.synapse?.observeTankerCapture();
+        this.event('tanker', {actor: a, tanker: tk});
+        this.nv.onTanker?.(a, tk);
       }
     }
   }
@@ -423,14 +452,7 @@ export class Match {
       a.vy = 5.35;
       a.onGround = false
     }
-    const ground = floorAt(a.x, a.z, a.y);
-    a.vy -= 14 * dt;
-    a.y += a.vy * dt;
-    if (a.y <= ground) {
-      a.y = ground;
-      a.vy = 0;
-      a.onGround = true
-    } else a.onGround = false
+    vertical(a, dt, floorAt);
   }
   systems(a, dt) {
     if (!a.alive) {
@@ -477,8 +499,12 @@ export class Match {
     if (a.df)updateDF(this, a, dt);
     if (a.rd)updateRD(this, a, dt);
     if (a.burstLeft) {
+      if (a.df && (!a.df.boost || a.df.cooling > 0 || !a.df.p1)) {
+        a.queue = a.queue.filter(source => source !== 'p1');
+        a.burstLeft = a.queue.length;
+      }
       a.nextBurst -= dt;
-      if (a.nextBurst <= 1e-7) {
+      if (a.burstLeft && a.nextBurst <= 1e-7) {
         this.fire(a, a.queue.shift());
         a.burstLeft = a.queue.length;
         a.nextBurst += this.weapon(a).interval
@@ -506,9 +532,11 @@ export class Match {
         s.dir = unit([s.dir[0] + wind.vx * drag * dt, s.dir[1], s.dir[2] + wind.vz * drag * dt]);
       }
     }
-    const b = add(a, scale(s.dir, s.speed * dt));
-    this.aeroVortex.injectProjectileWake(a, b, s.speed, s.gun);
-    let at = obstruction(a, b), target = null;
+    const travel = Math.min(dt, s.life);
+    const b = add(a, scale(s.dir, s.speed * travel));
+    const hitInfo = raycastMaterial(a, b);
+    const wet = waterCrossing(a, b);
+    let at = Math.min(hitInfo?.t ?? Infinity, wet ?? Infinity), target = null;
     for (const v of this.actors) {
       if (!v.alive || v.team === s.team)continue;
       const t = bodyHit(a, b, v);
@@ -517,6 +545,9 @@ export class Match {
         target = v
       }
     }
+    const point = at <= 1 ? add(a, scale(sub(b, a), at)) : b;
+    const impactTime = Math.max(s.trace?.startTime ?? 0, this.time - dt + Math.min(1, at) * travel);
+    this.aeroVortex.injectProjectileWake(a, point, s.speed, s.gun);
     // Detect close bullet flyby near the human player for diverse spatial whiz/crack audio.
     const pl = this.player;
     if (pl && pl.alive && s.owner !== pl && !s.whizzed && target !== pl) {
@@ -573,27 +604,26 @@ export class Match {
       }
     }
     s.old = a;
-    s.p = b;
+    s.p = point;
     s.life -= dt;
-    s.age = (s.age || 0) + dt;
+    s.age = (s.age || 0) + travel * Math.min(1, at);
     // Supersonic Mach shockwave aero-acoustic coupling to nearby hollow steel shipping containers
     if (s.speed >= 340 && s.age >= (s._nextMachAt || 0.008)) {
       s._nextMachAt = s.age + 0.045;
-      this.resonance.exciteMach(b, s.speed);
+      this.resonance.exciteMach(point, s.speed);
     }
-    this.chronoTrace.sampleShot(s, this.time);
+    if (at > 1) this.chronoTrace.sampleShot(s, impactTime);
     s.trailClock = (s.trailClock || 0) + dt;
-    if (s.trail && s.trailClock >= .0055) {
+    if (at > 1 && s.trail && s.trailClock >= .0055) {
       s.trailClock = 0;
       s.trail.push([b[0], b[1], b[2]]);
       if (s.trail.length > 8)s.trail.shift()
     }
     if (at <= 1) {
-      const p = add(a, scale(sub(b, a), at));
+      const p = point;
       if (target) {
-        const res = this.damage(target, s.owner, s.damage, s.dir, {ricochet: s.ricocheted, wallbang: s.penetrated});
+        const res = this.damage(target, s.owner, s.damage, s.dir, {ricochet: s.ricocheted, wallbang: s.penetrated, shot: s, point: p, time: impactTime});
         const kind = res?.kill ? 'kill' : res?.shieldBreak ? 'break' : res?.shield ? 'shield' : 'hit';
-        this.chronoTrace.finishShot(s, p, kind, this.time, target);
         const dur = kind === 'kill' ? .78 : kind === 'break' ? .58 : kind === 'shield' ? .42 : .36;
         const bc = bodyCenter(target);
         const outN = unit([p[0] - bc[0] - s.dir[0] * .25, (p[1] - (target.y + .95)) * .35 - s.dir[1] * .25, p[2] - bc[1] - s.dir[2] * .25]);
@@ -614,16 +644,15 @@ export class Match {
           seed: ++this.seq
         })
       } else {
-        const hitInfo = raycastMaterial(a, b);
-        const isWater = p[1] < 0.08 && (p[0] < -25.2 || p[0] > 25.2 || Math.abs(p[2]) > 100);
-        const mat = isWater ? 'water' : (hitInfo?.mat || (p[1] >= .08 ? 'steel' : 'concrete'));
-        const normal = hitInfo?.normal || [0, 1, 0];
+        const isWater = at === wet && (!hitInfo || wet < hitInfo.t);
+        const mat = isWater ? 'water' : hitInfo.mat;
+        const normal = isWater ? [0, 1, 0] : hitInfo.normal;
         const metal = mat === 'steel';
         const ball = !isWater && hitInfo ? solveBallisticImpact(s, hitInfo, this.rng) : {action: 'stop'};
 
         if (ball.action === 'ricochet') {
           this.techStats.ricochets++;
-          this.chronoTrace.recordRicochet(s, hitInfo.point, normal, ball.grazingSin, this.time);
+          this.chronoTrace.recordRicochet(s, hitInfo.point, normal, ball.grazingSin, impactTime);
           s.old = [...hitInfo.point];
           s.p = ball.pos;
           s.dir = ball.dir;
@@ -668,7 +697,7 @@ export class Match {
 
         if (ball.action === 'penetrate') {
           this.techStats.penetrations++;
-          this.chronoTrace.recordPenetration(s, ball.entryPos, ball.exitPos, normal, ball.thickness, mat, this.time);
+          this.chronoTrace.recordPenetration(s, ball.entryPos, ball.exitPos, normal, ball.thickness, mat, impactTime);
           s.old = [...ball.entryPos];
           s.p = ball.exitPos;
           s.dir = ball.dir;
@@ -712,7 +741,7 @@ export class Match {
           return s.life > 0;
         }
 
-        this.chronoTrace.finishShot(s, p, 'wall', this.time);
+        this.chronoTrace.finishShot(s, p, isWater ? 'miss' : 'wall', impactTime);
         const dur = (s.gun === 'MS10' || s.source === 'p1') ? .48 : .40;
         this.effects.push({
           kind: 'wall',
@@ -731,7 +760,7 @@ export class Match {
           target: false,
           seed: ++this.seq
         });
-        this.scorches.push({
+        if (!isWater) this.scorches.push({
           p: [p[0] + normal[0] * .014, p[1] + normal[1] * .014, p[2] + normal[2] * .014],
           normal,
           mat,
@@ -752,15 +781,8 @@ export class Match {
       }
       return false
     }
-    if (a[1] > -0.05 && b[1] <= -0.05 && (b[0] < -25.2 || b[0] > 25.2 || Math.abs(b[2]) > 100)) {
-      const f = clamp((a[1] + 0.05) / Math.max(1e-5, a[1] - b[1]), 0, 1);
-      const wp = [a[0] + (b[0] - a[0]) * f, -0.02, a[2] + (b[2] - a[2]) * f];
-      this.chronoTrace.finishShot(s, wp, 'miss', this.time);
-      this.event('impact', {point: wp, dir: s.dir, normal: [0, 1, 0], gun: s.gun, metal: false, mat: 'water', actor: s.owner});
-      return false;
-    }
     const alive = s.life > 0 && Math.abs(b[0]) < 120 && Math.abs(b[2]) < 200;
-    if (!alive) this.chronoTrace.finishShot(s, b, 'miss', this.time);
+    if (!alive) this.chronoTrace.finishShot(s, b, 'miss', impactTime);
     return alive
   }
   step(dt, input) {
@@ -775,25 +797,6 @@ export class Match {
       this.systems(a, dt);
     }
     this.updatePlayer(dt, input);
-    // Stamp warm ThermoFlux thermal footprints, EchoPulse steps & ResonanceCore hollow container roof drums!
-    for (let i = 0; i < this.actors.length; i++) {
-      const a = this.actors[i];
-      const prevStride = prevStrides[i];
-      if (!a.alive || !a.onGround) continue;
-      if (Math.floor((a.stride || 0) / 1.15) > Math.floor(prevStride / 1.15)) {
-        const intensity = (a.sprintAmt || 0) > 0.35 ? 0.56 : 0.38;
-        this.thermoFlux.stampFootprint(a.x, a.z, a.team, this.time, intensity);
-        if (a.y > 1.8) {
-          const roof = this.resonance.exciteRoofStep(a, (a.sprintAmt || 0) > 0.35 ? 0.65 : 0.42);
-          if (roof) this.event('resonate', {...roof, actor: a, mat: 'steel', roof: true});
-        }
-      }
-      if (!a.human && ((a.sprintAmt || 0) > 0.35 || a.y > 0.5)) {
-        if (Math.floor((a.stride || 0) / 2.2) > Math.floor(prevStride / 2.2)) {
-          this.echoPulse.emit(this, {kind: 'step', pos: [a.x, a.y + 0.15, a.z], actor: a, team: a.team, loudness: a.y > 0.5 ? 0.85 : 0.55});
-        }
-      }
-    }
     const arrivedEchoes = this.echoPulse.step(this);
     for (const rep of arrivedEchoes) {
       this.nv.onEchoArrival?.(rep);
@@ -808,12 +811,12 @@ export class Match {
     // Feed newly arrived player acoustic waves into Team 0's fair-play Bayesian wavefunction & FermatCore!
     if (this.echoPulse.playerWaves.length) {
       for (const w of this.echoPulse.playerWaves) {
-        if (!w.specFed && this.time >= w.arriveAt) {
+        if (!w.specFed && this.player.alive && w.team !== this.player.team && this.time >= w.arriveAt) {
           w.specFed = true;
           this.spectraField.observe(0, w.pos[0], w.pos[2], {sigma: w.occluded ? 7.2 : 4.6, weight: 0.58});
           if (w.actorId >= 0) {
             const srcActor = this.actors[w.actorId];
-            if (srcActor?.alive && srcActor.team === 1) {
+            if (srcActor?.alive && srcActor.team === 1 && srcActor.spawnId === w.actorSpawnId) {
               this.fermat.recordIntel(0, srcActor, this.time, 'echo', [w.pos[0], Math.max(1.15, w.pos[1]), w.pos[2]]);
             }
           }
@@ -821,6 +824,25 @@ export class Match {
       }
     }
     this.nv.tick(dt);
+    // Stamp warm ThermoFlux thermal footprints, EchoPulse steps & ResonanceCore hollow container roof drums!
+    for (let i = 0; i < this.actors.length; i++) {
+      const a = this.actors[i];
+      const prevStride = prevStrides[i];
+      if (!a.alive || !a.onGround) continue;
+      if (Math.floor((a.stride || 0) / 1.15) > Math.floor(prevStride / 1.15)) {
+        const intensity = (a.sprintAmt || 0) > 0.35 ? 0.56 : 0.38;
+        this.thermoFlux.stampFootprint(a.x, a.z, a.team, this.time, intensity);
+        if (a.y > 1.8) {
+          const roof = this.resonance.exciteRoofStep(a, (a.sprintAmt || 0) > 0.35 ? 0.65 : 0.42);
+          if (roof) this.event('resonate', {...roof, actor: a, mat: 'steel', roof: true});
+        }
+      }
+      if ((a.sprintAmt || 0) > 0.35 || a.y > 0.5) {
+        if (Math.floor((a.stride || 0) / 2.2) > Math.floor(prevStride / 2.2)) {
+          this.echoPulse.emit(this, {kind: 'step', pos: [a.x, a.y + 0.15, a.z], actor: a, team: a.team, loudness: a.y > 0.5 ? 0.85 : 0.55});
+        }
+      }
+    }
     this.updateTankers(dt);
     this.aeroVortex.tick(dt);
     this.thermoFlux.tick(dt, this.tankers);
@@ -831,7 +853,7 @@ export class Match {
     for (const shot of this.shots) {
       if (!this.ended && this.projectile(shot, dt))this.shots[write++] = shot
     }
-    this.shots.length = write;
+    this.shots.length = this.ended ? 0 : write;
     let cw = 0;
     for (const c of this.casings) {
       c.life -= dt;
@@ -841,9 +863,10 @@ export class Match {
       c.p[1] += c.v[1] * dt;
       c.p[2] += c.v[2] * dt;
       c.rot += c.spin * dt;
-      if (c.p[1] <= .03) {
+      const ground = floorAt(c.p[0], c.p[2], c.p[1] - c.v[1] * dt);
+      if (c.p[1] <= ground + .03) {
         const impactVy = Math.abs(c.v[1]);
-        c.p[1] = .03;
+        c.p[1] = ground + .03;
         c.v[1] = impactVy * .38;
         c.v[0] *= .68;
         c.v[2] *= .68;

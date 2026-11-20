@@ -352,13 +352,14 @@ export class FermatCore {
   /** Records a fair-play enemy intel sighting (only from real LOS, EchoPulse, Seismic Knock, or D01!). */
   recordIntel(team, enemy, time, source = 'visual', posOverride = null) {
     if (team !== 0 && team !== 1) return;
-    if (!enemy || !enemy.alive) return;
+    if (!enemy?.alive || enemy.team === team) return;
     const tp = posOverride || targetPoint(enemy);
     this.intel[team].set(enemy.id, {
       id: enemy.id,
+      spawnId: enemy.spawnId,
       name: enemy.name || 'ENEMY',
       pos: [tp[0], tp[1], tp[2]],
-      vel: [enemy.vx || 0, 0, enemy.vz || 0],
+      vel: source === 'visual' || source === 'd01' ? [enemy.vx || 0, 0, enemy.vz || 0] : [0, 0, 0],
       time,
       source
     });
@@ -376,7 +377,9 @@ export class FermatCore {
       for (const al of allies) {
         const d = Math.hypot(e.x - al.x, e.z - al.z);
         if (d > 48) continue;
-        if (obstruction(eyeOf(al), tp) > 0.992) {
+        const eye = eyeOf(al), dir = forward(al.yaw, al.pitch);
+        const inView = d < 4 || dot(unit(sub(tp, eye)), dir) >= .12;
+        if (inView && obstruction(eye, tp) > 1 && !(match.aeroVortex?.stats.totalSmoke > 1.8 && match.aeroVortex.smokeOcclusion(eye, tp) > .86)) {
           seen = true;
           break;
         }
@@ -392,14 +395,14 @@ export class FermatCore {
         continue;
       }
       // 3. ResonanceCore 1.0 5,100 m/s Container Knock active rattle ping
-      if ((e.seismicRattle || 0) > 0.08) {
+      if (e.seismicKnockTeam === 0 && (e.seismicRattle || 0) > 0.08) {
         this.recordIntel(0, e, t, 'knock', tp);
       }
     }
     // Prune stale (> 3.4s) or dead enemy intel
     for (const [eid, rec] of this.intel[0]) {
       const act = match.actors[eid];
-      if (!act?.alive || t - rec.time > 3.4) this.intel[0].delete(eid);
+      if (!act?.alive || act.spawnId !== rec.spawnId || t - rec.time > 3.4) this.intel[0].delete(eid);
     }
   }
 
@@ -461,6 +464,7 @@ export class FermatCore {
     if (!enabled || !match?.player?.alive) {
       this.playerBank = null;
       this.playerForward = null;
+      this.lastPlayerUpdate = -Infinity;
       return {forward: null, bank: null};
     }
     // 30 Hz cadence (~0.033s) keeps smartphone CPU usage < 0.0015 ms/ms (virtually zero battery impact!)
@@ -483,13 +487,15 @@ export class FermatCore {
     const allowDouble = (WEAPON_PENETRATION[p.gun]?.maxRic || 1) >= 2;
     for (const rec of this.intel[0].values()) {
       // Only show bank-shot sweet-spot when enemy is ACTUALLY behind cover (never clutter direct LOS duels!)
-      if (obstruction(eye, rec.pos) > 0.992) continue;
+      if (obstruction(eye, rec.pos) > 1) continue;
       // Ignore enemies far behind the player (> 110 deg off-axis)
       const toE = unit(sub(rec.pos, eye));
       if (dot(toE, aimDir) < -0.35) continue;
       const sol = this.solveBankShot(eye, rec.pos, rec.vel, p.gun, w.speed, allowDouble);
       if (sol && (!bestBank || sol.score > bestBank.score)) {
         sol.enemyId = rec.id;
+        sol.enemySpawnId = rec.spawnId;
+        sol.origin = eye;
         sol.enemyName = rec.name;
         sol.intelSource = rec.source;
         sol.intelAge = Math.max(0, match.time - rec.time);
@@ -507,9 +513,15 @@ export class FermatCore {
   }
 
   /** Checks if a shot fired by `actor` is aligned with a live Fermat Sweet-Spot (stabilizes corrugation jitter). */
-  isShotFermatAligned(actor, dir) {
+  isShotFermatAligned(actor, dir, match) {
     if (!actor?.human || !this.playerBank) return false;
-    const cosErr = dot(dir, this.playerBank.aimDir);
+    const bank = this.playerBank;
+    if (bank.enemyId !== undefined && match) {
+      const enemy = match.actors[bank.enemyId];
+      if (!enemy?.alive || enemy.spawnId !== bank.enemySpawnId || match.time - this.lastPlayerUpdate > .1) return false;
+      if (bank.origin && Math.hypot(...sub(eyeOf(actor), bank.origin)) > .65) return false;
+    }
+    const cosErr = dot(dir, bank.aimDir);
     if (cosErr >= 0.9988) { // <= ~2.8 deg precision alignment with Fermat sweet-spot!
       this.stats.playerBankLocks++;
       return true;

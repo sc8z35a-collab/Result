@@ -2038,3 +2038,6 @@ body.touch #fermatTag {
 
 
 
+
+.wallet-notice { display: block; margin: 0.35rem 0; flex: 1 1 auto; }
+.wallet-notice:empty { display: none; }
