@@ -10,7 +10,7 @@ const $ = s => document.getElementById(s),
 // Optically exact +2/3 wider view width relative to 24.7° / 13.0° FOV:
 // 2 * atan((5/3) * tan(24.7°/2)) = 40.1°, 2 * atan((5/3) * tan(13.0°/2)) = 21.5°.
 const BASE_FOV = 40.1, ADS_FOV = 21.5;
-const defaults = {lightMode: false, resolution: 'HD', graphics: 'high', rate: 360, rateV2: true, hdr: true, khdr: true, shadowMode: 'pro', shadows: true, fluxGI: true, schlieren: true, aeroVortex: true, thermoFlux: true, resonance: true, chronoTrace: true, fermatCore: true, spectraField: true, echoPulse: true, audioMode: 'hrtf', sensitivity: 1, volume: 55, sound: false};
+const defaults = {lightMode: false, resolution: 'HD', graphics: 'high', rate: 360, rateV2: true, hdr: true, khdr: true, shadowMode: 'pro', shadows: true, fluxGI: true, schlieren: true, aeroVortex: true, thermoFlux: true, resonance: true, chronoTrace: true, fermatCore: true, spectraField: true, echoPulse: true, audioMode: 'ultra300', audioV2: true, sensitivity: 1, volume: 55, sound: false};
 const graphicsHints = {
   standard: '軽量描画 · 基本ライト · 標準反射',
   high: '高精細質感 · 動的ライト · 標準水面反射',
@@ -22,8 +22,9 @@ const shadowHints = {
   pro: '最高峰影 · 近距離2.7cmカスケード · 物理PCSS · SSCS接地影 · 光芒シャドウ'
 };
 const audioHints = {
-  hrtf: '3D HRTF立体音響 · 実測遮蔽/反響 · 音速伝播 · コンボリューション残響 · 物理銃声',
-  stereo: '軽量ステレオ3D · 音速伝播 · 距離吸収 · 物理銃声 · 低負荷'
+  ultra300: '300Hz制御＋300Hz帯域クロスオーバー · 3帯域UTD回折 · 鏡像反射 · 3ゾーン残響 · 65種物理音響',
+  hrtf: '3D HRTF立体音響 · 3帯域遮蔽/回折 · 鏡像初期反射 · 3ゾーン残響 · 65種物理音響',
+  stereo: '軽量ステレオ3D · 300Hzサブパンチ · 音速伝播 · 65種物理音響 · スマホ低負荷'
 };
 // Crisp minimal mechanical weapon pulse with ZERO camera shake or FOV punch.
 const recoilProfiles = {
@@ -48,7 +49,7 @@ const aimRecoil = {
   RD40: {pitch: .0015, yaw: .00045, recoverRate: 18.0, recoverRatio: .95, climb: .005}
 };
 let settings = {...defaults};
-let rules = {mode: '3v3', limit: 'points', multiplier: 5, loadout: 'SW T', allyNv21: 0};
+let rules = {mode: '3v3', limit: 'points', multiplier: 5, loadout: 'SW T', allyNv21: 0, aiModel: 'human'};
 try {
   const c = JSON.parse(localStorage.getItem('result.harbor.v1') || '{}');
   if (c.settings) {
@@ -56,14 +57,16 @@ try {
     if (!('shadowMode' in c.settings) && 'shadows' in c.settings) settings.shadowMode = c.settings.shadows ? 'pro' : 'off';
     if (!('khdr' in c.settings)) settings.khdr = !!settings.hdr;
     if (!c.settings.rateV2 && settings.rate === 120) settings.rate = 360;
+    if (!c.settings.audioV2 && settings.audioMode === 'hrtf') settings.audioMode = 'ultra300';
     settings.rateV2 = true;
+    settings.audioV2 = true;
   }
   if (c.rules)Object.assign(rules, c.rules)
 } catch {}
 if (!sizes[settings.resolution])settings.resolution = 'HD';
 if (!(settings.graphics in qualityLevels))settings.graphics = 'high';
 if (!(settings.shadowMode in shadowModes))settings.shadowMode = 'pro';
-if (!(settings.audioMode in AUDIO_MODES))settings.audioMode = 'hrtf';
+if (!(settings.audioMode in AUDIO_MODES))settings.audioMode = 'ultra300';
 settings.lightMode = !!settings.lightMode;
 settings.shadows = settings.shadowMode !== 'off';
 settings.khdr = !!settings.khdr;
@@ -81,6 +84,7 @@ if (![0, 60, 120, 360].includes(settings.rate))settings.rate = 360;
 if (!modes[rules.mode])rules.mode = '3v3';
 if (!weapons[rules.loadout])rules.loadout = 'SW T';
 rules.allyNv21 = [0, 1, 2].includes(Number(rules.allyNv21)) ? Number(rules.allyNv21) : 0;
+rules.aiModel = rules.aiModel === 'classic' ? 'classic' : 'human';
 rules.multiplier = clamp(Math.round(rules.multiplier) || 5, 1, 99);
 settings.sensitivity = clamp(Number(settings.sensitivity) || 1, .4, 2);
 settings.volume = clamp(Number(settings.volume) || 0, 0, 100);
@@ -519,6 +523,17 @@ function lobby() {
     save();
     lobby()
   });
+  group('aiModel', rules.aiModel, k => {
+    rules.aiModel = k === 'classic' ? 'classic' : 'human';
+    save();
+    lobby()
+  });
+  const isHuman = rules.aiModel !== 'classic';
+  if ($('aiModelHint')) {
+    $('aiModelHint').textContent = isHuman
+      ? '人格4種 · Yerkes-Dodson心理フロー · 背後驚愕反射 · Fitts 2段フリック · 中心窩/周辺視野 · 角クリア索敵 · 遅延通話連携'
+      : '従来の NV2 Transformer 戦術AI（均質反応・標準照準）で対戦します';
+  }
   const is3v3 = rules.mode === '3v3';
   $('allyAiWrap').hidden = !is3v3;
   group('allyNv21', rules.allyNv21, k => {
@@ -530,10 +545,13 @@ function lobby() {
     ? 'NAGI（D1）を NV2.1 に強化 · 高速反応 / 多弾同時回避 / 目視予測スパイ裏どり'
     : rules.allyNv21 === 2
       ? 'KAI（MS10）を NV2.1 に強化 · 高速反応 / 多弾同時回避 / 目視予測スパイ裏どり'
-      : '味方NPC2体は標準NV2（人間的な照準・戦術連携）で出撃します';
+      : isHuman
+        ? '味方NPC2体は NV2 Human（人格・心理・人間的な角クリア索敵）で出撃します'
+        : '味方NPC2体は標準NV2（人間的な照準・戦術連携）で出撃します';
+  const baseAiLabel = isHuman ? 'NV2 Human Cognitive' : 'NV2 Deep Tactical';
   $('lobbyAiLabel').textContent = is3v3 && rules.allyNv21 > 0
-    ? `NV2 + NV2.1 SPY (${rules.allyNv21 === 1 ? 'NAGI' : 'KAI'})`
-    : 'NV2 Deep Tactical';
+    ? `${isHuman ? 'NV2 Human' : 'NV2'} + NV2.1 SPY (${rules.allyNv21 === 1 ? 'NAGI' : 'KAI'})`
+    : baseAiLabel;
   group('limit', rules.limit, k => {
     rules.limit = k;
     save();
@@ -777,6 +795,7 @@ function toggleFlir() {
     return;
   }
   flirActive = !flirActive;
+  audio.event({type: 'flir', on: flirActive}, match.player);
   $('combatNotice').textContent = flirActive ? 'ThermoFlux FLIR 熱視界 ON · 貫煙熱痕探知' : 'FLIR 熱視界 OFF';
   noticeUntil = match.time + 1.4;
   hud();
@@ -797,6 +816,7 @@ function toggleChrono() {
     return;
   }
   chronoActive = !chronoActive;
+  audio.event({type: 'chrono', on: chronoActive}, match.player);
   $('combatNotice').textContent = chronoActive ? 'ChronoTrace 1.0 · 4D空間弾道スキャナー ON（過去22秒の弾道を3D投影）' : '4D空間弾道スキャナー OFF';
   noticeUntil = match.time + 1.6;
   hud();
@@ -997,7 +1017,16 @@ function resultUI() {
   $('outcome').textContent = match.winner === null ? '試合終了' : match.winner === 0 ? '味方チームの勝利' : '敵チームの勝利';
   $('finalA').textContent = match.scores[0];
   $('finalB').textContent = match.scores[1];
-  $('roster').innerHTML = '<div class="roster-row heading"><span>参加者</span><span>撃破</span><span>ダウン</span></div>' + match.actors.map(a => `<div class="roster-row"><span class="${a.team?'orange':'cyan'}">${a.name}${a.human?' · 自分':a.isSpy?'<span class="tag-nv21">NV2.1 SPY</span>':''}</span><span>${a.kills}</span><span>${a.deaths}</span></div>`).join('');
+  $('roster').innerHTML = '<div class="roster-row heading"><span>参加者</span><span>撃破</span><span>ダウン</span></div>' + match.actors.map(a => {
+    const tag = a.human
+      ? ' · 自分'
+      : a.isSpy
+        ? '<span class="tag-nv21">NV2.1 SPY</span>'
+        : a.aiVersion === 'NV2 Human'
+          ? `<span class="tag-human">NV2 Human${a.humanPersona ? ' · ' + a.humanPersona : ''}</span>`
+          : '';
+    return `<div class="roster-row"><span class="${a.team?'orange':'cyan'}">${a.name}${tag}</span><span>${a.kills}</span><span>${a.deaths}</span></div>`;
+  }).join('');
   equipment.result(match);
   const synEl = $('synapseReport');
   if (synEl && match.synapse) {
@@ -1010,6 +1039,7 @@ function resultUI() {
     const rc = match.resonance?.stats || {strikes: 0, seismicKnocks: 0};
     const ct = match.chronoTrace?.stats || {recorded: 0, longestKillM: 0};
     const fc = match.fermat?.stats || {solutionsFound: 0, doubleBankFound: 0, aiBankShots: 0};
+    const nm = match.nv?.metrics || {};
     const [lw, lc, le] = s.lanesPct;
     synEl.hidden = false;
     synEl.innerHTML =
@@ -1029,6 +1059,7 @@ function resultUI() {
         `<span>構造ノック <b>${rc.seismicKnocks}</b></span>` +
         `<span>最長キル <b>${ct.longestKillM > 0 ? ct.longestKillM.toFixed(1) + 'm' : '—'}</b></span>` +
         `<span>鏡像跳弾解 <b>${fc.solutionsFound}</b>${fc.aiBankShots ? ` / AI跳弾${fc.aiBankShots}` : ''}</span>` +
+        (match.aiModel !== 'classic' ? `<span>NV2 Human <b>フリック${nm.humanFlicks || 0} / 索敵${nm.humanCornerScans || 0} / 通話${nm.humanCallouts || 0}</b></span>` : '') +
         `<span>ベイズ確定 <b>${sp.peakCertaintyPct}%</b></span>` +
       `</div>`;
   } else if (synEl) {
@@ -1424,7 +1455,9 @@ function frame(ms) {
   appEl.dataset.spectraField = String(!!settings.spectraField);
   appEl.dataset.flirActive = String(!!(flirActive && !settings.lightMode && settings.thermoFlux));
   appEl.dataset.echoPulse = String(!!settings.echoPulse);
+  appEl.dataset.aiModel = match?.aiModel || rules.aiModel;
   appEl.dataset.audioEngine = SOUND_ENGIN_VERSION;
+  appEl.dataset.audioControlHz = String(audio.controlRateHz || 300);
   appEl.dataset.audioMode = effectiveAudioMode();
   appEl.dataset.audioState = audio.ctx?.state || (audio.on ? 'ready' : 'off');
 }

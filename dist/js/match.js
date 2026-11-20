@@ -88,6 +88,7 @@ export class Match {
     const counts = modes[config.mode] || modes['3v3'];
     this.goals = counts.map(n => config.limit === 'unlimited' ? Infinity : n * clamp(Math.round(config.multiplier) || 5, 1, 99));
     this.receiptId = globalThis.crypto?.randomUUID?.() || Date.now().toString(36) + Math.random().toString(36).slice(2);
+    this.aiModel = config.aiModel === 'classic' ? 'classic' : 'human';
     this.nv = new NV2(this);
     const rawSpy = config.allyNv21 === true ? 1 : Number(config.allyNv21 || 0);
     this.allyNv21Slot = config.mode === '3v3' && (rawSpy === 1 || rawSpy === 2) ? rawSpy : 0;
@@ -95,7 +96,7 @@ export class Match {
       const human = team === 0 && slot === 0;
       const gun = human ? config.loadout : npcWeapons[(slot + team + 1) % npcWeapons.length];
       const isSpy = !human && team === 0 && slot === this.allyNv21Slot;
-      const aiVersion = human ? 'HUMAN' : isSpy ? 'NV2.1' : 'NV2';
+      const aiVersion = human ? 'HUMAN' : isSpy ? 'NV2.1' : (this.aiModel === 'human' ? 'NV2 Human' : 'NV2');
       const a = {id: this.actors.length, team, slot, human, name: names[team][slot], gun, aiVersion, isSpy, kills: 0, deaths: 0, earned: 0};
       this.actors.push(a);
       this.spawn(a, true)
@@ -614,10 +615,11 @@ export class Match {
         })
       } else {
         const hitInfo = raycastMaterial(a, b);
-        const mat = hitInfo?.mat || (p[1] >= .08 ? 'steel' : 'concrete');
+        const isWater = p[1] < 0.08 && (p[0] < -25.2 || p[0] > 25.2 || Math.abs(p[2]) > 100);
+        const mat = isWater ? 'water' : (hitInfo?.mat || (p[1] >= .08 ? 'steel' : 'concrete'));
         const normal = hitInfo?.normal || [0, 1, 0];
         const metal = mat === 'steel';
-        const ball = hitInfo ? solveBallisticImpact(s, hitInfo, this.rng) : {action: 'stop'};
+        const ball = !isWater && hitInfo ? solveBallisticImpact(s, hitInfo, this.rng) : {action: 'stop'};
 
         if (ball.action === 'ricochet') {
           this.techStats.ricochets++;
@@ -749,6 +751,13 @@ export class Match {
         this.event('impact', {point: p, dir: s.dir, normal, gun: s.gun, metal, mat, actor: s.owner})
       }
       return false
+    }
+    if (a[1] > -0.05 && b[1] <= -0.05 && (b[0] < -25.2 || b[0] > 25.2 || Math.abs(b[2]) > 100)) {
+      const f = clamp((a[1] + 0.05) / Math.max(1e-5, a[1] - b[1]), 0, 1);
+      const wp = [a[0] + (b[0] - a[0]) * f, -0.02, a[2] + (b[2] - a[2]) * f];
+      this.chronoTrace.finishShot(s, wp, 'miss', this.time);
+      this.event('impact', {point: wp, dir: s.dir, normal: [0, 1, 0], gun: s.gun, metal: false, mat: 'water', actor: s.owner});
+      return false;
     }
     const alive = s.life > 0 && Math.abs(b[0]) < 120 && Math.abs(b[2]) < 200;
     if (!alive) this.chronoTrace.finishShot(s, b, 'miss', this.time);

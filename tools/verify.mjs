@@ -16,10 +16,15 @@ import {KHDR_TONE_GLSL} from '../dist/js/khdr.js';
 import {BONE,ARTICULATED_RIG_GLSL} from '../dist/js/rig.js';
 import {HumanAimController} from '../dist/js/nv21-spy.js';
 import {
-  PortAudio,SoundEngin,SOUND_ENGIN_VERSION,SPEED_OF_SOUND,AUDIO_MODES,
-  computePropagationDelay,computeAirAbsorption,computeDopplerShift,
-  computeAcousticPath,traceEarlyReflections,estimateEnclosure,
-  synthesizeWaveShaperCurve,createGunImpulseSamples,generateHarborIR
+  NV2_HUMAN_VERSION,HUMAN_ARCHETYPES,HumanMind,HumanVisionModel,HumanMotorAim,HumanGazeDirector,HumanCommsRelay
+} from '../dist/js/nv2-human.js';
+import {
+  PortAudio,SoundEngin,SoundEngin2,SOUND_ENGIN_VERSION,SOUND_CONTROL_HZ,SUB_CROSSOVER_HZ,
+  SPEED_OF_SOUND,AUDIO_MODES,SOUND_CATALOG_COUNT,
+  computePropagationDelay,computeAirAbsorption,computeDopplerShift,computeDopplerCurve300Hz,
+  computeBinauralNearField,computeMultiBandAcousticPath,computeAcousticPath,
+  traceImageSourceReflections,traceEarlyReflections,estimateEnclosure,
+  synthesizeWaveShaperCurve,synthesizeModalSamples,createGunImpulseSamples,generateHarborIR2,generateHarborIR
 } from '../dist/js/audio.js';
 import {FluxGI,FLUXGI_WORLD_GLSL} from '../dist/js/fluxgi.js';
 import {SchlierenOptics,SCHLIEREN_COMPOSITE_GLSL} from '../dist/js/schlieren.js';
@@ -311,50 +316,71 @@ for (const [mode,counts] of Object.entries(modes)) {
  assert(ARTICULATED_RIG_GLSL.includes('rigApplyCharacter')&&ARTICULATED_RIG_GLSL.includes('rigSolveElbow')&&ARTICULATED_RIG_GLSL.includes('rigLegKinematics'));
 }
 {
- // Sound Engin 1.0: deterministic physical acoustics, 3D raytraced occlusion/reflections, Doppler, & Velvet-Noise IR verification
- assert.equal(SOUND_ENGIN_VERSION,'Sound Engin 1.0');
- assert.equal(PortAudio,SoundEngin,'PortAudio alias must map cleanly to SoundEngin');
- assert.deepEqual(AUDIO_MODES,{hrtf:'hrtf',stereo:'stereo'});
+ // Sound Engin 2.0: 300Hz-class physical multi-band acoustics, 3-band UTD diffraction, 300Hz hyperbolic Doppler,
+ // Woodworth binaural near-field ITD/ILD + pinna elevation, analytical Fermat image reflections, 14 modal buffers, & 3-zone IRs
+ assert.equal(SOUND_ENGIN_VERSION,'Sound Engin 2.0');
+ assert.equal(SOUND_CONTROL_HZ,300,'Sound Engin 2.0 must operate at 300Hz control rate');
+ assert.equal(SUB_CROSSOVER_HZ,300,'Sound Engin 2.0 must use 300Hz sub-bass crossover');
+ assert.equal(PortAudio,SoundEngin2,'PortAudio alias must map cleanly to SoundEngin2');
+ assert.equal(SoundEngin,SoundEngin2,'SoundEngin alias must map cleanly to SoundEngin2');
+ assert.deepEqual(AUDIO_MODES,{ultra300:'ultra300',hrtf:'hrtf',stereo:'stereo'});
+ assert(SOUND_CATALOG_COUNT>=60,`Sound Engin 2.0 must provide 60+ distinct sound archetypes (got ${SOUND_CATALOG_COUNT})`);
  // 1. Speed-of-sound propagation delay & supersonic MS10 crack-before-blast physics
  const d50=computePropagationDelay(50);
  assert(Math.abs(d50-50/SPEED_OF_SOUND)<1e-6,'Propagation delay must equal d / 343 m/s');
  assert(50/weapons.MS10.speed<d50,'MS10 supersonic round (648 m/s) must arrive before its muzzle blast');
- // 2. ISO 9613-1 maritime air absorption monotonic frequency & gain rolloff
+ // 2. ISO 9613-1 maritime 3-band air absorption monotonic rolloff
  const aClose=computeAirAbsorption(2),aMid=computeAirAbsorption(45),aFar=computeAirAbsorption(130);
  assert(aClose.cutoffHz>aMid.cutoffHz&&aMid.cutoffHz>aFar.cutoffHz,'Air absorption LPF cutoff must decrease monotonically with distance');
  assert(aClose.airGain>aMid.airGain&&aMid.airGain>aFar.airGain,'Air attenuation must decrease monotonically with distance');
- // 3. Ballistic Doppler physics (supersonic MS10 vs subsonic SRA)
+ assert(aFar.gainLow>aFar.gainMid&&aFar.gainMid>aFar.gainHigh,'Atmospheric absorption must attenuate high frequencies faster than <300Hz low frequencies');
+ // 3. 300Hz-Sampled Hyperbolic Doppler Curve & Mach-cone physics
  const dopMS10=computeDopplerShift(weapons.MS10.speed,2.0);
  const dopSRA=computeDopplerShift(weapons.SRA.speed,2.0);
  assert(dopMS10.isSupersonic&&dopMS10.mach>1.85&&dopMS10.approachRatio>1&&dopMS10.recedeRatio<1,'MS10 Doppler must be supersonic with approach > 1 > recede');
  assert(!dopSRA.isSupersonic&&dopSRA.mach<1&&dopSRA.approachRatio>1&&dopSRA.recedeRatio<1,'SRA Doppler must be subsonic with approach > 1 > recede');
- // 4. Acoustic materials & real 3D occlusion/diffraction raytracing against Harbor Range containers
+ const curve300=computeDopplerCurve300Hz(weapons.MS10.speed,2.0);
+ assert.equal(curve300.sampleHz,300);
+ assert(curve300.curve.length>=24&&curve300.curve[0]>1.15&&curve300.curve[curve300.curve.length-1]<0.85,'300Hz hyperbolic Doppler curve must transition smoothly across CPA');
+ for(let i=1;i<curve300.curve.length;i++) assert(curve300.curve[i]<=curve300.curve[i-1]+1e-6,'300Hz Doppler curve must be monotonically non-increasing across CPA');
+ // 4. Woodworth-Schlosberg Binaural Near-Field ITD/ILD + Pinna Elevation cues
+ const binNear=computeBinauralNearField([1.1,1.65,78],[0,1.65,78],[1,0,0],[0,0,-1]);
+ const binFar=computeBinauralNearField([14.0,1.65,78],[0,1.65,78],[1,0,0],[0,0,-1]);
+ const binRoof=computeBinauralNearField([2.0,6.2,76],[0,1.65,78],[1,0,0],[0,0,-1]);
+ assert(binNear.itdMs>0.45&&binNear.itdMs<0.75,'Side source ITD must match physical spherical head delay (~0.66ms)');
+ assert(binNear.ildDb>binFar.ildDb&&binNear.shadowCutoffHz<binFar.shadowCutoffHz,'Near-field source must exhibit stronger ILD & head-shadowing than far source');
+ assert(binRoof.elevDeg>35&&binRoof.pinnaNotchHz>binFar.pinnaNotchHz,'Overhead container-roof source must shift pinna notch higher than eye-level source');
+ // 5. True 3-Band UTD Knife-Edge Diffraction + Lloyd's Mirror Ground Reflection
  assert.equal(surfaceAt(0,0,0),'concrete','Wharf ground must classify as concrete');
  assert.equal(surfaceAt(-12,78,5.24),'steel','Container roof must classify as steel');
  assert.equal(surfaceAt(-16,68,2.2),'wood','Wooden crates must classify as wood');
  const matHit=raycastMaterial([-7.8,1.4,13],[-7.8,1.4,2]);
  assert(matHit&&matHit.mat==='steel','Ray into shipping container must report steel material');
- const clearPath=computeAcousticPath([2,1.5,85],[2,1.5,75]);
- const blockedPath=computeAcousticPath([-7.8,1.4,13],[-7.8,1.4,2]);
- assert(!clearPath.occluded&&clearPath.occlusion===0,'Clear LOS path must not be occluded');
+ const clearPath=computeMultiBandAcousticPath([2,1.5,85],[2,1.5,75]);
+ const blockedPath=computeMultiBandAcousticPath([-7.8,1.4,13],[-7.8,1.4,2]);
+ assert(!clearPath.occluded&&clearPath.occlusion===0&&Number.isFinite(clearPath.lloydNotchHz),'Clear LOS path must not be occluded and must compute Lloyd mirror notch');
  assert(blockedPath.occluded&&blockedPath.blockerMat==='steel'&&blockedPath.occlusion>0.2&&blockedPath.cutoffHz<clearPath.cutoffHz&&blockedPath.directGain<clearPath.directGain,'Steel container must occlude, filter, and attenuate direct sound');
- // 5. Geometric early reflection raycaster & enclosure estimator
+ assert(blockedPath.bandGains.low>blockedPath.bandGains.mid&&blockedPath.bandGains.mid>blockedPath.bandGains.high,'UTD Fresnel diffraction must preserve <300Hz low-band wrap better than high-band shadow');
+ // 6. Analytical Fermat Method-of-Images Early Reflections & 3-Zone Enclosure Estimator
+ const imgTaps=traceImageSourceReflections([2,1.6,76],[0,1.6,82],6);
  const taps=traceEarlyReflections([2,1.6,76],[0,1.6,82],6);
- assert(taps.length>=2&&taps.every(t=>t.delay>0.006&&t.gain>0&&Number.isFinite(t.cutoffHz)),'Harbor cargo yard must produce multiple physical early-reflection slapback taps');
+ assert(imgTaps.length>=1&&imgTaps.every(t=>t.analytical&&t.mat==='steel'&&t.delay>0.005),'Method-of-Images must find exact analytical steel-wall reflections');
+ assert(taps.length>=2&&taps.every(t=>t.delay>0.005&&t.gain>0&&Number.isFinite(t.cutoffHz)),'Harbor cargo yard must produce multiple physical early-reflection slapback taps');
  const envAlley=estimateEnclosure([13.6,1.6,71]);
  const envOpen=estimateEnclosure([-23.0,1.6,2]);
  assert(envAlley.enclosure>envOpen.enclosure,'Container canyon enclosure must exceed open west pier enclosure');
- // 6. Friedlander blast, N-wave crack, WaveShaper saturation curve, & Dual-Zone Velvet-Noise IRs
+ // 7. All 14 Physical Modal Synthesis Buffers, WaveShaper, & 3-Zone Velvet-Noise + Eigenmode IRs
  const curve=synthesizeWaveShaperCurve(2.4,512);
  assert(curve.length===512&&curve.every(v=>Number.isFinite(v)&&v>=-1&&v<=1),'WaveShaper curve must be finite in [-1, 1]');
- for(const kind of ['blast','crack']){
-  const buf=createGunImpulseSamples(48000,kind);
+ const modalKinds=['blast','sub300','crack','rail','bolt','steel','wood','concrete','brass','water','glass','cloth','breath','foghorn'];
+ for(const kind of modalKinds){
+  const buf=synthesizeModalSamples(48000,kind);
   let rms=0;for(const v of buf){assert(Number.isFinite(v)&&Math.abs(v)<=1);rms+=v*v;}
-  assert(Math.sqrt(rms/buf.length)>0.02,`Gun impulse '${kind}' must have audible non-zero energy`);
+  assert(Math.sqrt(rms/buf.length)>0.015,`Modal buffer '${kind}' must have audible non-zero energy`);
  }
- for(const style of ['open','alley']){
-  const ir=generateHarborIR(48000,style==='open'?1.6:1.0,style);
-  assert(ir.rt60Low>ir.rt60High,'Physical harbor reverb must damp high frequencies faster than low frequencies');
+ for(const style of ['open','alley','overhead']){
+  const ir=generateHarborIR2(48000,style==='open'?1.6:1.1,style);
+  assert(ir.rt60Low>ir.rt60High,`Harbor IR '${style}' must damp highs faster than lows`);
   let eL=0,eR=0,dotLR=0,eEarly=0,eLate=0;
   const split=Math.floor(ir.left.length*0.25);
   for(let i=0;i<ir.left.length;i++){
@@ -366,38 +392,108 @@ for (const [mode,counts] of Object.entries(modes)) {
   const corr=Math.abs(dotLR/(Math.sqrt(eL*eR)||1));
   assert(eL>0.5&&eR>0.5&&corr<0.55&&eEarly>eLate*0.25,`Harbor IR '${style}' must be energetic, stereo-decorrelated (corr=${corr.toFixed(3)}), and decaying`);
  }
- // 7. SoundEngin Node-safe lifecycle & casing bounce event verification
- const eng=new SoundEngin();
- eng.setMode('stereo');eng.setMode('hrtf');eng.set(0.6);eng.resetMatch();
- assert.equal(eng.getDiagnostics().engine,'Sound Engin 1.0');
+ // 8. SoundEngin2 300Hz sub-frame control ticks, casing bounce & harbor water splash event verification
+ const eng=new SoundEngin2();
+ eng.setMode('stereo');eng.setMode('hrtf');eng.setMode('ultra300');eng.set(0.6);eng.resetMatch();
+ eng.step300Hz(1/60,null);
+ assert.equal(eng.stats.controlTicks300Hz,5,'1/60s frame must advance exactly 5 Sound Engin 2.0 300Hz control ticks');
+ assert.equal(eng.getDiagnostics().engine,'Sound Engin 2.0');
+ assert.equal(eng.getDiagnostics().controlRateHz,300);
  const ev=[],m=duel('MS10','unlimited',2,ev);
  assert(m.trigger(m.player));
  for(let i=0;i<360;i++)m.step(h,{});
  assert(ev.some(e=>e.type==='casing'),'Ejected shell casings must emit physical bounce events');
-  console.log('Sound Engin 1.0 acoustics OK:',{clearHz:Math.round(clearPath.cutoffHz),blockedHz:Math.round(blockedPath.cutoffHz),earlyTaps:taps.length,alleyEnc:Number(envAlley.enclosure.toFixed(2)),openEnc:Number(envOpen.enclosure.toFixed(2))});
+ // Fire into west harbor water to verify Minnaert water splash event
+ const evW=[],mW=duel('MS10','unlimited',2,evW);
+ Object.assign(mW.player,{x:-23.5,y:0,z:0,yaw:-Math.PI*0.5,pitch:-0.25});
+ assert(mW.trigger(mW.player));
+ for(let i=0;i<180;i++)mW.step(h,{});
+ assert(evW.some(e=>e.type==='impact'&&e.mat==='water'),'Shot into west harbor bay must emit water splash impact event');
+ console.log('Sound Engin 2.0 (300Hz-Class) OK:',{
+  controlHz:SOUND_CONTROL_HZ,catalog:SOUND_CATALOG_COUNT,modalBuffers:modalKinds.length,
+  clearHz:Math.round(clearPath.cutoffHz),blockedHz:Math.round(blockedPath.cutoffHz),
+  utdBands:{low:+blockedPath.bandGains.low.toFixed(3),mid:+blockedPath.bandGains.mid.toFixed(3),high:+blockedPath.bandGains.high.toFixed(3)},
+  dopplerPts:curve300.curve.length,imgTaps:imgTaps.length,waterSplash:true
+ });
 }
 {
- // NV2.1 Ally Selector (3V3-only) & Mode Isolation + HumanAimController reaction advantage
- const mStd=new Match({mode:'3v3',limit:'points',multiplier:2,loadout:'DF1 OUT',allyNv21:0});
- assert.equal(mStd.allyNv21Slot,0);assert.equal(mStd.spyActor,null);
- assert(mStd.actors.filter(a=>!a.human).every(a=>a.aiVersion==='NV2'&&!a.isSpy));
+ // NV2 Human (Default Flagship AI) + NV2 Classic Option + NV2.1 Spy Ally Selector & Psychophysics Verification
+ const mHuman=new Match({mode:'3v3',limit:'points',multiplier:2,loadout:'DF1 OUT',allyNv21:0});
+ assert.equal(mHuman.aiModel,'human');
+ assert.equal(mHuman.nv.version,NV2_HUMAN_VERSION);
+ assert.equal(mHuman.allyNv21Slot,0);assert.equal(mHuman.spyActor,null);
+ assert(mHuman.actors.filter(a=>!a.human).every(a=>a.aiVersion==='NV2 Human'&&!a.isSpy&&typeof a.humanPersona==='string'&&a.humanPersona.length>0),'Default NPCs must run NV2 Human with distinct personas');
+ const archetypes=new Set(mHuman.actors.filter(a=>!a.human).map(a=>a.humanArchetype));
+ assert(archetypes.size>=3,`3v3 NV2 Human match must showcase >=3 distinct human archetypes (got ${[...archetypes]})`);
 
+ // Classic NV2 fallback preserved for A/B comparison
+ const mClassic=new Match({mode:'3v3',limit:'points',multiplier:2,loadout:'DF1 OUT',allyNv21:0,aiModel:'classic'});
+ assert.equal(mClassic.nv.version,'NV2');
+ assert(mClassic.actors.filter(a=>!a.human).every(a=>a.aiVersion==='NV2'&&!a.isSpy));
+
+ // NV2.1 Spy Ally Selector (3V3-only) & Mode Isolation
  const mNagi=new Match({mode:'3v3',limit:'points',multiplier:2,loadout:'DF1 OUT',allyNv21:1});
  assert.equal(mNagi.allyNv21Slot,1);assert.equal(mNagi.spyActor,mNagi.actors[1]);
  assert.equal(mNagi.actors[1].name,'NAGI');assert.equal(mNagi.actors[1].aiVersion,'NV2.1');assert.equal(mNagi.actors[1].isSpy,true);
- assert.equal(mNagi.actors[2].aiVersion,'NV2');assert.equal(mNagi.actors[2].isSpy,false);
- assert(mNagi.actors.filter(a=>a.team===1).every(a=>a.aiVersion==='NV2'&&!a.isSpy));
+ assert.equal(mNagi.actors[2].aiVersion,'NV2 Human');assert.equal(mNagi.actors[2].isSpy,false);
+ assert(mNagi.actors.filter(a=>a.team===1).every(a=>a.aiVersion==='NV2 Human'&&!a.isSpy));
 
  const mKai=new Match({mode:'3v3',limit:'points',multiplier:2,loadout:'DF1 OUT',allyNv21:2});
  assert.equal(mKai.allyNv21Slot,2);assert.equal(mKai.spyActor,mKai.actors[2]);
  assert.equal(mKai.actors[2].name,'KAI');assert.equal(mKai.actors[2].aiVersion,'NV2.1');assert.equal(mKai.actors[2].isSpy,true);
- assert.equal(mKai.actors[1].aiVersion,'NV2');assert.equal(mKai.actors[1].isSpy,false);
+ assert.equal(mKai.actors[1].aiVersion,'NV2 Human');assert.equal(mKai.actors[1].isSpy,false);
 
  for (const non3v3 of ['1v1','1v2']) {
   const mIso=new Match({mode:non3v3,limit:'points',multiplier:2,loadout:'DF1 OUT',allyNv21:1});
   assert.equal(mIso.allyNv21Slot,0,`${non3v3} must ignore allyNv21`);
   assert.equal(mIso.spyActor,null,`${non3v3} must not spawn a Spy actor`);
   assert(mIso.actors.every(a=>!a.isSpy));
+ }
+
+ // NV2 Human Cognitive Psychophysics Unit Checks:
+ // (a) Yerkes-Dodson Flow vs High-Stress degradation & Flank Ambush Startle Reflex
+ {
+  const dummyA={id:1,name:'NAGI',gun:'SRA',x:0,y:0,z:20,yaw:0,hp:100,shield:10,vx:0,vz:0};
+  const dummyBack={id:4,x:0,y:0,z:32}; // directly behind actor (facing -Z, attacker at +Z!)
+  const mind=new HumanMind(dummyA,random(77),false);
+  mind.arousal=0.56;mind.stress=0.12;mind.confidence=0.35;
+  const flowGood=mind.getFlowFactor();
+  assert(flowGood>1.0&&mind.isInFlow(),'Optimal arousal + confidence must produce Flow State (>1.0)');
+  const stRes=mind.onDamaged(dummyA,dummyBack,18,5.0,{humanStartles:0});
+  assert(stRes.startled&&mind.isStartled(5.05)&&stRes.freezeDur>=0.12,'Rear ambush must trigger authentic human Startle Reflex freeze');
+  mind.stress=0.90;
+  assert(mind.getFlowFactor()<flowGood,'High stress must degrade Yerkes-Dodson performance factor');
+ }
+ // (b) Foveal vs Peripheral Vision Psychophysics & Muzzle-Flash Salience
+ {
+  const vis=new HumanVisionModel(random(99),false);
+  const obs={id:1,x:0,y:0,z:20,yaw:0};
+  const fovealE={id:2,x:0,y:0,z:6,vx:0,vz:0,crouch:0,flash:0};
+  const periphStill={id:3,x:14,y:0,z:12,vx:0,vz:0,crouch:1,flash:0}; // ~60 deg off-axis, crouched & still!
+  const periphFlash={id:4,x:14,y:0,z:12,vx:0,vz:0,crouch:0,flash:0.08}; // same angle, firing muzzle flash!
+  const rFov=vis.evaluateSighting(obs,fovealE,0.08,1.0,null,-1,null);
+  const rStill=vis.evaluateSighting(obs,periphStill,0.08,1.0,null,-1,null);
+  const rFlash=vis.evaluateSighting(obs,periphFlash,0.08,1.0,null,-1,null);
+  assert(rFov.recognized&&rFov.zone==='foveal','Close dead-center foveal target must recognize immediately');
+  assert(!rStill.recognized&&rStill.zone==='peripheral','Crouched stationary peripheral enemy must NOT instant-snap on 1 frame');
+  assert(rFlash.progress>rStill.progress*2.0,'Muzzle flash in peripheral vision must dramatically accelerate visual salience');
+ }
+ // (c) Two-Phase Fitts's Law Minimum-Jerk Ballistic Flick monotonicity
+ {
+  const motor=new HumanMotorAim(random(55),false,HUMAN_ARCHETYPES.DUELIST);
+  assert(motor.triggerBallisticFlick(0,0,0.28,0,1.0,0,false,null));
+  const durSmall=motor.flickDur;
+  motor.motorPhase='TRACK';
+  assert(motor.triggerBallisticFlick(0,0,1.15,0,2.0,0,false,null));
+  const durLarge=motor.flickDur;
+  assert(durLarge>durSmall,'Fitts Law ballistic flick duration must grow logarithmically with angle amplitude');
+ }
+ // (d) HumanCommsRelay realistic voice callout delay (0.38-0.72s, never 0ms telepathy!)
+ {
+  const comms=new HumanCommsRelay(random(123));
+  comms.emitCallout(0,1,3,5,10,'spot',10.0,null);
+  assert.equal(comms.drainReady(0,10.20).length,0,'Human voice callout must NOT teleport instantaneously in <200ms');
+  assert.equal(comms.drainReady(0,10.85).length,1,'Human voice callout must arrive after realistic 0.38-0.72s speech delay');
  }
 
  // HumanAimController: NV2.1 strictly faster visual reaction, acquisition & tracking than NV2
@@ -422,7 +518,7 @@ for (const [mode,counts] of Object.entries(modes)) {
  for (let i=0;i<24;i++) mFair.step(h,{});
  assert(spyBrain.spy.sightings.size>=1,'Spy Engine must record enemy immediately upon direct visual LOS');
 
- // Full 3V3 NV2.1 NAGI simulation + KAI Spy operational check
+ // Full 3V3 NV2 Human + NV2.1 NAGI simulation + KAI Spy operational check
  for (let i=0;i<360*250&&!mNagi.ended;i++) mNagi.step(h,{});
  const nagiMetrics=mNagi.nv.metrics;
  const nagiStatus=mNagi.nv.getSpyStatus();
@@ -430,6 +526,7 @@ for (const [mode,counts] of Object.entries(modes)) {
  assert(nagiMetrics.spySightings>5&&nagiMetrics.spyPredictions>5&&nagiMetrics.spyFlanks>5&&nagiMetrics.spyDodges>10,'NV2.1 NAGI Spy Engine must visually sight, predict, flank, and dodge');
  assert(nagiMetrics.spyBackstabs>0,'NV2.1 NAGI Spy Engine must achieve rear/flank ambush hits');
  assert(nagiMetrics.nv21Shots>20&&nagiMetrics.nv21Hits>0,'NV2.1 NAGI must actively engage and score hits');
+ assert(nagiMetrics.humanFlicks>10&&nagiMetrics.humanCornerScans>30&&nagiMetrics.humanCheckSix>5&&nagiMetrics.humanCallouts>5,'NV2 Human cognitive/motor behaviors must actively run in live combat');
  const nagiHitRate=nagiMetrics.nv21Hits/nagiMetrics.nv21Shots;
  assert(nagiHitRate>0.10&&nagiHitRate<0.75,`NV2.1 NAGI hit rate must remain human-realistic (got ${(nagiHitRate*100).toFixed(1)}%)`);
 
@@ -437,7 +534,12 @@ for (const [mode,counts] of Object.entries(modes)) {
  const kaiMetrics=mKai.nv.metrics;
  assert(kaiMetrics.spySightings>5&&kaiMetrics.spyPredictions>5&&kaiMetrics.spyFlanks>5&&kaiMetrics.spyDodges>10,'NV2.1 KAI Spy Engine must visually sight, predict, flank, and dodge');
  assert(kaiMetrics.nv21Shots>15&&kaiMetrics.nv21Hits>0,'NV2.1 KAI must actively engage and score hits');
- console.log('NV2.1 Spy Engine OK:',{
+ console.log('NV2 Human + NV2.1 Spy OK:',{
+  human:{
+   flicks:nagiMetrics.humanFlicks,overshoots:nagiMetrics.humanOvershoots,startles:nagiMetrics.humanStartles,
+   cornerScans:nagiMetrics.humanCornerScans,checkSix:nagiMetrics.humanCheckSix,callouts:nagiMetrics.humanCallouts,
+   repeekAborts:nagiMetrics.humanRepeekAborts,flowShots:nagiMetrics.humanFlowShots,periphMisses:nagiMetrics.humanPeripheralMisses
+  },
   nagi:{ended:mNagi.ended,scores:mNagi.scores,time:Math.round(mNagi.time)+'s',hitRate:(nagiHitRate*100).toFixed(1)+'%',sightings:nagiMetrics.spySightings,predictions:nagiMetrics.spyPredictions,flanks:nagiMetrics.spyFlanks,backstabs:nagiMetrics.spyBackstabs,dodges:nagiMetrics.spyDodges},
   kai:{scores:mKai.scores,time:Math.round(mKai.time)+'s',sightings:kaiMetrics.spySightings,predictions:kaiMetrics.spyPredictions,flanks:kaiMetrics.spyFlanks,backstabs:kaiMetrics.spyBackstabs,dodges:kaiMetrics.spyDodges}
  });
@@ -915,6 +1017,6 @@ for (const [mode,counts] of Object.entries(modes)) {
   console.log('FermatCore 1.0 OK:',{faces:STEEL_MANIFOLD.faces.length,oneBounceHit:true,twoBounceHit:true,zeroWallhack:true,avgSolveUs:+avgUs.toFixed(1)});
  }
 }
-console.log('360Hz sim, weapon specs (DF1 OUT 95-mag 2x rate, MS10, RD20/30/40), FluxGI 1.0, SchlierenOptics 1.0, BallisticCore-X, EchoPulse 1.0, NV-Synapse 1.0, AeroVortex 1.0, ThermoFlux 1.0, SpectraField 1.0, ResonanceCore 1.0, ChronoTrace 1.0, FermatCore 1.0, Lightweight Mode LOD, 16-joint sculpted rig, KHDR, Shadow Flame 1.0 Flash/Pro, Sound Engin 1.0, Human-Realistic Aiming, NV2.1 Spy Engine, and all matches passed.');
+console.log('360Hz sim, weapon specs (DF1 OUT 95-mag 2x rate, MS10, RD20/30/40), FluxGI 1.0, SchlierenOptics 1.0, BallisticCore-X, EchoPulse 1.0, NV-Synapse 1.0, AeroVortex 1.0, ThermoFlux 1.0, SpectraField 1.0, ResonanceCore 1.0, ChronoTrace 1.0, FermatCore 1.0, Lightweight Mode LOD, 16-joint sculpted rig, KHDR, Shadow Flame 1.0 Flash/Pro, Sound Engin 2.0 (300Hz-Class), NV2 Human Cognitive AI, NV2.1 Spy Engine, and all matches passed.');
 
 

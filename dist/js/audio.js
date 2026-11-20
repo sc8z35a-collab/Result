@@ -1,17 +1,28 @@
-// Sound Engin 1.0 — Public Audio Bridge & Backward-Compatible PortAudio Export
+// Sound Engin 2.0 — Public Audio Bridge & Backward-Compatible PortAudio / SoundEngin Exports
 export {
-  SoundEngin,
-  SoundEngin as PortAudio,
+  SoundEngin2,
+  SoundEngin2 as SoundEngin,
+  SoundEngin2 as PortAudio,
   SOUND_ENGIN_VERSION,
+  SOUND_CONTROL_HZ,
+  SUB_CROSSOVER_HZ,
   SPEED_OF_SOUND,
   AUDIO_MODES,
+  SOUND_CATALOG,
+  SOUND_CATALOG_COUNT,
   computePropagationDelay,
   computeAirAbsorption,
   computeDopplerShift,
+  computeDopplerCurve300Hz,
+  computeBinauralNearField,
+  computeMultiBandAcousticPath,
   computeAcousticPath,
+  traceImageSourceReflections,
   traceEarlyReflections,
   estimateEnclosure,
   synthesizeWaveShaperCurve,
+  synthesizeModalSamples,
   createGunImpulseSamples,
+  generateHarborIR2,
   generateHarborIR
-} from './sound-engin.js';
+} from './sound-engin2.js';

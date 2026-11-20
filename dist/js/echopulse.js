@@ -15,7 +15,7 @@
 //        — works seamlessly even when audio is muted!
 
 import {clamp} from './geometry.js';
-import {computeAcousticPath, traceEarlyReflections, SPEED_OF_SOUND} from './sound-engin.js';
+import {computeAcousticPath, traceEarlyReflections, SPEED_OF_SOUND} from './audio.js';
 import {eyeOf} from './posture.js';
 
 export const ECHOPULSE_VERSION = 'EchoPulse 1.0';
