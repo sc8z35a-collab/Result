@@ -90,15 +90,23 @@ export class Match {
     const counts = modes[mode], multiplier = Number(config.multiplier ?? 5);
     this.goals = counts.map(n => config.limit === 'unlimited' ? Infinity : n * clamp(Number.isFinite(multiplier) ? Math.round(multiplier) : 5, 1, 99));
     this.receiptId = globalThis.crypto?.randomUUID?.() || Date.now().toString(36) + Math.random().toString(36).slice(2);
-    this.aiModel = config.aiModel === 'classic' ? 'classic' : 'human';
+    this.aiModel = config.aiModel === 'classic' ? 'classic' : config.aiModel === 'nv23' ? 'nv23' : 'human';
+    this.teamAiModels = Array.isArray(config.teamAiModels) && config.teamAiModels.length === 2 ? [...config.teamAiModels] : null;
     this.nv = new NV2(this);
     const rawSpy = config.allyNv21 === true ? 1 : Number(config.allyNv21 || 0);
     this.allyNv21Slot = mode === '3v3' && (rawSpy === 1 || rawSpy === 2) ? rawSpy : 0;
+    const allNpc = !!config.allNpc;
+    const benchGuns = Array.isArray(config.benchGuns) ? config.benchGuns : null;
     for (let team = 0; team < 2; team++)for (let slot = 0; slot < counts[team]; slot++) {
-      const human = team === 0 && slot === 0;
-      const gun = human ? loadout : npcWeapons[(slot + team + 1) % npcWeapons.length];
+      const human = !allNpc && team === 0 && slot === 0;
+      const gun = human
+        ? loadout
+        : benchGuns && Object.hasOwn(weapons, benchGuns[slot % benchGuns.length])
+          ? benchGuns[slot % benchGuns.length]
+          : npcWeapons[(slot + team + 1) % npcWeapons.length];
       const isSpy = !human && team === 0 && slot === this.allyNv21Slot;
-      const aiVersion = human ? 'HUMAN' : isSpy ? 'NV2.1' : (this.aiModel === 'human' ? 'NV2 Human' : 'NV2');
+      const teamModel = this.teamAiModels ? this.teamAiModels[team] : this.aiModel;
+      const aiVersion = human ? 'HUMAN' : isSpy ? 'NV2.1' : (teamModel === 'classic' ? 'NV2' : teamModel === 'nv23' ? 'NV2.3 HUMAN' : 'NV 2.4 Manusia');
       const a = {id: this.actors.length, team, slot, human, name: names[team][slot], gun, aiVersion, isSpy, kills: 0, deaths: 0, earned: 0};
       this.actors.push(a);
       this.spawn(a, true)
@@ -150,6 +158,7 @@ export class Match {
       spawnId: (a.spawnId || 0) + 1,
       dryAt: -Infinity,
       cooldown: 0,
+      smokeCooldown: 0,
       burstLeft: 0,
       nextBurst: 0,
       reload: 0,
@@ -319,7 +328,8 @@ export class Match {
     return true;
   }
   deploySmokeVent(a = this.player) {
-    if (!a?.alive || this.ended || (a.human && this.smokeCooldown > 0.01)) return false;
+    if (!a?.alive || this.ended) return false;
+    if (a.human ? this.smokeCooldown > 0.01 : (a.smokeCooldown || 0) > 0.01) return false;
     const fx = Math.sin(a.yaw), fz = -Math.cos(a.yaw);
     const from = [a.x, a.y + .45, a.z];
     const to = [clamp(a.x + fx * 3.4, -24, 24), from[1], clamp(a.z + fz * 3.4, -98, 98)];
@@ -328,6 +338,7 @@ export class Match {
     this.aeroVortex.deploySmokeVent(sx, sz, fx, fz);
     this.thermoFlux.depositHeat(sx, sz, 0.45, 2);
     if (a.human) this.smokeCooldown = 10.0;
+    else a.smokeCooldown = 14.0;
     this.echoPulse.emit(this, {kind: 'tanker', pos: [sx, 1.2, sz], actor: a, team: a.team, loudness: 0.72});
     this.event('smoke', {actor: a, point: [sx, 1.0, sz]});
     return true;
@@ -467,6 +478,7 @@ export class Match {
     a.hitFlash = Math.max(0, (a.hitFlash || 0) - dt * 5.2);
     a.shieldFlash = Math.max(0, (a.shieldFlash || 0) - dt * 4.2);
     a.cooldown = Math.max(0, a.cooldown - dt);
+    if (a.smokeCooldown > 0) a.smokeCooldown = Math.max(0, a.smokeCooldown - dt);
     // Smooth body-frame velocity & posture signals for the 16-joint articulated humanoid rig
     const sy = Math.sin(a.yaw), cy = Math.cos(a.yaw);
     const localFwd = a.vx * sy - a.vz * cy;
