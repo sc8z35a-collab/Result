@@ -19,7 +19,10 @@ export const WEAPON_BAND = {
   MS10: {min: 16, ideal: 31, max: 56, burstMax: 5, cap: 24},
   SRA: {min: 12, ideal: 23, max: 40, burstMax: 6, cap: 30},
   D1: {min: 7, ideal: 16, max: 29, burstMax: 4, cap: 40},
-  'DF1 OUT': {min: 14, ideal: 26, max: 46, burstMax: 3, cap: 50}
+  'DF1 OUT': {min: 14, ideal: 26, max: 46, burstMax: 3, cap: 95},
+  RD30: {min: 10, ideal: 20, max: 36, burstMax: 5, cap: 40},
+  RD20: {min: 11, ideal: 21, max: 38, burstMax: 4, cap: 20},
+  RD40: {min: 14, ideal: 26, max: 48, burstMax: 6, cap: 65}
 };
 
 // Module-cached Prebaked Tactical Cover & Visibility Graph (computed once per harbor map, ~18 KB total).
@@ -79,6 +82,7 @@ export function getTacticalGraph() {
       cell: cellOf(x, z),
       lane: x < -7 ? -1 : x > 7 ? 1 : 0,
       coverMask,
+      nearCover: true,
       peeks,
       tankerDists
     });
@@ -523,11 +527,27 @@ export class NV13Pro extends NV12 {
     }
     if (!v.human) {
       const b = this.brains.get(v.id);
-      if (b && (v.hp < 68 || v.shield <= 0 || b.recentDamage >= 15)) {
-        b.htnTask = 'SURVIVE_RESET';
-        b.htnUntil = t + 1.5;
-        b.planAt = 0;
-        b.peekEdgeSign = -b.peekEdgeSign; // re-peek from the opposite corner next time!
+      if (b) {
+        if (b.mind) {
+          // NV2.3 HUMAN mode: only force full SURVIVE_RESET on critical danger; moderate tags while
+          // holding cover trigger authentic Human Re-Peek Abort / Shoulder-Bait / Shield-Cycle!
+          const critical = v.hp < 52 || (v.hp < 68 && b.recentDamage >= 26) || (v.mag <= 1 && v.hp < 78) || !b.cover;
+          if (critical && (v.hp < 68 || v.shield <= 0 || b.recentDamage >= 15)) {
+            b.htnTask = 'SURVIVE_RESET';
+            b.htnUntil = t + 1.35;
+            b.planAt = 0;
+            b.peekEdgeSign = -b.peekEdgeSign;
+          } else if (v.hp < 88 && (v.shield <= 0 || b.recentDamage >= 13)) {
+            b.repeekAbortPending = true;
+            b.planAt = 0;
+            b.peekEdgeSign = -b.peekEdgeSign;
+          }
+        } else if (v.hp < 68 || v.shield <= 0 || b.recentDamage >= 15) {
+          b.htnTask = 'SURVIVE_RESET';
+          b.htnUntil = t + 1.5;
+          b.planAt = 0;
+          b.peekEdgeSign = -b.peekEdgeSign; // re-peek from the opposite corner next time!
+        }
       }
     }
   }
@@ -859,8 +879,13 @@ export class NV13Pro extends NV12 {
         }
         if (!bestPeek) continue;
         sc += 28 - Math.abs(minThreatD - band.ideal) * 1.05;
+        if (i === b.coverNodeId) sc += 5.5; // cover hysteresis prevents thrashing between adjacent edges
         if (minThreatD < band.min * .78) sc -= 18;
         if (minThreatD > band.max) sc -= (minThreatD - band.max) * 1.4;
+      }
+      // ResonanceCore 5,100 m/s Container Knock: immediately abandon a knocked steel cover node!
+      if (b.vision?.needsKnockReposition(this.match.time) && i === b.coverNodeId) {
+        sc -= 36;
       }
 
       if (sc > bestScore) {
@@ -892,10 +917,15 @@ export class NV13Pro extends NV12 {
     // 1. Continuous Utility Scoring for each HTN Task
     const multiThreat = threats.length >= 2 ? 1 : 0;
     const ms10Threat = primary?.gun === 'MS10' ? 1 : 0;
-    const uSurvive = sigmoid((68 - effHp) / 14) * (1 + .35 * multiThreat + .30 * ms10Threat)
+    const nearOwnedCover = !!(b.cover && dist2(a.x, a.z, b.cover.x, b.cover.z) < 5.5);
+    const humanCoverHold = !!(b.mind && nearOwnedCover && a.hp >= 54 && a.mag >= 3 && a.reload <= 0);
+    let uSurvive = sigmoid((68 - effHp) / 14) * (1 + .35 * multiThreat + .30 * ms10Threat)
       + (b.recentDamage >= 17 ? .42 : 0)
       + ((a.reload > .15 || a.mag === 0) && (b.seen || underFire) ? .55 : 0)
       + (a.shield <= 0 && a.hp < 82 && underFire ? .35 : 0);
+    // In NV2.3 HUMAN mode, moderate tags while already holding cover stay in TACTICAL_SKIRMISH
+    // to execute authentic Re-Peek Aborts, Shield Recovery Cycles & Shoulder Baits!
+    if (humanCoverHold && !b.vision?.needsKnockReposition(t)) uSurvive *= 0.62;
 
     const enemyReloading = !!(targetPr && targetPr.reloadUntil > t + .25 && targetDist < 38);
     const uReloadHunt = enemyReloading && effHp > 62 && a.mag >= 4 && a.reload <= 0 ? .84 : 0;
@@ -1054,20 +1084,53 @@ export class NV13Pro extends NV12 {
         const dCov = dist2(a.x, a.z, cov.x, cov.z);
         const vsDF1 = primary.gun === 'DF1 OUT';
         const vsMS10 = primary.gun === 'MS10';
-        if (dCov > 3.2) {
+        if (dCov > 4.8) {
           goal = [cov.x, cov.z];
           b.state = '遮蔽移動';
           if (b.prevState !== '遮蔽移動' && b.prevState !== '遮蔽交戦') this.metrics.cover++;
         } else {
-          // Anti-predictable jiggle peek + ARV1 lock break (<0.34s) + Shoulder Bait!
-          if (t >= b.peekSwitchAt) {
+          // NV2.3 HUMAN Shield Recovery Cycle + 5 Tactical Peek Styles + Shoulder Bait!
+          const cyclingShield = !!(b.tactics && b.tactics.shouldCycleShield(a, b, t, b.mind, this.metrics));
+          const justArrivedCover = b.prevState !== 'ピーク射撃' && b.prevState !== 'ショルダーベイト' && b.prevState !== '遮蔽交戦';
+          if (cyclingShield) {
+            b.peekPhase = 'hide';
+            b.peekSwitchAt = Math.max(b.peekSwitchAt || 0, b.tactics.shieldCycleUntil);
+          } else if (justArrivedCover && b.tactics) {
+            const style = b.tactics.selectPeekStyle(a, b, primary, t, b.mind, this.metrics);
+            if (style === 'INFO_JIGGLE') {
+              b.peekPhase = 'bait';
+              b.peekSwitchAt = t + .22;
+              this.metrics.shoulderBait++;
+            } else {
+              b.peekPhase = 'peek';
+              const peekDur = vsDF1 ? .30 : style === 'WIDE_SWING' ? .64 : vsMS10 ? .62 : .74 + b.rng() * .38;
+              b.peekSwitchAt = t + peekDur;
+              if (style === 'CROUCH_MIXUP' && a.onGround) {
+                b.crouchFeintUntil = Math.max(b.crouchFeintUntil || 0, t + .36);
+              }
+            }
+          } else if (t >= b.peekSwitchAt) {
             if (b.peekPhase === 'peek') {
               b.peekPhase = 'hide';
-              b.peekSwitchAt = t + (vsDF1 ? .42 : vsMS10 ? .64 : .52) + b.rng() * .34;
+              b.peekSwitchAt = t + (vsDF1 ? .38 : vsMS10 ? .58 : .46) + b.rng() * .30;
               b.peekEdgeSign = -b.peekEdgeSign;
+            } else if (b.tactics) {
+              const style = b.tactics.selectPeekStyle(a, b, primary, t, b.mind, this.metrics);
+              if (style === 'INFO_JIGGLE') {
+                b.peekPhase = 'bait';
+                b.peekSwitchAt = t + .20;
+                this.metrics.shoulderBait++;
+              } else {
+                b.peekPhase = 'peek';
+                const peekDur = vsDF1 ? .30 : style === 'WIDE_SWING' ? .64 : vsMS10 ? .62 : .74 + b.rng() * .38;
+                b.peekSwitchAt = t + peekDur;
+                if (style === 'CROUCH_MIXUP' && a.onGround) {
+                  b.crouchFeintUntil = Math.max(b.crouchFeintUntil || 0, t + .36);
+                }
+              }
             } else {
-              // 28% chance: rapid Shoulder Bait to draw enemy shots before real peek!
-              if (b.rng() < .28 && !vsDF1) {
+              // Classic fallback: rapid Shoulder Bait to draw enemy shots before real peek!
+              if (b.rng() < .30) {
                 b.peekPhase = 'bait';
                 b.peekSwitchAt = t + .18;
                 this.metrics.shoulderBait++;
@@ -1085,10 +1148,12 @@ export class NV13Pro extends NV12 {
             this.metrics.arvBreak++;
           }
           if (b.peekPhase === 'peek') {
-            goal = cov.peek;
+            goal = b.tactics
+              ? b.tactics.computePeekGoal(cov, b.tactics.currentPeekStyle, b, primary)
+              : cov.peek;
             b.state = 'ピーク射撃';
           } else if (b.peekPhase === 'bait') {
-            goal = [mix(cov.x, cov.peek[0], .55), mix(cov.z, cov.peek[1], .55)];
+            goal = [mix(cov.x, cov.peek[0], .52), mix(cov.z, cov.peek[1], .52)];
             b.state = 'ショルダーベイト';
           } else {
             goal = [cov.x, cov.z];
@@ -1220,7 +1285,10 @@ export class NV13Pro extends NV12 {
       || t < b.crouchFeintUntil;
     const ads = base.ads
       || ((b.state === '予測待ち伏せ' || b.state === 'ピーク射撃' || b.state === 'クロスファイア') && a.reload <= 0);
-    return {crouch: crouching && !b.vault && a.onGround, lean: base.lean, ads};
+    const lean = b.tactics?.computeAnatomicalLean
+      ? b.tactics.computeAnatomicalLean(a, b, base.lean, t, this.metrics)
+      : base.lean;
+    return {crouch: crouching && !b.vault && a.onGround, lean, ads};
   }
 
   tick(dt) {

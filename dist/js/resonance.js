@@ -253,6 +253,7 @@ export class ResonanceCore {
           e.seismicRattle = Math.max(e.seismicRattle || 0, 0.85);
           e.seismicKnockTeam = actor.team;
           match.nv?.brains?.get(e.id)?.humanAim?.onHitShock(1.6);
+          match.nv?.onSeismicKnock?.(e, actor, c, point);
           c.knockPing = 1.0;
           if (c.coupledIdx >= 0) this.containers[c.coupledIdx].knockPing = 0.85;
           this.stats.seismicKnocks++;
