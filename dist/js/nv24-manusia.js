@@ -233,8 +233,8 @@ export class ManusiaSomaPsycheV24 extends HumanPsycheV23 {
     else if (this.matchPointIntensity > 0.65 && this.isInFlow()) this.stateTag = '決着集中フロー';
   }
 
-  onDamaged(actor, attacker, power, t, metrics) {
-    const res = super.onDamaged(actor, attacker, power, t, metrics);
+  onDamaged(actor, attacker, power, t, metrics, impactDir) {
+    const res = super.onDamaged(actor, attacker, power, t, metrics, impactDir);
     // Heavy hit causes somatic breath hitch (breaks breath-hold & spikes heart rate!)
     if (power >= 12 || actor.shield <= 0) {
       this.releaseBreathHold();

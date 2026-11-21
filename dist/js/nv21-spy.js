@@ -23,8 +23,9 @@
 //       with high-shot crouch-duck and agile low-shot evasive hop.
 
 import {clamp, mix, angleDiff} from './geometry.js';
-import {walkable, obstruction} from './yard.js';
+import {walkable, obstruction, clearOpticalPath} from './yard.js';
 import {eyeOf, targetPoint} from './posture.js';
+import {incomingPathClear} from './ballistics.js';
 
 const dist2 = (ax, az, bx, bz) => Math.hypot(ax - bx, az - bz);
 
@@ -876,7 +877,7 @@ export function computeSpyDodge(nv, a, b, spyState) {
     const cpy = s.p[1] + s.dir[1] * along;
     const cpz = s.p[2] + s.dir[2] * along;
     const missH = Math.hypot(cpx - ax, cpz - az);
-    if (missH < 1.38 && Math.abs(cpy - ay) < 1.08) {
+    if (missH < 1.38 && Math.abs(cpy - ay) < 1.08 && incomingPathClear(s, along, [cpx, cpy, cpz])) {
       incoming.push({
         px: s.p[0], pz: s.p[2],
         dx: s.dir[0], dz: s.dir[2],
@@ -899,7 +900,7 @@ export function computeSpyDodge(nv, a, b, spyState) {
     if (d < 2 || d > 44) continue;
     const fx = Math.sin(e.yaw), fz = -Math.cos(e.yaw);
     const aimDot = (ex * fx + ez * fz) / d;
-    if (aimDot > 0.945) {
+    if (aimDot > 0.945 && clearOpticalPath(eyeOf(e), targetPoint(a), nv.match.aeroVortex)) {
       aimRay = {ex: e.x, ez: e.z, fx, fz, d, aimDot};
       break;
     }

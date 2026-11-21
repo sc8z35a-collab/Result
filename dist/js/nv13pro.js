@@ -498,10 +498,6 @@ export class NV13Pro extends NV12 {
     vTeam.lastCombatAt = t;
     // Record killbox danger memory so squad stops feeding into the same death zone!
     vTeam.stampField(vTeam.deathHeat, victim.x, victim.z, 12, 2.4, 7.0);
-    if (owner && owner.team !== victim.team) {
-      vTeam.stampField(vTeam.threat, owner.x, owner.z, 14, 1.8, 6.0);
-      vTeam.collapseBelief(owner.id, owner.x, owner.z, owner.vx || 0, owner.vz || 0, .86, t, 3.6);
-    }
     const oTeam = this.teams[owner.team];
     oTeam.lastCombatAt = t;
     const {bf} = oTeam.ensureEnemy(victim.id);

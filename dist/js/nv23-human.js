@@ -605,7 +605,8 @@ export class HumanPsycheV23 {
     this.adrenaline = clamp(this.adrenaline + 0.35, 0, 1);
   }
 
-  onDamaged(actor, attacker, power, t, metrics) {
+  onDamaged(actor, attacker, power, t, metrics, impactDir) {
+    const quietFor = t - this.lastCombatAt;
     this.lastCombatAt = t;
     this.lastDamageBurst += power;
     const res = this.persona.stressResilience * (this.isNv21 ? 1.22 : 1.0) * (1 + this.clutchLevel * 0.24);
@@ -630,17 +631,18 @@ export class HumanPsycheV23 {
     }
 
     // Rear / blind-flank ambush -> Authentic Human Startle Reflex!
-    if (attacker) {
-      const dx = attacker.x - actor.x, dz = attacker.z - actor.z;
+    if (attacker || impactDir) {
+      const dx = attacker ? attacker.x - actor.x : -impactDir[0];
+      const dz = attacker ? attacker.z - actor.z : -impactDir[2];
       const threatYaw = Math.atan2(dx, -dz);
       const angOff = Math.abs(angleDiff(threatYaw, actor.yaw));
-      const surprise = angOff > 0.90 || (t - this.lastCombatAt > 3.2 && angOff > 0.45);
+      const surprise = angOff > 0.90 || (quietFor > 3.2 && angOff > 0.45);
       if (surprise && t > this.startleUntil + 0.65) {
         const freezeDur = (this.isNv21 ? 0.075 : 0.122) + this.rng() * (this.isNv21 ? 0.042 : 0.078);
         this.startle = clamp(0.60 + (angOff / Math.PI) * 0.38, 0.5, 1.0);
         this.startleUntil = t + freezeDur;
         this.startleYaw = threatYaw;
-        this.recordTraumaAngle(actor.x, actor.z, attacker.x, attacker.z, 0.72, t);
+        if (attacker) this.recordTraumaAngle(actor.x, actor.z, attacker.x, attacker.z, 0.72, t);
         if (metrics) metrics.humanStartles++;
         return {startled: true, freezeDur, threatYaw};
       }

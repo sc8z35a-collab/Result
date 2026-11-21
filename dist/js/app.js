@@ -501,6 +501,19 @@ function show(s) {
   const focus = {title: 'play', lobby: 'lobbyBack', settings: 'settingsClose', pause: 'resume', results: 'rematch'}[s];
   if (focus)$(focus).focus({preventScroll: true}); else document.activeElement?.blur?.()
 }
+function audioSafely(action) {
+  try {
+    action();
+  } catch (error) {
+    audio.on = false;
+    audio.listenerPrevPos = null;
+    audio.listenerVel = [0, 0, 0];
+    try { audio.set(settings.volume / 100); } catch {}
+    console.warn('サウンドの処理を停止しました', error);
+    soundButton();
+  }
+}
+
 function soundButton() {
   const on = settings.sound && audio.on && settings.volume > 0;
   $('sound').querySelector('use').setAttribute('href', on ? '#i-audio' : '#i-muted');
@@ -799,7 +812,7 @@ function toggleFlir() {
     return;
   }
   flirActive = !flirActive;
-  audio.event({type: 'flir', on: flirActive}, match.player);
+  audioSafely(() => audio.event({type: 'flir', on: flirActive}, match.player));
   $('combatNotice').textContent = flirActive ? 'ThermoFlux FLIR 熱視界 ON · 貫煙熱痕探知' : 'FLIR 熱視界 OFF';
   noticeUntil = match.time + 1.4;
   hud();
@@ -820,7 +833,7 @@ function toggleChrono() {
     return;
   }
   chronoActive = !chronoActive;
-  audio.event({type: 'chrono', on: chronoActive}, match.player);
+  audioSafely(() => audio.event({type: 'chrono', on: chronoActive}, match.player));
   $('combatNotice').textContent = chronoActive ? 'ChronoTrace 1.0 · 4D空間弾道スキャナー ON（過去22秒の弾道を3D投影）' : '4D空間弾道スキャナー OFF';
   noticeUntil = match.time + 1.6;
   hud();
@@ -868,7 +881,7 @@ $('resultTitle').onclick = () => show('title');
 function event(e) {
   const p = match?.player;
   if (!p)return;
-  audio.event(e, p);
+  audioSafely(() => audio.event(e, p));
   if (e.type === 'fire' && e.actor === p)kickWeapon(e.gun || p.gun);
   if (e.type === 'rdlock' && e.actor === p) {
     // Crisp tactical cant lock-snap kick on RD40 target acquisition (zero camera shake)
@@ -1429,7 +1442,7 @@ function frame(ms) {
     cam = titleCamera(tourTime);
     $('cinema-veil').style.opacity = cam.fade
   }
-  audio.update(dt, screen === 'game' ? match : null, cam);
+  audioSafely(() => audio.update(dt, screen === 'game' ? match : null, cam));
   const cinematic = !match && !renderer.native && !settings.lightMode && settings.shadows && settings.hdr;
   $('app').classList.toggle('cinematic', cinematic);
   if (cinematic) $('cinema-veil').style.opacity = 0;
