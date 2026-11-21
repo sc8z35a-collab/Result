@@ -3,6 +3,12 @@ import {createRequire} from 'node:module';
 import {Match,modes,weapons,npcWeapons} from '../dist/js/match.js';
 import {ARV1_VERSION,ARV1_ASSIST_STRENGTH,ARV1_LAUNCH_GAIN,ARV1_LAUNCH_STEP,ARV1_LOCK_ACQUIRE,ARV1_LOCK_HOLD} from '../dist/js/df1.js';
 import {RD40_AA_VERSION,RD40_ASSIST_STRENGTH,RD40_LOCK_ACQUIRE,RD40_LOCK_HOLD,RD40_D01_DURATION,RD30_MINI_STRENGTH,RD20_AA_STRENGTH,RD_SPECS} from '../dist/js/rd40.js';
+import {
+  DF40II,ARV13_VERSION,AA13_VERSION,AA14_VERSION,
+  AA13_ASSIST_STRENGTH,AA13_LOCK_ACQUIRE,AA13_LOCK_HOLD,AA13_FOCUS_TIME,AA13_WALL_DURATION,
+  AA14_ASSIST_STRENGTH,AA14_LOCK_ACQUIRE,AA14_LOCK_HOLD,AA14_FOCUS_TIME,AA14_HOMING_BUDGET,AA13_HOMING_BUDGET,
+  AA14_OVERHEAT_COOLDOWN,AA14_COOL_DELAY
+} from '../dist/js/df40ii.js';
 import {PilotWallet} from '../dist/js/wallet.js';
 import {ThermalOptic} from '../dist/js/optic.js';
 import {eyeOf,targetPoint} from '../dist/js/posture.js';
@@ -44,7 +50,7 @@ function duel(loadout='DF1 OUT',limit='unlimited',multiplier=2,events=[]) {
 function forward(m,actor,frames) {for(let i=0;i<frames;i++){m.time+=h;m.systems(actor,h)}}
 function arrange(m,x,z1,z2){const a=m.player,b=m.actors[1];Object.assign(a,{x,y:0,z:z1,yaw:.025,pitch:Math.atan2(-.38,z1-z2)});Object.assign(b,{x,y:0,z:z2,vx:0,vy:0,vz:0});return [a,b]}
 function burst(m) {const a=m.player;assert(m.trigger(a));while(a.burstLeft||a.cooldown>1e-7)forward(m,a,1)}
-for(const [id,cap,damage,rate,velocity,burstSize,shotsPerTrigger] of [['SW T',10,9,100,100,1,1],['SRA',30,6,120,80,1,1],['D1',40,5,100,60,2,2],['MS10',24,9,130,180,1,1],['DF1 OUT',95,2.8,300,65,3,3],['RD20',20,6,110,70,1,1],['RD30',80,3,100,100,1,2],['RD40',130,3,170,140,1,2]]) {
+for(const [id,cap,damage,rate,velocity,burstSize,shotsPerTrigger] of [['SW T',10,9,100,100,1,1],['SRA',30,6,120,80,1,1],['D1',40,5,100,60,2,2],['MS10',24,9,130,180,1,1],['DF1 OUT',95,2.8,300,65,3,3],['RD20',20,6,110,70,1,1],['RD30',80,3,100,100,1,2],['RD40',130,3,170,140,1,2],['DF40 II',260,2,225,80,1,3]]) {
  const w=weapons[id];assert.deepEqual([w.capacity,w.damage,w.rate,w.velocity,w.burst],[cap,damage,rate,velocity,burstSize]);const m=duel(id);burst(m);assert.equal(m.shots.length,shotsPerTrigger);assert.equal(m.player.mag,cap-shotsPerTrigger);
 }
 {
@@ -196,6 +202,124 @@ for(const [id,cap,damage,rate,velocity,burstSize,shotsPerTrigger] of [['SW T',10
   assert(mesh.count>100);
   for(let i=0;i<mesh.data.length;i+=STRIDE) assert(Number.isFinite(mesh.data[i])&&Number.isFinite(mesh.data[i+1])&&Number.isFinite(mesh.data[i+2]));
  }
+}
+{
+ // DF40 II: Player-only tri-barrel full-auto (260 mag, 3 simultaneous, 2 dmg, rate 225, vel 80 = 288 m/s)
+ // + ARV1.3 & Auto-Aim 1.3 (evolved beyond Auto-Aim 1.2) + temporary Auto-Aim 1.4 Overdrive with overheat & cooldown purge!
+ const w40=weapons[DF40II];
+ assert(w40.playerOnly===true&&!npcWeapons.includes(DF40II),'DF40 II must be strictly player-only');
+ assert(w40.capacity===260&&w40.damage===2&&w40.pellets===3&&w40.burst===1&&w40.auto===true&&w40.rate===225&&w40.velocity===80);
+ assert(Math.abs(w40.speed-288)<1e-6&&Math.abs(w40.speed/weapons['SW T'].speed-0.8)<1e-6,'DF40 II velocity must be 80 ratio (288 m/s)');
+ assert(Math.abs((1/w40.interval)/(1/weapons['SW T'].interval)-2.25)<1e-6,'DF40 II fire rate must be 225 ratio');
+ assert.equal(ARV13_VERSION,'1.3');
+ assert.equal(AA13_VERSION,'1.3');
+ assert.equal(AA14_VERSION,'1.4');
+ assert(AA13_ASSIST_STRENGTH>RD40_ASSIST_STRENGTH&&Math.abs(AA13_ASSIST_STRENGTH-2.08)<1e-6,'Auto-Aim 1.3 must strictly evolve beyond Auto-Aim 1.2');
+ assert(AA13_LOCK_ACQUIRE>RD40_LOCK_ACQUIRE&&AA13_LOCK_HOLD>RD40_LOCK_HOLD&&AA13_FOCUS_TIME<0.26,'ARV1.3/AA1.3 cones & lock speed must surpass RD40 AA1.2');
+ assert(AA14_ASSIST_STRENGTH>AA13_ASSIST_STRENGTH&&AA14_LOCK_ACQUIRE>AA13_LOCK_ACQUIRE&&AA14_LOCK_HOLD>AA13_LOCK_HOLD&&AA14_FOCUS_TIME<AA13_FOCUS_TIME&&AA14_HOMING_BUDGET>AA13_HOMING_BUDGET,'Auto-Aim 1.4 must strictly strengthen Auto-Aim 1.3');
+
+ // 1. Full-auto 3-round simultaneous firing + remainder mag (260 % 3 = 2, and 1-round final shot)
+ const mFire=duel(DF40II),pF=mFire.player;
+ assert(mFire.trigger(pF));
+ assert.equal(mFire.shots.length,3,'Single DF40 II trigger must emit 3 simultaneous rounds');
+ assert.equal(pF.mag,257,'Single tri-barrel salvo must consume 3 rounds from 260-round mag');
+ assert(mFire.shots.every(s=>s.damage===2&&Math.abs(s.speed-288)<1e-6&&s.arvOrder===2&&s.aaTier==='1.3'));
+ for(let i=0;i<360;i++){mFire.trigger(pF);mFire.time+=h;mFire.systems(pF,h)}
+ assert(mFire.shots.length>=27&&pF.mag<=233,`Holding full-auto DF40 II at rate 225 for 1s must chain >=27 rounds (got ${mFire.shots.length})`);
+ pF.mag=2;pF.cooldown=0;const before2=mFire.shots.length;
+ assert(mFire.trigger(pF));assert.equal(mFire.shots.length,before2+2);assert.equal(pF.mag,0);
+ pF.mag=1;pF.cooldown=0;const before1=mFire.shots.length;
+ assert(mFire.trigger(pF));assert.equal(mFire.shots.length,before1+1);assert.equal(pF.mag,0);
+
+ // 2. Auto-Aim 1.3 wider acquire cone than RD40 Auto-Aim 1.2 (0.155 rad: RD40 misses, DF40 II locks!)
+ const mRdMiss=duel('RD40'),[pRdM]=arrange(mRdMiss,2,85,73);
+ pRdM.yaw=0.155;forward(mRdMiss,pRdM,140);
+ assert(!pRdM.rd.locked,'RD40 Auto-Aim 1.2 should NOT acquire outside 0.1449 rad cone');
+ const ev13=[],m13=duel(DF40II,'unlimited',2,ev13),[p13,t13]=arrange(m13,2,85,73);
+ p13.yaw=0.155;forward(m13,p13,90);
+ assert(p13.df40.locked&&p13.df40.focusId===t13.id,'DF40 II Auto-Aim 1.3 MUST lock cleanly at 0.155 rad (evolved beyond AA1.2)');
+ assert(ev13.some(e=>e.type==='rdlock'&&e.gun===DF40II));
+ // Expanded hold cone (0.27 rad > RD40 0.253 rad) + smooth magnetic tracking + 3 simultaneous ARV1.3 guided shots
+ p13.yaw=0.27;forward(m13,p13,12);
+ assert(p13.df40.locked&&p13.yaw<0.266,'Auto-Aim 1.3 must sustain lock at 0.27 rad and smoothly pull aim toward target');
+ m13.shots.length=0;p13.cooldown=0;
+ assert(m13.trigger(p13));
+ assert.equal(m13.shots.length,3);
+ assert(m13.shots.every(s=>s.guided&&s.homingTargetId===t13.id&&s.aaTier==='1.3'&&s.arvOrder===2),'All 3 DF40 II rounds must carry ARV1.3/AA1.3 guidance');
+ const s13=m13.shots[0];
+ for(let i=0;i<14&&m13.shots.includes(s13);i++){m13.time+=h;m13.projectile(s13,h)}
+ assert(s13.homingTurned>0,'ARV1.3 guided bullet must curve smoothly in flight at 360Hz');
+
+ // 3. ARV1.3 2nd-order velocity + acceleration lead prediction: accelerating target shifts aim ahead of constant-velocity target
+ const mAcc1=duel(DF40II),[pA1,tA1]=arrange(mAcc1,0,85,40);
+ tA1.vx=3.0;forward(mAcc1,pA1,90);assert(pA1.df40.locked);
+ assert(mAcc1.trigger(pA1));const constVelDirX=mAcc1.shots[1].dir[0];
+ const mAcc2=duel(DF40II),[pA2,tA2]=arrange(mAcc2,0,85,40);
+ tA2.vx=1.0;forward(mAcc2,pA2,50);
+ for(let i=0;i<50;i++){tA2.vx+=14*h;mAcc2.time+=h;mAcc2.systems(pA2,h)}
+ tA2.vx=3.0; // Same instantaneous vx=3.0, but positive smoothed acceleration ax>0!
+ assert(pA2.df40.locked&&pA2.df40.targetAccel[0]>5.0,'ARV1.3 must estimate positive lateral target acceleration');
+ pA2.yaw=pA1.yaw;pA2.pitch=pA1.pitch;
+ assert(mAcc2.trigger(pA2));const accelDirX=mAcc2.shots[1].dir[0];
+ assert(accelDirX>constVelDirX+0.0005,`ARV1.3 2nd-order lead must bias further ahead for accelerating target (${accelDirX.toFixed(4)} vs ${constVelDirX.toFixed(4)})`);
+
+ // 4. Auto-Aim 1.4 Overdrive: locks at 0.205 rad (outside AA1.3 0.1707 rad), snap-locks in <=0.08s, pinpoint zero-fan convergence,
+ //    early manual deactivation cools without lockout, AND sustained use hits 100% OVERHEAT with 6.0s lockout -> ready recovery!
+ const ev14=[],m14=duel(DF40II,'unlimited',2,ev14),[p14,t14]=arrange(m14,2,85,73);
+ p14.yaw=0.205;forward(m14,p14,90);
+ assert(!p14.df40.locked,'Auto-Aim 1.3 must NOT lock outside its 0.1707 rad cone');
+ const onRes=m14.toggleAA14(p14);
+ assert(onRes.ok&&p14.df40.aa14Active&&p14.df40.aaVersion==='1.4','toggleAA14 must engage Auto-Aim 1.4 Overdrive');
+ assert(ev14.some(e=>e.type==='aa14'&&e.state==='on'));
+ forward(m14,p14,32); // ~0.089s -> AA1.4 snap-locks in 0.06s even at 0.205 rad!
+ assert(p14.df40.locked&&p14.df40.focusId===t14.id,'Auto-Aim 1.4 MUST rapidly snap-lock at 0.205 rad');
+ assert(p14.df40.aa14Heat>0&&p14.df40.aa14Heat<30,'Running AA1.4 must accumulate thermal heat');
+ // Fire in AA1.4 -> pinpoint zero-fan convergence across all 3 simultaneous shots!
+ m14.shots.length=0;p14.cooldown=0;
+ assert(m14.trigger(p14));
+ assert.equal(m14.shots.length,3);
+ assert(m14.shots.every(s=>s.guided&&s.aaTier==='1.4'),'All 3 AA1.4 shots must be tagged tier 1.4');
+ assert(Math.hypot(m14.shots[0].dir[0]-m14.shots[2].dir[0],m14.shots[0].dir[1]-m14.shots[2].dir[1],m14.shots[0].dir[2]-m14.shots[2].dir[2])<1e-6,'AA1.4 tri-barrel shots must converge with zero fan dispersion');
+ // Early manual toggle OFF -> cools cleanly back to 0 without overheat lockout!
+ const heatPeak=p14.df40.aa14Heat;
+ const offRes=m14.toggleAA14(p14);
+ assert(offRes.ok&&!p14.df40.aa14Active&&!p14.df40.aa14Overheated,'Manual deactivation before 100% must not trigger overheat');
+ forward(m14,p14,Math.ceil((AA14_COOL_DELAY+1.5)*360));
+ assert(p14.df40.aa14Heat<heatPeak*0.5,'Heat must cool down smoothly after manual deactivation');
+ // Re-activate AA1.4 and push until 100% OVERHEAT!
+ assert(m14.toggleAA14(p14).ok&&p14.df40.aa14Active);
+ for(let i=0;i<360*8&&!p14.df40.aa14Overheated;i++){
+  if(p14.cooldown<=0)m14.trigger(p14);
+  m14.time+=h;m14.systems(p14,h);
+ }
+ assert(p14.df40.aa14Overheated&&!p14.df40.aa14Active&&p14.df40.aaVersion==='1.3'&&p14.df40.aa14Cooldown>5.5,'Sustained AA1.4 must overheat, shut off AA1.4, revert to AA1.3, and start 6.0s thermal cooldown');
+ assert(ev14.some(e=>e.type==='aa14'&&e.state==='overheat'),'Overheat must emit aa14 overheat event');
+ const blocked=m14.toggleAA14(p14);
+ assert(!blocked.ok&&blocked.reason==='overheated','Cannot re-enable AA1.4 while overheated');
+ // Gun still fires normally in AA1.3 while AA1.4 is overheated!
+ m14.shots.length=0;p14.cooldown=0;p14.mag=30;
+ assert(m14.trigger(p14)&&m14.shots.length===3&&m14.shots.every(s=>s.aaTier==='1.3'),'DF40 II must continue firing in AA1.3 while AA1.4 cools from overheat');
+ // Complete the 6.0s overheat purge -> emits ready and allows re-enabling AA1.4!
+ forward(m14,p14,Math.ceil((AA14_OVERHEAT_COOLDOWN+0.1)*360));
+ assert(!p14.df40.aa14Overheated&&p14.df40.aa14Heat===0&&p14.df40.aa14Cooldown===0,'Thermal purge must finish cleanly after 6.0s');
+ assert(ev14.some(e=>e.type==='aa14'&&e.state==='ready'),'Finishing overheat purge must emit aa14 ready event');
+ assert(m14.toggleAA14(p14).ok&&p14.df40.aa14Active,'AA1.4 must be re-usable once overheat cooldown finishes');
+
+ // 5. Behind-wall ARV1.3 sensor tracking & finite expiry + 3v3 player-only check + 3D mesh integrity
+ const mWall=duel(DF40II),[pW,tW]=arrange(mWall,2,85,75);
+ forward(mWall,pW,90);assert(pW.df40.locked&&!pW.df40.d01Active);
+ Object.assign(pW,{x:-7.8,y:0,z:13,yaw:0,pitch:0});Object.assign(tW,{x:-7.8,y:0,z:2,vx:0,vz:0});
+ forward(mWall,pW,36);
+ assert(pW.df40.locked&&pW.df40.d01Active&&pW.df40.d01Timer>4.0&&pW.df40.d01Timer<AA13_WALL_DURATION,'DF40 II ARV1.3 must sustain behind-cover tracking');
+ forward(mWall,pW,1700);
+ assert(!pW.df40.locked&&!pW.df40.d01Active,'DF40 II behind-cover tracking must expire cleanly after finite duration');
+ const m3DF=new Match({mode:'3v3',limit:'points',multiplier:2,loadout:DF40II});
+ assert(m3DF.player.gun===DF40II&&m3DF.actors.filter(a=>!a.human).every(a=>a.gun!==DF40II&&a.gun!=='RD40'&&a.gun!=='DF1 OUT'),'NPCs must NEVER equip DF40 II');
+ const vm40=viewModel(DF40II),mf40=muzzleFlashMesh(DF40II,1,1,true,false),mf40Lite=muzzleFlashMesh(DF40II,1,1,false,true);
+ const fx40=movingDetails(m14,1.2,true,false);
+ assert(vm40.count>500&&mf40.count>mf40Lite.count&&mf40Lite.count>0&&fx40.count>0);
+ for(const mesh of [vm40,mf40,mf40Lite,fx40]) for(let i=0;i<mesh.data.length;i+=STRIDE) assert(Number.isFinite(mesh.data[i])&&Number.isFinite(mesh.data[i+1])&&Number.isFinite(mesh.data[i+2]));
+ console.log('DF40 II (ARV1.3 / AA1.3 / AA1.4 Overheat) OK:',{mag:w40.capacity,pellets:w40.pellets,damage:w40.damage,rate:w40.rate,velocity:w40.velocity,aa13Strength:AA13_ASSIST_STRENGTH,aa14Strength:AA14_ASSIST_STRENGTH,vmVerts:vm40.count});
 }
 {
  // Supply tanker: +100 rounds immediately and 1.5x ammo refinement speed (0.6667s/round vs 1.0s/round, plus DF1 P1 1.5x), cooldown enforced, reset on respawn.
@@ -1017,6 +1141,6 @@ for (const [mode,counts] of Object.entries(modes)) {
   console.log('FermatCore 1.0 OK:',{faces:STEEL_MANIFOLD.faces.length,oneBounceHit:true,twoBounceHit:true,zeroWallhack:true,avgSolveUs:+avgUs.toFixed(1)});
  }
 }
-console.log('360Hz sim, weapon specs (DF1 OUT 95-mag 2x rate, MS10, RD20/30/40), FluxGI 1.0, SchlierenOptics 1.0, BallisticCore-X, EchoPulse 1.0, NV-Synapse 1.0, AeroVortex 1.0, ThermoFlux 1.0, SpectraField 1.0, ResonanceCore 1.0, ChronoTrace 1.0, FermatCore 1.0, Lightweight Mode LOD, 16-joint sculpted rig, KHDR, Shadow Flame 1.0 Flash/Pro, Sound Engin 2.0 (300Hz-Class), NV2 Human Cognitive AI, NV2.1 Spy Engine, and all matches passed.');
+console.log('360Hz sim, weapon specs (DF1 OUT 95-mag 2x rate, MS10, RD20/30/40, DF40 II ARV1.3/AA1.3/AA1.4), FluxGI 1.0, SchlierenOptics 1.0, BallisticCore-X, EchoPulse 1.0, NV-Synapse 1.0, AeroVortex 1.0, ThermoFlux 1.0, SpectraField 1.0, ResonanceCore 1.0, ChronoTrace 1.0, FermatCore 1.0, Lightweight Mode LOD, 16-joint sculpted rig, KHDR, Shadow Flame 1.0 Flash/Pro, Sound Engin 2.0 (300Hz-Class), NV2 Human Cognitive AI, NV2.1 Spy Engine, and all matches passed.');
 
 

@@ -1467,8 +1467,8 @@ export class NV2 extends NV13Pro {
       this.metrics.humanRepeekAborts++;
     }
 
-    // 3. Upgrade peek rhythm against DF1 OUT to razor-sharp <0.27s jiggle peeks
-    if (b.seen && b.target && b.target.gun === 'DF1 OUT' && b.cover) {
+    // 3. Upgrade peek rhythm against DF1 OUT / DF40 II to razor-sharp <0.27s jiggle peeks
+    if (b.seen && b.target && (b.target.gun === 'DF1 OUT' || b.target.gun === 'DF40 II') && b.cover) {
       if (b.exposedSince > 0 && t - b.exposedSince >= 0.26 && b.peekPhase === 'peek') {
         b.peekPhase = 'hide';
         b.peekSwitchAt = t + 0.34 + b.rng() * 0.16;

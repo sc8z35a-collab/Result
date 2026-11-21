@@ -309,8 +309,8 @@ export class AeroVortex {
     // Transverse vector for wake vorticity shear
     const tx = -uz, tz = ux;
     const machFactor = clamp(speed / 343, 0.5, 2.2);
-    const wakeForce = (gun === 'MS10' ? 2.4 : gun === 'RD40' ? 1.8 : 1.25) * machFactor;
-    const carve = clamp((gun === 'MS10' ? 0.58 : gun === 'RD40' ? 0.44 : 0.34) * machFactor, 0.18, 0.72);
+    const wakeForce = (gun === 'MS10' ? 2.4 : gun === 'RD40' ? 1.8 : gun === 'DF40 II' ? 1.65 : 1.25) * machFactor;
+    const carve = clamp((gun === 'MS10' ? 0.58 : gun === 'RD40' ? 0.44 : gun === 'DF40 II' ? 0.40 : 0.34) * machFactor, 0.18, 0.72);
 
     const samples = Math.max(1, Math.min(4, Math.ceil(seg / 1.4)));
     let carvedAny = false;

@@ -172,7 +172,7 @@ export function bulletGuidanceDF(match, a) {
   };
 }
 
-// Per-tick 360Hz ARV1.1 smart-bullet in-flight homing with kinematic lead prediction.
+// Per-tick 360Hz ARV1.1 / ARV1.2 / ARV1.3 / AA1.4 smart-bullet in-flight homing with kinematic lead prediction.
 export function steerGuidedShot(match, s, dt) {
   if (!s.guided || s.homingTargetId < 0 || s.homingBudget <= 1e-5)return;
   const e = match.actors[s.homingTargetId];
@@ -182,13 +182,34 @@ export function steerGuidedShot(match, s, dt) {
   }
   const rawTp = targetPoint(e);
   if (obstruction(s.p, rawTp) <= 1)return;
-  const tp = leadPoint(s.p, e, s.speed || DF_BULLET_SPEED);
+  let tp;
+  if (s.arvOrder === 2) {
+    const spd = Math.max(70, s.speed || DF_BULLET_SPEED);
+    const vx = e.vx || 0, vy = e.vy || 0, vz = e.vz || 0;
+    const acc = s.homingAccel;
+    const ax = acc ? acc[0] : 0, ay = acc ? acc[1] : 0, az = acc ? acc[2] : 0;
+    const vw = s.homingVelWeight ?? 0.94, aw = s.homingAccelWeight ?? 0.45;
+    const d0 = Math.hypot(rawTp[0] - s.p[0], rawTp[1] - s.p[1], rawTp[2] - s.p[2]);
+    let tof = clamp(d0 / spd, 0, 0.55);
+    let px = rawTp[0], py = rawTp[1], pz = rawTp[2];
+    for (let iter = 0; iter < 2; iter++) {
+      const t2 = 0.5 * tof * tof;
+      px = rawTp[0] + vx * tof * vw + ax * t2 * aw;
+      py = rawTp[1] + vy * tof * Math.min(0.55, vw * 0.48) + ay * t2 * Math.min(0.3, aw * 0.4);
+      pz = rawTp[2] + vz * tof * vw + az * t2 * aw;
+      tof = clamp(Math.hypot(px - s.p[0], py - s.p[1], pz - s.p[2]) / spd, 0, 0.55);
+    }
+    const cand = [px, py, pz];
+    tp = obstruction(s.p, cand) > 1 ? cand : leadPoint(s.p, e, spd);
+  } else {
+    tp = leadPoint(s.p, e, s.speed || DF_BULLET_SPEED);
+  }
   const toT = sub(tp, s.p);
   const dist = Math.hypot(toT[0], toT[1], toT[2]);
   if (dist < .22)return;
   const desired = [toT[0] / dist, toT[1] / dist, toT[2] / dist];
   const cosA = clamp(dot(s.dir, desired), -1, 1);
-  // Enforce forward lock cone (ARV1.1 ~15.8°, RD40 ARV1.2 expanded ~22.3°) while homing
+  // Enforce forward lock cone (ARV1.1 ~15.8°, RD40 ARV1.2 ~22.3°, DF40 II ARV1.3 ~27.7°, AA1.4 ~38.7°)
   if (cosA < (s.homingCos || 0.962))return;
   const ang = Math.acos(cosA);
   if (ang < 1e-5)return;

@@ -199,9 +199,73 @@ function rd20Device(m) {
   m.box(0, .132, -.08, .008, .008, .008, 'white', cyan, 0, 3);
 }
 
+// DF40 II: Player-only flagship tri-barrel smart carbine with 260-round triple-helix drum,
+// ARV1.3 convergent triangular accelerator array & Auto-Aim 1.4 overdrive thermal radiator pod.
+function df40iiDevice(m) {
+  const obsidian = '#1f2830', ceramic = '#c8d0cc', titanium = '#768894', violet = '#8672ff', cyan = '#52f6ff', gold = '#ffd066';
+  // Sculpted carbon-ceramic hybrid flagship receiver chassis
+  m.box(0, .022, -.11, .134, .108, .44, 'blackMetal', obsidian, .28, 1);
+  m.box(0, .080, -.10, .120, .036, .40, 'steel', ceramic, .22, 1);
+  // Tri-barrel triangular accelerator cluster (left-lower, top-apex, right-lower)
+  const triBarrels = [
+    [-.040, .012, -.82, -.79],
+    [0, .052, -.86, -.83],
+    [.040, .012, -.82, -.79]
+  ];
+  for (let b = 0; b < triBarrels.length; b++) {
+    const [bx, by, len, comp] = triBarrels[b];
+    const isApex = b === 1;
+    m.box(bx, by, -.48, isApex ? .040 : .036, isApex ? .044 : .042, .40, 'blackMetal', '#2e3a44', .18, 1);
+    m.tube([bx, by, -.28], [bx, by, len], .019, .017, 'steel', '#5b6c76', 10, 1);
+    m.box(bx, by, comp, .034, .034, .095, 'steel', '#a2b4bc', .16, 1);
+    m.tube([bx, by, len - .022], [bx, by, len - .040], .021, .019, 'blackMetal', obsidian, 8, 1);
+    // Glowing ARV1.3 plasma conduits running along each of the 3 barrels
+    for (let i = 0; i < 5; i++) {
+      const stripCol = isApex ? (i % 2 ? gold : cyan) : (i % 2 ? cyan : violet);
+      m.box(bx + (isApex ? 0 : Math.sign(bx) * .022), by + (isApex ? .024 : 0), -.33 - i * .076, isApex ? .014 : .008, isApex ? .008 : .016, .034, 'white', stripCol, 0, 3);
+    }
+  }
+  // Central tri-convergence magnetic yoke & dorsal thermal cooling fins (expand on lock/AA1.4!)
+  m.box(0, .026, -.52, .054, .042, .42, 'steel', titanium, .16, 1);
+  m.box(0, .026, -.54, .020, .016, .36, 'white', cyan, 0, 3);
+  for (const sx of [-1, 1]) {
+    // Flank overdrive thermal radiator fins (x > 0.05 -> animated by shaders.js uAnim rail pulse!)
+    m.box(sx * .068, .048, -.16, .014, .034, .28, 'steel', '#485862', .15, 1);
+    m.box(sx * .074, .054, -.16, .009, .014, .24, 'white', violet, 0, 3);
+    m.box(sx * .072, .028, -.16, .008, .010, .20, 'white', gold, 0, 3);
+  }
+  // 260-round triple-helix high-capacity drum magazine + ergonomic grip
+  for (const sx of [-1, 1]) {
+    m.tube([sx * .062, -.106, -.12], [sx * .062, -.106, -.27], .055, .055, 'blackMetal', '#2a353d', 10, 1);
+    m.box(sx * .102, -.106, -.195, .012, .030, .088, 'white', cyan, 0, 3);
+  }
+  // Third central under-slung helical drum core
+  m.tube([0, -.122, -.13], [0, -.122, -.28], .046, .046, 'steel', '#3d4c55', 10, 1);
+  m.box(0, -.156, -.205, .032, .012, .092, 'white', gold, 0, 3);
+  m.box(0, -.070, -.195, .092, .084, .122, 'blackMetal', obsidian, 0, 1);
+  m.beam([0, -.038, .024], [0, -.154, .078], .064, .086, 'rubber', rubber, 0);
+  // Dual-strut ceramic-titanium counterbalance stock
+  m.beam([0, .048, .098], [0, .022, .265], .042, .030, 'steel', ceramic, 1);
+  m.beam([0, -.018, .098], [0, -.074, .252], .034, .026, 'blackMetal', obsidian, 1);
+  m.box(0, -.026, .268, .070, .138, .048, 'rubber', '#1e262b', 0, 0);
+  // Top ARV1.3 Optical Prism + Auto-Aim 1.4 Overdrive Core Pod (y > 0.095 -> animated by shader pod deploy!)
+  m.box(0, .116, -.10, .102, .038, .178, 'blackMetal', obsidian, 0, 1);
+  m.box(0, .152, -.10, .086, .038, .136, 'steel', '#465864', .16, 1);
+  m.tube([0, .154, -.152], [0, .154, -.186], .026, .022, 'white', cyan, 12, 3);
+  for (const sx of [-1, 1]) {
+    m.box(sx * .048, .152, -.095, .011, .026, .096, 'white', violet, 0, 3);
+    m.box(sx * .034, .174, -.10, .010, .010, .082, 'white', gold, 0, 3);
+  }
+  m.box(0, .124, -.72, .024, .032, .038, 'white', cyan, 0, 3);
+}
+
 function device(m, gun) {
   if (gun === 'DF1 OUT') {
     dfDevice(m);
+    return;
+  }
+  if (gun === 'DF40 II') {
+    df40iiDevice(m);
     return;
   }
   if (gun === 'MS10') {
@@ -270,6 +334,7 @@ function dfDevice(m) {
 
 export function muzzleOffset(gun) {
   if (gun === 'MS10') return [0, .024, -.86];
+  if (gun === 'DF40 II') return [0, .026, -.88];
   if (gun === 'RD40') return [0, .026, -.85];
   if (gun === 'RD30') return [0, .025, -.75];
   if (gun === 'RD20') return [0, .024, -.67];
@@ -283,14 +348,18 @@ export function muzzleOffset(gun) {
 export function muzzleFlashMesh(gun, intensity, seed, extra = false, lite = false) {
   const m = new Mesh();
   if (intensity <= .01) return m;
-  const [mx0, my, mz] = muzzleOffset(gun);
-  const barrels = gun === 'RD40' ? [mx0 - .036, mx0 + .036] : gun === 'RD30' ? [mx0 - .032, mx0 + .032] : [mx0];
-  const s = intensity * (gun === 'MS10' ? 1.25 : gun === 'RD40' ? .88 : gun === 'RD30' ? .78 : gun === 'D1' ? 1.05 : .95);
-  const coreCol = gun === 'MS10' ? '#e8ffff' : gun === 'RD40' ? '#fff4ea' : gun === 'RD30' ? '#fff6e4' : (gun === 'DF1 OUT' || gun === 'RD20') ? '#dcfff7' : '#fff8dc';
-  const outerCol = gun === 'MS10' ? '#4de2ff' : gun === 'RD40' ? '#ff5c5c' : gun === 'RD30' ? '#ffad4e' : gun === 'RD20' ? '#58f0d8' : gun === 'DF1 OUT' ? '#6de8d5' : gun === 'SRA' ? '#ffcf76' : '#ffaa4e';
+  const [mx0, my0, mz0] = muzzleOffset(gun);
+  const tips = gun === 'DF40 II'
+    ? [[mx0 - .040, .012, -.85], [mx0, .052, -.89], [mx0 + .040, .012, -.85]]
+    : gun === 'RD40' ? [[mx0 - .036, my0, mz0], [mx0 + .036, my0, mz0]]
+    : gun === 'RD30' ? [[mx0 - .032, my0, mz0], [mx0 + .032, my0, mz0]]
+    : [[mx0, my0, mz0]];
+  const s = intensity * (gun === 'MS10' ? 1.25 : gun === 'DF40 II' ? .80 : gun === 'RD40' ? .88 : gun === 'RD30' ? .78 : gun === 'D1' ? 1.05 : .95);
+  const coreCol = gun === 'MS10' ? '#e8ffff' : gun === 'DF40 II' ? '#f4f0ff' : gun === 'RD40' ? '#fff4ea' : gun === 'RD30' ? '#fff6e4' : (gun === 'DF1 OUT' || gun === 'RD20') ? '#dcfff7' : '#fff8dc';
+  const outerCol = gun === 'MS10' ? '#4de2ff' : gun === 'DF40 II' ? '#8c74ff' : gun === 'RD40' ? '#ff5c5c' : gun === 'RD30' ? '#ffad4e' : gun === 'RD20' ? '#58f0d8' : gun === 'DF1 OUT' ? '#6de8d5' : gun === 'SRA' ? '#ffcf76' : '#ffaa4e';
   const rot = (seed * 1.618) % 6.28;
-  for (let b = 0; b < barrels.length; b++) {
-    const mx = barrels[b];
+  for (let b = 0; b < tips.length; b++) {
+    const [mx, my, mz] = tips[b];
     const bRot = rot + b * .75;
     if (lite) {
       // Ultra-lightweight 2-blade star flash + compact gas lance
@@ -314,9 +383,9 @@ export function muzzleFlashMesh(gun, intensity, seed, extra = false, lite = fals
       m.beam([mx - cx, my - cy, mz - .03 * s], [mx + cx, my + cy, mz - .03 * s], .024 * s, .016 * s, 'white', outerCol, 3);
       m.beam([mx - cx * .55, my - cy * .55, mz - .025 * s], [mx + cx * .55, my + cy * .55, mz - .025 * s], .014 * s, .012 * s, 'white', coreCol, 3);
     }
-    // Muzzle pressure shock ring (extra crisp for MS10 / RD40 supersonic discharge)
-    if (gun === 'MS10' || gun === 'RD40' || extra) {
-      ring(m, [mx, my, mz - .12 * s], [0, 0, -1], .095 * s + (1 - intensity) * .09, .013 * s, 10, gun === 'MS10' ? '#7cf2ff' : gun === 'RD40' ? '#ffb86e' : '#ffe29c', 3);
+    // Muzzle pressure shock ring (extra crisp for MS10 / RD40 / DF40 II discharge)
+    if (gun === 'MS10' || gun === 'RD40' || gun === 'DF40 II' || extra) {
+      ring(m, [mx, my, mz - .12 * s], [0, 0, -1], .095 * s + (1 - intensity) * .09, .013 * s, 10, gun === 'MS10' ? '#7cf2ff' : gun === 'DF40 II' ? '#5ef6ff' : gun === 'RD40' ? '#ffb86e' : '#ffe29c', 3);
     }
   }
   return m;
@@ -766,6 +835,10 @@ export function character(team, gun, variant = 'standard', detail = 'high') {
 function shotPalette(s) {
   if (s.ricocheted) return {core: '#ffffff', jacket: '#f4c86a', outer: '#ff9634', ring: '#ffe98a', spark: '#fff0a4', vapor: '#e8d8be'};
   if (s.gun === 'MS10') return {core: '#f7ffff', jacket: '#8ec7d8', outer: s.team ? '#ff8b4f' : '#3ee4ff', ring: s.team ? '#ffd57a' : '#8ef7ff', spark: '#ffe37a', vapor: '#b8e8f2'};
+  if (s.gun === 'DF40 II') {
+    if (s.aaTier === '1.4') return {core: '#fffdf2', jacket: '#f0b868', outer: s.guided ? '#ff68d6' : '#ffaa48', ring: '#ffe478', spark: '#fff0a8', vapor: '#f0cfe8'};
+    return {core: '#f6f8ff', jacket: '#9a96df', outer: s.guided ? '#7c6eff' : '#58d8ff', ring: s.guided ? '#64f8ff' : '#a8a2ff', spark: '#9cfaff', vapor: '#ccd2f2'};
+  }
   if (s.gun === 'RD40') return {core: '#fff7f0', jacket: '#d48272', outer: s.guided ? '#ff4a62' : '#ff7b4e', ring: s.guided ? '#ffcf76' : '#ff9c6e', spark: '#ffd27a', vapor: '#e8c4be'};
   if (s.gun === 'RD30') return {core: '#fffcf2', jacket: '#c9a06a', outer: s.guided ? '#ffae48' : (s.team ? '#ff7d44' : '#f4a250'), ring: s.guided ? '#ffe282' : '#ffcf76', spark: '#ffe388', vapor: '#e6d2b8'};
   if (s.gun === 'RD20') return {core: '#f4ffff', jacket: '#7eb8c8', outer: s.guided ? '#4ce4ff' : (s.team ? '#ff8c52' : '#58c8e8'), ring: s.guided ? '#a8f8ff' : '#ffe088', spark: '#b8fbff', vapor: '#c2e4ee'};
@@ -870,8 +943,8 @@ export function movingDetails(match, time, extra = false, lite = false, opts = n
       m.beam(tail, head, w, w, 'white', pal.outer, 3);
       m.beam(coreTail, tip, w * .52, w * .52, 'white', pal.core, 3);
       if (isGuided) {
-        const gCol = s.gun === 'RD40' ? '#ff7082' : s.gun === 'RD30' ? '#ffd478' : s.gun === 'RD20' ? '#7cf0ff' : '#92fff2';
-        ring(m, add(head, scale(s.dir, -.35)), s.dir, s.gun === 'RD40' ? .115 : .10, .014, s.gun === 'RD40' ? 8 : 6, gCol, 3);
+        const gCol = s.gun === 'DF40 II' ? (s.aaTier === '1.4' ? '#ffe078' : '#78f6ff') : s.gun === 'RD40' ? '#ff7082' : s.gun === 'RD30' ? '#ffd478' : s.gun === 'RD20' ? '#7cf0ff' : '#92fff2';
+        ring(m, add(head, scale(s.dir, -.35)), s.dir, (s.gun === 'RD40' || s.gun === 'DF40 II') ? .115 : .10, .014, (s.gun === 'RD40' || s.gun === 'DF40 II') ? 8 : 6, gCol, 3);
       }
       continue;
     }
@@ -937,7 +1010,7 @@ export function movingDetails(match, time, extra = false, lite = false, opts = n
 
     // 3. Signature weapon slipstream effects:
     //    - MS10: Twin counter-rotating electromagnetic plasma helices + supersonic Mach shock rings
-    //    - DF1 OUT ARV1 Guided: Rotating hexagonal guidance lock-rings around the curving smart-bullet
+    //    - DF1 OUT / RD / DF40 II Guided: Rotating guidance lock-rings around the curving smart-bullet
     //    - Ballistic rifles: Supersonic pressure collar + glowing slipstream embers
     if (isMS10) {
       const hSegs = extra ? 7 : 5;
@@ -958,16 +1031,18 @@ export function movingDetails(match, time, extra = false, lite = false, opts = n
     }
 
     if (isGuided) {
-      // Smart-guidance telemetry rings locked around curving ARV1.1 / ARV1.1 mini / ARV1.2 projectiles
+      // Smart-guidance telemetry rings locked around curving ARV1.1 / ARV1.2 / ARV1.3 / AA1.4 projectiles
+      const isDF40Shot = s.gun === 'DF40 II';
+      const isAA14Shot = isDF40Shot && s.aaTier === '1.4';
       const isRD40Shot = s.gun === 'RD40';
-      const gRings = isRD40Shot ? (extra ? 4 : 3) : (extra ? 3 : 2);
-      const gSegs = isRD40Shot ? 8 : 6;
-      const primaryRing = isRD40Shot ? '#ff5a72' : s.gun === 'RD30' ? '#ffd678' : s.gun === 'RD20' ? '#7cf0ff' : '#a8fff5';
+      const gRings = isAA14Shot ? (extra ? 5 : 4) : (isDF40Shot || isRD40Shot) ? (extra ? 4 : 3) : (extra ? 3 : 2);
+      const gSegs = (isDF40Shot || isRD40Shot) ? 8 : 6;
+      const primaryRing = isAA14Shot ? '#ff6ee0' : isDF40Shot ? '#8c76ff' : isRD40Shot ? '#ff5a72' : s.gun === 'RD30' ? '#ffd678' : s.gun === 'RD20' ? '#7cf0ff' : '#a8fff5';
       for (let r = 0; r < gRings; r++) {
-        const back = .24 + r * (isRD40Shot ? .78 : .95) + ((time * (isRD40Shot ? 24 : 18) + s.id * .7) % .52);
+        const back = .22 + r * (isAA14Shot ? .64 : (isDF40Shot || isRD40Shot) ? .78 : .95) + ((time * (isAA14Shot ? 32 : (isDF40Shot || isRD40Shot) ? 24 : 18) + s.id * .7) % .52);
         if (back > tailLen) continue;
-        const rad = (isRD40Shot ? .112 : .095) + r * (isRD40Shot ? .048 : .042);
-        ring(m, add(head, scale(s.dir, -back)), s.dir, rad, isRD40Shot ? .015 : .013, gSegs, r % 2 === 0 ? primaryRing : pal.ring, 3);
+        const rad = (isAA14Shot ? .126 : (isDF40Shot || isRD40Shot) ? .112 : .095) + r * ((isDF40Shot || isRD40Shot) ? .048 : .042);
+        ring(m, add(head, scale(s.dir, -back)), s.dir, rad, isAA14Shot ? .017 : (isDF40Shot || isRD40Shot) ? .015 : .013, gSegs, r % 2 === 0 ? primaryRing : pal.ring, 3);
       }
     }
 
@@ -1000,8 +1075,8 @@ export function movingDetails(match, time, extra = false, lite = false, opts = n
       const ca = Math.cos(c.rot) * .038, sa = Math.sin(c.rot) * .038;
       const a = [c.p[0] - ca, c.p[1] - sa * .4, c.p[2] - sa];
       const b = [c.p[0] + ca, c.p[1] + sa * .4, c.p[2] + sa];
-      const col = c.gun === 'MS10' ? '#7cefff' : c.gun === 'DF1 OUT' ? '#b8f2e6' : '#e6c16c';
-      m.beam(a, b, .014, .014, 'white', col, c.gun === 'MS10' ? 3 : 1);
+      const col = c.gun === 'MS10' ? '#7cefff' : c.gun === 'DF40 II' ? '#b8a8ff' : c.gun === 'DF1 OUT' ? '#b8f2e6' : '#e6c16c';
+      m.beam(a, b, .014, .014, 'white', col, (c.gun === 'MS10' || c.gun === 'DF40 II') ? 3 : 1);
     }
   }
 

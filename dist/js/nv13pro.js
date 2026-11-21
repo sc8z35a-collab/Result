@@ -19,7 +19,8 @@ export const WEAPON_BAND = {
   MS10: {min: 16, ideal: 31, max: 56, burstMax: 5, cap: 24},
   SRA: {min: 12, ideal: 23, max: 40, burstMax: 6, cap: 30},
   D1: {min: 7, ideal: 16, max: 29, burstMax: 4, cap: 40},
-  'DF1 OUT': {min: 14, ideal: 26, max: 46, burstMax: 3, cap: 50}
+  'DF1 OUT': {min: 14, ideal: 26, max: 46, burstMax: 3, cap: 50},
+  'DF40 II': {min: 12, ideal: 25, max: 48, burstMax: 6, cap: 260}
 };
 
 // Module-cached Prebaked Tactical Cover & Visibility Graph (computed once per harbor map, ~18 KB total).
