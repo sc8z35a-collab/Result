@@ -35,7 +35,8 @@ const recoilProfiles = {
   'DF1 OUT': {z: .022, y: .0035, pitch: .028, yaw: .005, roll: .014, camPitch: 0, camRoll: 0, shake: 0, spread: 2.2, heat: .15, fov: 0},
   RD20: {z: .021, y: .0035, pitch: .028, yaw: .0055, roll: .014, camPitch: 0, camRoll: 0, shake: 0, spread: 2.3, heat: .12, fov: 0},
   RD30: {z: .023, y: .0038, pitch: .029, yaw: .0055, roll: .015, camPitch: 0, camRoll: 0, shake: 0, spread: 2.4, heat: .13, fov: 0},
-  RD40: {z: .023, y: .0035, pitch: .026, yaw: .005, roll: .013, camPitch: 0, camRoll: 0, shake: 0, spread: 2.1, heat: .12, fov: 0}
+  RD40: {z: .023, y: .0035, pitch: .026, yaw: .005, roll: .013, camPitch: 0, camRoll: 0, shake: 0, spread: 2.1, heat: .12, fov: 0},
+  'DF40 II': {z: .021, y: .0032, pitch: .024, yaw: .0045, roll: .012, camPitch: 0, camRoll: 0, shake: 0, spread: 2.0, heat: .10, fov: 0}
 };
 // Ultra-small precision micro-recoil with rapid smooth recovery (laser-controllable).
 const aimRecoil = {
@@ -46,7 +47,8 @@ const aimRecoil = {
   'DF1 OUT': {pitch: .0016, yaw: .0005, recoverRate: 17.5, recoverRatio: .95, climb: .006},
   RD20: {pitch: .0017, yaw: .0005, recoverRate: 17.0, recoverRatio: .94, climb: .006},
   RD30: {pitch: .0018, yaw: .00055, recoverRate: 16.5, recoverRatio: .94, climb: .007},
-  RD40: {pitch: .0015, yaw: .00045, recoverRate: 18.0, recoverRatio: .95, climb: .005}
+  RD40: {pitch: .0015, yaw: .00045, recoverRate: 18.0, recoverRatio: .95, climb: .005},
+  'DF40 II': {pitch: .0013, yaw: .0004, recoverRate: 19.0, recoverRatio: .96, climb: .004}
 };
 let saved;
 try {
@@ -170,6 +172,9 @@ function kickWeapon(gun) {
   if ((gun === 'RD40' || gun === 'RD30') && a?.rd) {
     // Alternating twin-barrel harmonic roll polarity synced with shader barrel blowback!
     gunMotion.shotSide = a.rd.barrelPhase ? 1 : -1;
+  } else if (gun === 'DF40 II' && a?.df40) {
+    // Cyclic tri-barrel harmonic roll cadence
+    gunMotion.shotSide = (a.df40.barrelPhase || 0) === 1 ? 0 : (a.df40.barrelPhase === 0 ? -1 : 1);
   } else {
     gunMotion.shotSide = Math.random() < .35 ? gunMotion.shotSide : -gunMotion.shotSide;
   }
@@ -180,10 +185,10 @@ function kickWeapon(gun) {
   gunMotion.vy += r.y * 8.0 * j;
   gunMotion.vpitch += r.pitch * 9.5 * j;
   gunMotion.vyaw += r.yaw * 8.0 * side;
-  gunMotion.vroll += r.roll * (gun === 'RD40' ? 14.5 : 9.5) * side;
-  if (gun === 'RD40') {
+  gunMotion.vroll += r.roll * ((gun === 'RD40' || gun === 'DF40 II') ? 14.5 : 9.5) * side;
+  if (gun === 'RD40' || gun === 'DF40 II') {
     // Stabilized hydraulic recoil cadence kick with zero camera shake
-    gunMotion.vz += .045;
+    gunMotion.vz += gun === 'DF40 II' ? .038 : .045;
   }
   gunMotion.blowback = 1;
   gunMotion.heat = Math.min(1, gunMotion.heat + r.heat);
@@ -271,9 +276,32 @@ function stepMotion(dt, a) {
     const moveSpread = (a.onGround ? Math.min(2.6, speed * .36) : 4.2) * (1 - a.crouch * .45);
     gunMotion.spread = moveSpread + (gunMotion.spread - moveSpread) * Math.exp(-14 * dt);
 
-    // RD-Series 3D first-person kinetic choreography (RD40 badass lock-cant + magnetic gimbal tracking + D01 SENSOR stance)
+    // RD-Series & DF40 II 3D first-person kinetic choreography (ARV1.2/1.3 lock-cant + gimbal tracking + AA1.4 Overdrive stance)
     const rd = a.rd;
-    if (rd && a.gun === 'RD40') {
+    const df40 = a.df40;
+    if (df40 && a.gun === 'DF40 II') {
+      const lock = df40.lockBlend || 0;
+      const d01 = df40.d01Blend || 0;
+      const aa14 = df40.aa14Blend || 0;
+      const pulse = Math.max(df40.lockPulse || 0, (df40.aa14Pulse || 0) * .9);
+      const fp = df40.firePulse || 0;
+      const snap = gunMotion.rdSnap;
+      const tYaw = df40.trackYaw || 0;
+      const tPitch = df40.trackPitch || 0;
+      const bSign = (df40.barrelPhase || 0) === 1 ? 0 : (df40.barrelPhase === 0 ? -1 : 1);
+      gunMotion.rdX = -lock * .018 - aa14 * .012 + tYaw * .058 - snap * .008;
+      gunMotion.rdY = lock * .011 + aa14 * .010 + d01 * .009 + tPitch * .044 + snap * .006;
+      gunMotion.rdZ = -snap * .022 - pulse * .015 + lock * .010 + aa14 * .008;
+      gunMotion.rdYaw = tYaw * .50;
+      gunMotion.rdPitch = tPitch * .46 + snap * .032 + Math.cos(timeNow * 4.8) * .008 * Math.max(d01, aa14 * .5);
+      gunMotion.rdRoll = -lock * .085 - aa14 * .065 + d01 * .030 + tYaw * .36 + Math.sin(timeNow * 5.8) * .014 * Math.max(d01, aa14 * .6) - snap * .060 + bSign * fp * .018;
+      gunMotion.rdLock = Math.max(lock, aa14 * .78);
+      gunMotion.rdD01 = Math.max(d01, aa14 * .62);
+      gunMotion.rdLockPulse = pulse;
+      gunMotion.rdBarrelPhase = (df40.barrelPhase || 0) / 2;
+      // Visually couple Auto-Aim 1.4 thermal heat onto the weapon chassis glow!
+      gunMotion.heat = Math.max(gunMotion.heat, (df40.aa14Heat || 0) / 100);
+    } else if (rd && a.gun === 'RD40') {
       const lock = rd.lockBlend || 0;
       const d01 = rd.d01Blend || 0;
       const pulse = rd.lockPulse || 0;
@@ -448,6 +476,7 @@ coarsePointer.addEventListener?.('change', e => setInputType(e.matches));
 function controls() {
   const rows = touch ? [['移動 / ダッシュ', '左スティック（強く前傾でダッシュ）'], ['視点', '右側スワイプ / 射撃長押しドラッグ / 右スティック'], ['発射 / 再装填', '射撃(長押しで連射)・R2 / R・X'], ['ジャンプ / しゃがみ', '↑・A / しゃがみ・B'], ['FLIR / 煙幕 / 解析', '左下 FLIR・煙幕・解析ボタン']] : [['移動 / ダッシュ', 'WASD / Shift · 左スティック強前傾'], ['視点', 'マウス / 矢印キー / 右スティック'], ['発射 / 再装填', '左クリック(長押しで連射)・F・R2 / R・X'], ['ジャンプ / しゃがむ', 'Space・A / Ctrl・B'], ['熱視界 / 煙幕 / 解析', 'T (FLIR) · G (煙幕) · L (弾道解析) · K (跳弾) · M (波動図)'], ['一時停止', 'Esc / P / Start']];
   if (match?.player.df)rows.push(...(touch ? [['DF1 OUT', '画面右の専用ボタン / L2・Y・LB・RB']] : [['中央集中 / 散弾', 'Q / Y'], ['P1 ブースト', 'X / LB'], ['照準 / レンズ切替', '右クリック・C・L2 / V・RB'], ['EVR1 購入', 'B']]));
+  if (match?.player.df40)rows.push(...(touch ? [['DF40 II · AA1.4', '画面右 AA1.4 ボタン / LB（一時強化・過熱冷却あり）']] : [['オートエイム 1.4 起動/解除', 'X / E / LB（一時強化・オーバーヒートあり）']]));
   $('controls').innerHTML = rows.map(([a, b]) => `<span>${a}</span><b>${b}</b>`).join('')
 }
 function show(s) {
@@ -582,6 +611,7 @@ function lobby() {
   if (rules.loadout === 'RD20')tags.push('オートエイム 1.1');
   if (rules.loadout === 'RD30')tags.push('オートエイム 1.1 mini · NPC開放');
   if (rules.loadout === 'RD40')tags.push('オートエイム 1.2 + D01 SENSOR');
+  if (rules.loadout === 'DF40 II')tags.push('ARV1.3 · オートエイム 1.3 / 1.4');
   if (w.playerOnly)tags.push('プレイヤー専用');
   $('weaponStats').innerHTML = tags.map(s => `<span>${s}</span>`).join('');
   $('start').disabled = !ready;
@@ -894,6 +924,21 @@ function event(e) {
     gunMotion.vrdSnap += 1.35;
     gunMotion.vy += .12;
   }
+  if (e.type === 'aa14' && e.actor === p) {
+    if (e.state === 'on') {
+      gunMotion.vrdSnap += 2.3;
+      gunMotion.vroll -= .82;
+      gunMotion.vz += .14;
+    } else if (e.state === 'overheat') {
+      gunMotion.vrdSnap -= 1.4;
+      gunMotion.vz += .22;
+      $('combatNotice').textContent = `AUTO-AIM 1.4 OVERHEAT · 強制冷却 (${(e.cooldown || 6).toFixed(1)}s) · AA1.3 へ復帰`;
+      noticeUntil = match.time + 2.4;
+    } else if (e.state === 'ready') {
+      $('combatNotice').textContent = 'AUTO-AIM 1.4 冷却完了 · X / E で再起動可能';
+      noticeUntil = match.time + 1.8;
+    }
+  }
   if (e.type === 'smoke' && e.actor === p) {
     $('combatNotice').textContent = settings.aeroVortex && !settings.lightMode && renderer.native
       ? 'AeroVortex 流体煙幕展開'
@@ -968,6 +1013,7 @@ function hud() {
   $('reticle').classList.toggle('is-rd20', a.gun === 'RD20');
   $('reticle').classList.toggle('is-rd30', a.gun === 'RD30');
   $('reticle').classList.toggle('is-rd40', a.gun === 'RD40');
+  $('reticle').classList.toggle('is-df40ii', a.gun === 'DF40 II');
   $('spawnCounter').textContent = Math.max(0, a.respawn).toFixed(1) + ' s';
   // Update AeroVortex wind meter, ThermoFlux FLIR status & SpectraField Bayeisan hologram!
   const flirOn = flirActive && renderer.native && !settings.lightMode && settings.thermoFlux && a.alive;
@@ -1136,7 +1182,7 @@ document.addEventListener('keydown', e => {
   }
   if (e.code === 'Space' && match.player.alive) simJump = true;
   if (e.code === 'KeyP') doPause();
-  const extra = {KeyQ: 'pattern', KeyX: 'boost', KeyC: 'ads', KeyV: 'scope', KeyB: 'buy'}[e.code];
+  const extra = {KeyQ: 'pattern', KeyX: 'boost', KeyE: 'aa14', KeyC: 'ads', KeyV: 'scope', KeyB: 'buy'}[e.code];
   if (extra)equipment.action(extra)
 });
 document.addEventListener('keyup', e => {

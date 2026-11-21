@@ -24,6 +24,7 @@ export const WEAPON_PENETRATION = {
   MS10: {wood: 3.6, steel: 0.44, concrete: 0.22, maxPen: 2, maxRic: 2},
   'SW T': {wood: 3.0, steel: 0.32, concrete: 0.16, maxPen: 1, maxRic: 2},
   RD40: {wood: 2.9, steel: 0.30, concrete: 0.14, maxPen: 2, maxRic: 2},
+  'DF40 II': {wood: 2.3, steel: 0.20, concrete: 0.09, maxPen: 1, maxRic: 2},
   RD30: {wood: 2.4, steel: 0.22, concrete: 0.10, maxPen: 1, maxRic: 2},
   SRA: {wood: 2.2, steel: 0.18, concrete: 0.08, maxPen: 1, maxRic: 1},
   RD20: {wood: 1.9, steel: 0.14, concrete: 0.06, maxPen: 1, maxRic: 1},

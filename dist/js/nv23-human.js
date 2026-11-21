@@ -1975,7 +1975,7 @@ export class HumanTacticsV23 {
   selectPeekStyle(actor, b, target, t, mind, metrics = null) {
     const agg = this.persona.aggression || 0.6;
     const pat = this.persona.patience || 0.6;
-    const vsLockGun = target && (target.gun === 'DF1 OUT' || target.gun === 'RD40' || target.gun === 'RD30' || target.gun === 'RD20');
+    const vsLockGun = target && (target.gun === 'DF1 OUT' || target.gun === 'DF40 II' || target.gun === 'RD40' || target.gun === 'RD30' || target.gun === 'RD20');
     const vsSniper = target && (target.gun === 'MS10' || target.gun === 'SW T');
     const isNemesis = target && mind && target.id === mind.nemesisId;
     const lowEnemy = target && (target.hp + target.shield < 50 || target.reload > 0.15);

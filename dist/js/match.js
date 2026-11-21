@@ -4,6 +4,7 @@ import {NV2} from './nv2.js';
 import {eyeOf, torso, bodyCenter, postureStep, vertical} from './posture.js';
 import {DF, initialDF, scheduleDF, bulletGuidanceDF, steerGuidedShot, spendP1, updateDF} from './df1.js';
 import {RD, RD20, RD30, isRDWeapon, initialRD, updateRD, bulletGuidanceRD} from './rd40.js';
+import {DF40II, initialDF40II, updateDF40II, bulletGuidanceDF40II, onFireDF40II, toggleAA14} from './df40ii.js';
 import {solveBallisticImpact} from './ballistics.js';
 import {EchoPulseField} from './echopulse.js';
 import {SynapseProfiler} from './synapse.js';
@@ -22,7 +23,8 @@ export const weapons = {
   [DF]: {capacity: 95, damage: 2.8, rate: 300, velocity: 65, speed: baseSpeed * .65, interval: baseInterval / 3, burst: 3, reload: 1.85, auto: true, playerOnly: true},
   [RD20]: {capacity: 20, damage: 6, rate: 110, velocity: 70, speed: baseSpeed * .7, interval: baseInterval / 1.1, burst: 1, pellets: 1, reload: 1.55, auto: true},
   [RD30]: {capacity: 80, damage: 3, rate: 100, velocity: 100, speed: baseSpeed * 1.0, interval: baseInterval, burst: 1, pellets: 2, reload: 1.75, auto: true},
-  [RD]: {capacity: 130, damage: 3, rate: 170, velocity: 140, speed: baseSpeed * 1.4, interval: baseInterval / 1.7, burst: 1, pellets: 2, reload: 1.95, auto: true, playerOnly: true}
+  [RD]: {capacity: 130, damage: 3, rate: 170, velocity: 140, speed: baseSpeed * 1.4, interval: baseInterval / 1.7, burst: 1, pellets: 2, reload: 1.95, auto: true, playerOnly: true},
+  [DF40II]: {capacity: 260, damage: 2, rate: 225, velocity: 80, speed: baseSpeed * .8, interval: baseInterval / 2.25, burst: 1, pellets: 3, reload: 2.15, auto: true, playerOnly: true}
 };
 export const modes = {'3v3': [3, 3], '1v2': [1, 2], '1v1': [1, 1]};
 const names = [['YOU', 'NAGI', 'KAI'], ['RIN', 'SORA', 'AO']];
@@ -188,10 +190,14 @@ export class Match {
       reloadFrac: 0,
       queue: [],
       df: a.gun === DF ? {...initialDF(), pattern: a.df?.pattern || 'central', scope: a.df?.scope || 'plastic'} : null,
-      rd: isRDWeapon(a.gun) ? initialRD(a.gun) : null
+      rd: isRDWeapon(a.gun) ? initialRD(a.gun) : null,
+      df40: a.gun === DF40II ? initialDF40II() : null
     });
     if (!a.human)this.nv.attach(a);
     if (!initial)this.event('spawn', {actor: a})
+  }
+  toggleAA14(a = this.player) {
+    return toggleAA14(this, a);
   }
   reload(a) {
     if (!a.alive || this.ended || a.reload > 0 || a.burstLeft || a.mag >= this.weapon(a).capacity || a.stock <= 0)return false;
@@ -214,7 +220,7 @@ export class Match {
     this.fire(a, a.queue.shift());
     a.burstLeft = a.queue.length;
     a.nextBurst = w.interval;
-    return true
+    return true;
   }
   fire(a, source = 'main') {
     if (!a.alive || this.ended || a.reload > 0) return false;
@@ -227,7 +233,7 @@ export class Match {
       a.mag -= salvo
     }
     a.cooldown = w.interval;
-    a.flash = a.gun === 'MS10' ? .115 : a.gun === RD ? .108 : a.gun === RD30 ? .098 : .095;
+    a.flash = a.gun === 'MS10' ? .115 : a.gun === DF40II ? .112 : a.gun === RD ? .108 : a.gun === RD30 ? .098 : .095;
     a.recoil = 1;
     a.recoilSide = (this.rng() - .5) * 2;
     a.shotCount = (a.shotCount || 0) + 1;
@@ -235,17 +241,20 @@ export class Match {
       a.rd.firePulse = 1;
       a.rd.barrelPhase = 1 - (a.rd.barrelPhase || 0);
     }
+    const firedAA14 = !!(a.df40?.aa14Active && !a.df40?.aa14Overheated);
     const p = eyeOf(a);
-    const barrelLen = a.gun === 'MS10' ? .92 : a.gun === RD ? .88 : a.gun === RD30 ? .80 : a.gun === RD20 ? .68 : a.gun === 'D1' ? .78 : a.gun === 'SW T' ? .60 : .74;
+    const barrelLen = a.gun === 'MS10' ? .92 : a.gun === DF40II ? .90 : a.gun === RD ? .88 : a.gun === RD30 ? .80 : a.gun === RD20 ? .68 : a.gun === 'D1' ? .78 : a.gun === 'SW T' ? .60 : .74;
     let firstDir = null, firstMuzzle = null;
     for (let k = 0; k < salvo; k++) {
-      const barrelSide = salvo === 2 ? (k === 0 ? -1 : 1) : 0;
-      const guidedInfo = a.df ? bulletGuidanceDF(this, a) : a.rd ? bulletGuidanceRD(this, a, barrelSide) : null;
+      const barrelSide = salvo === 3 ? (k - 1) : salvo === 2 ? (k === 0 ? -1 : 1) : 0;
+      const barrelVert = salvo === 3 ? (k === 1 ? 1 : -0.45) : 0;
+      const guidedInfo = a.df ? bulletGuidanceDF(this, a) : a.df40 ? bulletGuidanceDF40II(this, a, barrelSide, barrelVert) : a.rd ? bulletGuidanceRD(this, a, barrelSide) : null;
       const dir = guidedInfo ? guidedInfo.dir : forward(a.yaw, a.pitch);
       const right = unit(cross(dir, [0, 1, 0]));
       const up = cross(right, dir);
-      const sideOff = (a.human ? .14 : .11) + barrelSide * .048;
-      const muzzle = add(p, add(scale(dir, barrelLen), add(scale(right, sideOff), scale(up, a.human ? -.12 : -.18))));
+      const sideOff = (a.human ? .14 : .11) + barrelSide * (a.gun === DF40II ? .042 : .048);
+      const upOff = (a.human ? -.12 : -.18) + barrelVert * .026;
+      const muzzle = add(p, add(scale(dir, barrelLen), add(scale(right, sideOff), scale(up, upOff))));
       if (!firstDir) { firstDir = dir; firstMuzzle = muzzle; }
       const shot = {
         id: ++this.seq,
@@ -267,6 +276,11 @@ export class Match {
         homingRate: guidedInfo ? guidedInfo.homingRate : 0,
         homingCos: guidedInfo?.homingCos || 0,
         homingTurned: 0,
+        aaTier: guidedInfo?.aaTier || null,
+        arvOrder: guidedInfo?.arvOrder || 1,
+        homingAccel: guidedInfo?.accel || null,
+        homingVelWeight: guidedInfo?.velWeight,
+        homingAccelWeight: guidedInfo?.accelWeight,
         ricochets: 0,
         penetrations: 0,
         ricocheted: false,
@@ -288,6 +302,7 @@ export class Match {
         gun: a.gun,
         team: a.team,
         source,
+        aaTier: guidedInfo?.aaTier || null,
         actor: a.id,
         human: a.human,
         life: a.gun === 'MS10' ? .15 : .12,
@@ -308,12 +323,13 @@ export class Match {
       });
       if (this.casings.length > 42)this.casings.shift();
     }
+    if (a.df40) onFireDF40II(this, a, salvo);
     this.echoPulse.emit(this, {
       kind: 'fire',
       pos: firstMuzzle || p,
       actor: a,
       team: a.team,
-      loudness: a.gun === 'MS10' ? 1.25 : a.gun === RD ? 1.12 : 1.0,
+      loudness: a.gun === 'MS10' ? 1.25 : a.gun === DF40II ? 1.18 : a.gun === RD ? 1.12 : 1.0,
       gun: a.gun
     });
     if (firstMuzzle && firstDir) {
@@ -321,7 +337,7 @@ export class Match {
       this.thermoFlux.depositHeat(a.x, a.z, 0.14, 0);
     }
     this.nv.onShotFired?.(a, source);
-    this.event('fire', {actor: a, source, gun: a.gun, p: firstMuzzle, dir: firstDir, speed: w.speed, pellets: salvo, burstIndex: a.shotCount});
+    this.event('fire', {actor: a, source, gun: a.gun, p: firstMuzzle, dir: firstDir, speed: w.speed, pellets: salvo, burstIndex: a.shotCount, aa14: firedAA14});
     return true;
   }
   deploySmokeVent(a = this.player) {
@@ -508,6 +524,7 @@ export class Match {
     } else a.ammoClock = 0;
     if (a.df)updateDF(this, a, dt);
     if (a.rd)updateRD(this, a, dt);
+    if (a.df40)updateDF40II(this, a, dt);
     if (a.burstLeft) {
       if (a.df && (!a.df.boost || a.df.cooling > 0 || !a.df.p1)) {
         a.queue = a.queue.filter(source => source !== 'p1');
@@ -607,7 +624,7 @@ export class Match {
     if (!s.guided && s.p[1] > 0.1 && s.p[1] < 5.5) {
       const wind = this.aeroVortex.sample(a[0], a[2]);
       if (wind.speed > 0.35) {
-        const drag = s.gun === 'MS10' ? 0.0009 : s.gun === 'RD40' ? 0.0013 : 0.0019;
+        const drag = s.gun === 'MS10' ? 0.0009 : s.gun === 'RD40' ? 0.0013 : s.gun === DF40II ? 0.0014 : 0.0019;
         s.dir = unit([s.dir[0] + wind.vx * drag * dt, s.dir[1], s.dir[2] + wind.vz * drag * dt]);
       }
     }

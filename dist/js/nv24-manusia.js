@@ -79,7 +79,8 @@ const PUBLIC_MAG_CAP = Object.freeze({
   'DF1 OUT': 95,
   RD20: 20,
   RD30: 80,
-  RD40: 130
+  RD40: 130,
+  'DF40 II': 260
 });
 
 // 14-Dimensional Callsign Personalities (extends NV2.3 12-dim profiles with Somatic/ToM/Social traits!)
@@ -425,7 +426,7 @@ export class ManusiaTheoryOfMindV24 {
       rec = {gun: gun || 'SRA', shots: 0, lastShotAt: t, reloadAt: -10};
       this.enemyAmmo.set(enemyId, rec);
     }
-    const burstStep = gun === 'DF1 OUT' ? 3 : gun === 'D1' || gun === 'RD30' || gun === 'RD40' ? 2 : 1;
+    const burstStep = gun === 'DF1 OUT' || gun === 'DF40 II' ? 3 : gun === 'D1' || gun === 'RD30' || gun === 'RD40' ? 2 : 1;
     rec.shots += burstStep;
     rec.lastShotAt = t;
   }
