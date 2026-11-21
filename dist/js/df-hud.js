@@ -11,7 +11,7 @@ export class PilotEquipment {
     this.thermal = new ThermalOptic($('thermal'));
     this.wallet = new PilotWallet(() => this.accountView());
     this.buying = false;
-    this.pendingAwards = new Map();
+    this.pendingAwards = new Map(this.wallet.stagedAwards().map(receipt => [receipt, receipt.split('/')[0]]));
     this.failedAwards = new Set();
     this.savingAwards = false;
     $('retryCredits').onclick = () => this.saveAwards();
@@ -20,7 +20,8 @@ export class PilotEquipment {
       const el = $(id);
       if (el) el.onclick = () => this.action(code);
     }
-    this.wasThermal = false
+    this.wasThermal = false;
+    if (this.pendingAwards.size) this.saveAwards();
   }
   accountView() {
     if (!this.wallet)return;
@@ -61,6 +62,7 @@ export class PilotEquipment {
   }
   award(e) {
     if (!e.actor.human)return;
+    this.wallet.stageAward(e.receipt);
     this.pendingAwards.set(e.receipt, this.getMatch()?.receiptId);
     this.notice('＋1 POINT　/　＋0.10 CR');
     this.saveAwards(e.receipt);

@@ -35,6 +35,14 @@ export class HDRDisplay {
       device.destroy();
       return;
     }
+    let invalid = false;
+    device.addEventListener('uncapturederror', () => {
+      invalid = true;
+      if (this.device === device) {
+        this.available = this.active = false;
+        this.canvas.hidden = true;
+      }
+    });
     try {
       ctx.configure({device, format: 'rgba16float', toneMapping: {mode: 'extended'}, alphaMode: 'opaque', colorSpace: 'srgb'});
       if (ctx.getConfiguration && ctx.getConfiguration()?.toneMapping?.mode !== 'extended') {
@@ -61,7 +69,7 @@ export class HDRDisplay {
       device.destroy();
       throw error;
     }
-    if (this.disposed) {
+    if (this.disposed || invalid) {
       device.destroy();
       return;
     }

@@ -132,12 +132,12 @@ export class ChronoTrace {
   }
 
   /** Records a BallisticCore-X slab wallbang tunnel (entry -> far-side exit & measured thickness). */
-  recordPenetration(shot, entryPos, exitPos, normal, thickness, mat, time) {
+  recordPenetration(shot, entryPos, exitPos, normal, thickness, mat, time, exitTime = time) {
     const rec = shot?.trace;
     if (!rec || rec.closed) return;
     const last = rec.pts[rec.pts.length - 1];
     rec.distM += Math.hypot(entryPos[0] - last[0], entryPos[1] - last[1], entryPos[2] - last[2]) + thickness;
-    rec.pts.push([entryPos[0], entryPos[1], entryPos[2], time], [exitPos[0], exitPos[1], exitPos[2], time]);
+    rec.pts.push([entryPos[0], entryPos[1], entryPos[2], time], [exitPos[0], exitPos[1], exitPos[2], exitTime]);
     rec.penetrations.push({
       entry: [entryPos[0], entryPos[1], entryPos[2]],
       exit: [exitPos[0], exitPos[1], exitPos[2]],

@@ -38,6 +38,8 @@ class Frontier {
 }
 export class WharfNavigation {
   constructor() {
+    this.W = W;
+    this.H = H;
     this.open = new Uint8Array(W * H);
     this.links = Array.from({length: W * H}, () => []);
     for (let i = 0; i < W * H; i++)this.open[i] = walkable(...position(i), .60) ? 1 : 0;

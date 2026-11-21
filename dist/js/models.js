@@ -926,6 +926,7 @@ export function movingDetails(match, time, extra = false, lite = false, opts = n
 
   // Ultra-detailed multi-layer 3D projectiles (or ultra-lightweight crisp beams in Lightweight Mode).
   for (const s of match.shots) {
+    if (s.materialPass) continue;
     const pal = shotPalette(s);
     const isMS10 = s.gun === 'MS10';
     const isGuided = !!s.guided;

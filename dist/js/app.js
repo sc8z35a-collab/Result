@@ -530,6 +530,19 @@ function show(s) {
   const focus = {title: 'play', lobby: 'lobbyBack', settings: 'settingsClose', pause: 'resume', results: 'rematch'}[s];
   if (focus)$(focus).focus({preventScroll: true}); else document.activeElement?.blur?.()
 }
+function audioSafely(action) {
+  try {
+    action();
+  } catch (error) {
+    audio.on = false;
+    audio.listenerPrevPos = null;
+    audio.listenerVel = [0, 0, 0];
+    try { audio.set(settings.volume / 100); } catch {}
+    console.warn('サウンドの処理を停止しました', error);
+    soundButton();
+  }
+}
+
 function soundButton() {
   const on = settings.sound && audio.on && settings.volume > 0;
   $('sound').querySelector('use').setAttribute('href', on ? '#i-audio' : '#i-muted');
@@ -551,7 +564,7 @@ function lobby() {
   const isHuman = rules.aiModel !== 'classic';
   if ($('aiModelHint')) {
     $('aiModelHint').textContent = isHuman
-      ? '人格4種 · Yerkes-Dodson心理フロー · 背後驚愕反射 · Fitts 2段フリック · 中心窩/周辺視野 · 角クリア索敵 · 遅延通話連携'
+      ? '14次元個性(NAGI/KAI/RIN/SORA/AO) · 生体心拍＆呼吸停止照準 · 心の理論(ToM/トリガー規律/足音フェイント) · 戦術煙幕展開 · 解剖学リーン · プレイヤー援護連携'
       : '従来の NV2 Transformer 戦術AI（均質反応・標準照準）で対戦します';
   }
   const is3v3 = rules.mode === '3v3';
@@ -562,15 +575,19 @@ function lobby() {
     lobby()
   });
   $('allyNv21Hint').textContent = rules.allyNv21 === 1
-    ? 'NAGI（D1）を NV2.1 に強化 · 高速反応 / 多弾同時回避 / 目視予測スパイ裏どり'
+    ? isHuman
+      ? 'NAGI（D1）に NV 2.4 Manusia 生体・心の理論・煙幕・無音接近＋NV2.1 スパイ裏どりを統合'
+      : 'NAGI（D1）を NV2.1 に強化 · 高速反応 / 多弾同時回避 / 目視予測スパイ裏どり'
     : rules.allyNv21 === 2
-      ? 'KAI（MS10）を NV2.1 に強化 · 高速反応 / 多弾同時回避 / 目視予測スパイ裏どり'
+      ? isHuman
+        ? 'KAI（MS10）に NV 2.4 Manusia 生体・心の理論・煙幕・プレイヤー援護＋NV2.1 スパイ裏どりを統合'
+        : 'KAI（MS10）を NV2.1 に強化 · 高速反応 / 多弾同時回避 / 目視予測スパイ裏どり'
       : isHuman
-        ? '味方NPC2体は NV2 Human（人格・心理・人間的な角クリア索敵）で出撃します'
+        ? '味方NPC2体は NV 2.4 Manusia（生体心拍・心の理論・戦術煙幕・あなたの援護連携）で出撃します'
         : '味方NPC2体は標準NV2（人間的な照準・戦術連携）で出撃します';
-  const baseAiLabel = isHuman ? 'NV2 Human Cognitive' : 'NV2 Deep Tactical';
+  const baseAiLabel = isHuman ? 'NV 2.4 Manusia' : 'NV2 Deep Tactical';
   $('lobbyAiLabel').textContent = is3v3 && rules.allyNv21 > 0
-    ? `${isHuman ? 'NV2 Human' : 'NV2'} + NV2.1 SPY (${rules.allyNv21 === 1 ? 'NAGI' : 'KAI'})`
+    ? `${isHuman ? 'NV 2.4 Manusia' : 'NV2'} + SPY (${rules.allyNv21 === 1 ? 'NAGI' : 'KAI'})`
     : baseAiLabel;
   group('limit', rules.limit, k => {
     rules.limit = k;
@@ -825,7 +842,7 @@ function toggleFlir() {
     return;
   }
   flirActive = !flirActive;
-  audio.event({type: 'flir', on: flirActive}, match.player);
+  audioSafely(() => audio.event({type: 'flir', on: flirActive}, match.player));
   $('combatNotice').textContent = flirActive ? 'ThermoFlux FLIR 熱視界 ON · 貫煙熱痕探知' : 'FLIR 熱視界 OFF';
   noticeUntil = match.time + 1.4;
   hud();
@@ -846,7 +863,7 @@ function toggleChrono() {
     return;
   }
   chronoActive = !chronoActive;
-  audio.event({type: 'chrono', on: chronoActive}, match.player);
+  audioSafely(() => audio.event({type: 'chrono', on: chronoActive}, match.player));
   $('combatNotice').textContent = chronoActive ? 'ChronoTrace 1.0 · 4D空間弾道スキャナー ON（過去22秒の弾道を3D投影）' : '4D空間弾道スキャナー OFF';
   noticeUntil = match.time + 1.6;
   hud();
@@ -894,7 +911,7 @@ $('resultTitle').onclick = () => show('title');
 function event(e) {
   const p = match?.player;
   if (!p)return;
-  audio.event(e, p);
+  audioSafely(() => audio.event(e, p));
   if (e.type === 'fire' && e.actor === p)kickWeapon(e.gun || p.gun);
   if (e.type === 'rdlock' && e.actor === p) {
     // Crisp tactical cant lock-snap kick on RD40 target acquisition (zero camera shake)
@@ -1069,9 +1086,9 @@ function resultUI() {
     const tag = a.human
       ? ' · 自分'
       : a.isSpy
-        ? '<span class="tag-nv21">NV2.1 SPY</span>'
-        : a.aiVersion === 'NV2 Human'
-          ? `<span class="tag-human">NV2 Human${a.humanPersona ? ' · ' + a.humanPersona : ''}</span>`
+        ? `<span class="tag-nv21">NV2.1 SPY${a.humanPersona ? ' × Manusia · ' + a.humanPersona : ''}</span>`
+        : (a.aiVersion === 'NV 2.4 Manusia' || a.aiVersion === 'NV2.3 HUMAN' || a.aiVersion === 'NV2 Human')
+          ? `<span class="tag-human">${a.aiVersion}${a.humanPersona ? ' · ' + a.humanPersona : ''}</span>`
           : '';
     return `<div class="roster-row"><span class="${a.team?'orange':'cyan'}">${a.name}${tag}</span><span>${a.kills}</span><span>${a.deaths}</span></div>`;
   }).join('');
@@ -1107,7 +1124,7 @@ function resultUI() {
         `<span>構造ノック <b>${rc.seismicKnocks}</b></span>` +
         `<span>最長キル <b>${ct.longestKillM > 0 ? ct.longestKillM.toFixed(1) + 'm' : '—'}</b></span>` +
         `<span>鏡像跳弾解 <b>${fc.solutionsFound}</b>${fc.aiBankShots ? ` / AI跳弾${fc.aiBankShots}` : ''}</span>` +
-        (match.aiModel !== 'classic' ? `<span>NV2 Human <b>フリック${nm.humanFlicks || 0} / 索敵${nm.humanCornerScans || 0} / 通話${nm.humanCallouts || 0}</b></span>` : '') +
+        (match.aiModel !== 'classic' ? `<span>NV 2.4 Manusia <b>呼吸停止${nm.manusiaBreathHolds || 0} / 戦術煙幕${nm.manusiaSmokeDeploys || 0} / 規律待機${nm.manusiaTriggerDisciplines || 0} / トレード${nm.humanTradeSwings || 0} / 通話${nm.humanCallouts || 0}</b></span>` : '') +
         `<span>ベイズ確定 <b>${sp.peakCertaintyPct}%</b></span>` +
       `</div>`;
   } else if (synEl) {
@@ -1471,7 +1488,7 @@ function frame(ms) {
     cam = titleCamera(tourTime);
     $('cinema-veil').style.opacity = cam.fade
   }
-  audio.update(dt, screen === 'game' ? match : null, cam);
+  audioSafely(() => audio.update(dt, screen === 'game' ? match : null, cam));
   const cinematic = !match && !renderer.native && !settings.lightMode && settings.shadows && settings.hdr;
   $('app').classList.toggle('cinematic', cinematic);
   if (cinematic) $('cinema-veil').style.opacity = 0;

@@ -1,5 +1,5 @@
 import {clamp, angleDiff, forward, unit, sub, add, scale, dot} from './geometry.js';
-import {obstruction} from './yard.js';
+import {obstruction, clearOpticalPath} from './yard.js';
 import {eyeOf, targetPoint} from './posture.js';
 
 export const DF = 'DF1 OUT';
@@ -60,6 +60,11 @@ function aimAt(a, e, useLead = false) {
   return {origin, p, raw, range, yaw: Math.atan2(dx, -dz), pitch: Math.atan2(dy, range)}
 }
 
+function canSee(match, a, origin, point) {
+  const thermal = a.df?.ads && a.df.scope === 'thermal';
+  return clearOpticalPath(origin, point, thermal ? null : match.aeroVortex);
+}
+
 export function senseFocus(match, a, dt) {
   const d = a.df, t = match.time;
   const current = match.actors[d.focusId];
@@ -67,7 +72,7 @@ export function senseFocus(match, a, dt) {
     if (!e?.alive || e.team === a.team) return Infinity;
     const s = aimAt(a, e);
     const sep = Math.hypot(angleDiff(s.yaw, a.yaw) * Math.cos(a.pitch), s.pitch - a.pitch);
-    return s.range <= 104 && sep < cone && obstruction(s.origin, s.raw) > 1 ? sep : Infinity;
+    return s.range <= 104 && sep < cone && canSee(match, a, s.origin, s.raw) ? sep : Infinity;
   };
   if (current && (!current.alive || current.spawnId !== d.focusSpawnId)) {
     d.focusId = -1;
@@ -111,7 +116,7 @@ export function assist(match, a) {
   const raw = aimAt(a, e);
   const s = aimAt(a, e, true), yaw = angleDiff(s.yaw, a.yaw), pitch = s.pitch - a.pitch, ang = Math.hypot(yaw, pitch);
   const separation = Math.hypot(angleDiff(raw.yaw, a.yaw) * Math.cos(a.pitch), raw.pitch - a.pitch);
-  if (raw.range > 104 || separation >= ARV1_LOCK_HOLD || obstruction(raw.origin, raw.raw) <= 1) {
+  if (raw.range > 104 || separation >= ARV1_LOCK_HOLD || !canSee(match, a, raw.origin, raw.raw)) {
     d.locked = false;
     d.focus = 0;
     d.focusId = -1;
@@ -181,7 +186,7 @@ export function steerGuidedShot(match, s, dt) {
     return
   }
   const rawTp = targetPoint(e);
-  if (obstruction(s.p, rawTp) <= 1)return;
+  if (!clearOpticalPath(s.p, rawTp, s.thermalGuidance ? null : match.aeroVortex)) return;
   let tp;
   if (s.arvOrder === 2) {
     const spd = Math.max(70, s.speed || DF_BULLET_SPEED);

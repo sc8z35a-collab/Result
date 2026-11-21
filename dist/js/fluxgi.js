@@ -264,6 +264,7 @@ export class FluxGI {
       }
       // 2. Flying high-energy projectiles paint moving indirect bounce light down container alleys!
       for (const s of match.shots) {
+        if (s.materialPass) continue;
         if (s.gun === 'MS10') inject(s.p[0], s.p[2], 0.22, 1.15, 1.45, 0.42, 1);
         else if (s.gun === 'DF40 II') {
           if (s.aaTier === '1.4') inject(s.p[0], s.p[2], 1.52, 0.72, 1.24, 0.38, 1);

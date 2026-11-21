@@ -1,3 +1,4 @@
+import {incomingPathClear} from './ballistics.js';
 import {NV11} from './nv11.js';
 import {clamp, mix, angleDiff} from './geometry.js';
 import {walkable, obstacles, obstruction, rayBox, moveActor, floorAt} from './yard.js';
@@ -88,7 +89,7 @@ export class NV12 extends NV11 {
       b.contacts.set(owner.id, {
         x: owner.x, y: owner.y, z: owner.z,
         vx: owner.vx || 0, vz: owner.vz || 0,
-        t, seen: false, gun: owner.gun, hp: owner.hp + owner.shield
+        t, spawnId: owner.spawnId, seen: false, gun: owner.gun, hp: owner.hp + owner.shield
       });
       this.intel[v.team].set(owner.id, {x: owner.x, z: owner.z, t, by: v.id});
     }
@@ -106,13 +107,15 @@ export class NV12 extends NV11 {
   detectIncoming(a, b) {
     const t = this.match.time;
     if (t - b.underFireAt < .22) return;
+    const center = targetPoint(a);
     for (const s of this.match.shots) {
-      if (s.team === a.team) continue;
-      const rx = a.x - s.p[0], rz = a.z - s.p[2];
-      const forwardDist = rx * s.dir[0] + rz * s.dir[2];
-      if (forwardDist < -2 || forwardDist > 26) continue;
-      const perp = Math.abs(rx * s.dir[2] - rz * s.dir[0]);
-      if (perp < 2.2) {
+      if (s.team === a.team || s.materialPass) continue;
+      const rx = center[0] - s.p[0], ry = center[1] - s.p[1], rz = center[2] - s.p[2];
+      const forwardDist = rx * s.dir[0] + ry * s.dir[1] + rz * s.dir[2];
+      if (forwardDist <= 0 || forwardDist > 26) continue;
+      const point = s.p.map((v, i) => v + s.dir[i] * forwardDist);
+      if (Math.hypot(point[0] - center[0], point[2] - center[2]) < 2.2 &&
+          Math.abs(point[1] - center[1]) <= 1.2 && incomingPathClear(s, forwardDist, point)) {
         b.underFireAt = t;
         b.threatDir = [-s.dir[0], -s.dir[2]];
         this.metrics.evade++;

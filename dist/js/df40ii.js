@@ -1,5 +1,5 @@
 import {clamp, angleDiff, forward} from './geometry.js';
-import {obstruction} from './yard.js';
+import {obstruction, clearOpticalPath} from './yard.js';
 import {eyeOf, targetPoint} from './posture.js';
 import {ARV1_LOCK_ACQUIRE, ARV1_LOCK_HOLD} from './df1.js';
 
@@ -369,7 +369,7 @@ export function updateDF40II(match, a, dt) {
     } else {
       const s = aimAt(a, cur, spec, null, false);
       const sep = Math.hypot(angleDiff(s.yaw, a.yaw) * Math.cos(a.pitch), s.pitch - a.pitch);
-      const hasLOS = obstruction(s.origin, s.raw) > 1;
+      const hasLOS = clearOpticalPath(s.origin, s.raw, match.aeroVortex);
       d.targetDist = s.range;
       if (s.range > spec.maxRange || sep >= (d.locked ? spec.lockHold : spec.lockAcquire)) {
         clearLock(d, t);
@@ -407,7 +407,7 @@ export function updateDF40II(match, a, dt) {
       if (s.range > spec.maxRange) continue;
       const sep = Math.hypot(angleDiff(s.yaw, a.yaw) * Math.cos(a.pitch), s.pitch - a.pitch);
       if (sep >= spec.lockAcquire) continue;
-      const hasLOS = obstruction(s.origin, s.raw) > 1;
+      const hasLOS = clearOpticalPath(s.origin, s.raw, match.aeroVortex);
       if (hasLOS) {
         // ARV1.3 threat-weighted angular priority (favors closest angular match & low-HP finish)
         const cost = sep * (1 - clamp((110 - (e.hp + e.shield)) / 110, 0, 1) * 0.12);
@@ -512,7 +512,7 @@ export function bulletGuidanceDF40II(match, a, barrelSide = 0, barrelVert = 0) {
   const pitch = s.pitch - a.pitch;
   const ang = Math.hypot(yaw, pitch);
   const separation = Math.hypot(angleDiff(raw.yaw, a.yaw) * Math.cos(a.pitch), raw.pitch - a.pitch);
-  if (raw.range > spec.maxRange || separation >= spec.lockHold || obstruction(raw.origin, raw.raw) <= 1) {
+  if (raw.range > spec.maxRange || separation >= spec.lockHold || !clearOpticalPath(raw.origin, raw.raw, match.aeroVortex)) {
     return {
       dir: forward(a.yaw + baseFanYaw, clamp(a.pitch + baseFanPitch, -1.31, 1.31)),
       guided: false,

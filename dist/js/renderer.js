@@ -1,6 +1,6 @@
 import {STRIDE, add, sub, scale, unit, cross, dot, multiply, invert4, lookAt, perspective, clamp} from './geometry.js';
 import {bodyCenter, torso} from './posture.js';
-import {loadTextures} from './materials.js';
+import {loadTextures, loadScenery} from './materials.js';
 import {buildHarbor} from './harbor.js';
 import {character, viewModel, movingDetails, muzzleFlashMesh} from './models.js';
 import {weapons, npcWeapons} from './match.js';
@@ -111,9 +111,9 @@ function rotateBasis(right, up, fwd, pitch, yaw, roll) {
 export class Renderer {
   constructor(canvas, hdrCanvas) {
     this.canvas = canvas;
-    this.hdrDisplay = new HDRDisplay(hdrCanvas);
     this.gl = canvas.getContext('webgl2', {alpha: false, antialias: true, premultipliedAlpha: false, powerPreference: 'high-performance'});
     if (!this.gl) throw Error('WebGL 2 を初期化できません');
+    this.hdrDisplay = new HDRDisplay(hdrCanvas);
     this.mirrorAt = -10;
     this.lastRenderTime = null;
     this.native = true;
@@ -134,18 +134,14 @@ export class Renderer {
     this.schlieren = new SchlierenOptics();
     this.floatHDR = this.khdr.floatHDR;
 
-    const [textures, wave] = await Promise.all([loadTextures(gl), new Promise((res, rej) => {
-      const img = new Image();
-      img.onload = () => res(img);
-      img.onerror = rej;
-      img.src = './assets/waves.webp';
-    })]);
+    const [textures, wave] = await Promise.all([loadTextures(gl), loadScenery(false)]);
     this.textures = textures;
     this.wave = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, this.wave);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, wave);
     gl.generateMipmap(gl.TEXTURE_2D);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    if (gl.getError() !== gl.NO_ERROR) throw new Error('WebGL 水面テクスチャを割り当てられませんでした');
 
     this.terrain = gpuMesh(gl, buildHarbor());
     this.actors = {};
@@ -314,6 +310,7 @@ export class Renderer {
       }
     }
     for (const s of match.shots) {
+      if (s.materialPass) continue;
       const d = Math.hypot(s.p[0] - eye[0], s.p[2] - eye[2]);
       if (d > 42) continue;
       const c = s.source === 'p1' ? [1.45, .68, 2.05]

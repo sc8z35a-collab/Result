@@ -23,8 +23,9 @@
 //       with high-shot crouch-duck and agile low-shot evasive hop.
 
 import {clamp, mix, angleDiff} from './geometry.js';
-import {walkable, obstruction} from './yard.js';
+import {walkable, obstruction, clearOpticalPath} from './yard.js';
 import {eyeOf, targetPoint} from './posture.js';
+import {incomingPathClear} from './ballistics.js';
 
 const dist2 = (ax, az, bx, bz) => Math.hypot(ax - bx, az - bz);
 
@@ -596,7 +597,7 @@ export function rearAdvantage(spyX, spyZ, targetX, targetZ, targetYaw) {
 // Build FOV-occluded stealth A* weights that keep NV2.1 out of visually predicted enemy sight cones!
 export function buildSpyStealthWeights(baseWeights, nav, spyState, spyActor, match, t) {
   const weights = new Map(baseWeights);
-  const W = nav.W, H = nav.H;
+  const W = nav.W || 25, H = nav.H || 100;
   const predictions = [];
 
   for (const [id, dos] of spyState.sightings) {
@@ -610,15 +611,15 @@ export function buildSpyStealthWeights(baseWeights, nav, spyState, spyActor, mat
 
   // Penalize grid cells inside any visually predicted enemy's front vision cone (within 36m)
   for (const pr of predictions) {
-    const minGx = clamp(Math.floor((pr.predX - 30 + 25) * 0.5), 0, W - 1);
-    const maxGx = clamp(Math.ceil((pr.predX + 30 + 25) * 0.5), 0, W - 1);
+    const minGx = clamp(Math.floor((pr.predX - 30 + 24) * 0.5), 0, W - 1);
+    const maxGx = clamp(Math.ceil((pr.predX + 30 + 24) * 0.5), 0, W - 1);
     const minGz = clamp(Math.floor((pr.predZ - 34 + 99) * 0.5), 0, H - 1);
     const maxGz = clamp(Math.ceil((pr.predZ + 34 + 99) * 0.5), 0, H - 1);
     for (let gz = minGz; gz <= maxGz; gz++) {
-      const cz = -99 + gz * 2 + 1;
+      const cz = -99 + gz * 2;
       const row = gz * W;
       for (let gx = minGx; gx <= maxGx; gx++) {
-        const cx = -25 + gx * 2 + 1;
+        const cx = -24 + gx * 2;
         const dx = cx - pr.predX, dz = cz - pr.predZ;
         const d2 = dx * dx + dz * dz;
         if (d2 < 9 || d2 > 1156) continue; // skip <3m or >34m
@@ -677,7 +678,7 @@ export function planSpyTactics(nv, a, b, spyState) {
     let bestNode = null, bestSc = -Infinity;
     for (let i = 0; i < g.N; i++) {
       const n = g.nodes[i];
-      if (!n.nearCover) continue;
+      if (!(n.nearCover || n.coverMask)) continue;
       const dMe = dist2(a.x, a.z, n.x, n.z);
       if (dMe < 4.5 || dMe > 28) continue;
       let sc = 18 - dMe * 0.55 - cog.threat[n.cell] * 4.5;
@@ -737,7 +738,7 @@ export function planSpyTactics(nv, a, b, spyState) {
       if (n.lane !== spyState.reconLane) continue;
       const dMe = dist2(a.x, a.z, n.x, n.z);
       if (dMe < 7 || dMe > 42) continue;
-      const sc = 24 - Math.abs(n.z - targetZ) * 0.35 - Math.abs(dMe - 20) * 0.35 + (n.nearCover ? 7 : 0) - cog.threat[n.cell] * 3.5;
+      const sc = 24 - Math.abs(n.z - targetZ) * 0.35 - Math.abs(dMe - 20) * 0.35 + ((n.nearCover || n.coverMask) ? 7 : 0) - cog.threat[n.cell] * 3.5;
       if (sc > bestS) { bestS = sc; bestN = n; }
     }
     if (bestN) {
@@ -826,7 +827,7 @@ export function planSpyTactics(nv, a, b, spyState) {
     if (rAdv < -0.10) continue; // skip frontal head-on nodes!
 
     let sc = rAdv * 36 + (18 - Math.abs(dE - 13.5)) * 1.15 - dMe * 0.42 - cog.threat[n.cell] * 3.2;
-    if (n.nearCover) sc += 8.5;
+    if (n.nearCover || n.coverMask) sc += 8.5;
     if (n.lane !== enemyLane) sc += 7.5; // wrap via side lane around containers
     if (n.id === spyState.ambushNodeId) sc += 5.0; // avoid path thrashing
     if (sc > bestSc) { bestSc = sc; bestAmbush = n; }
@@ -876,7 +877,7 @@ export function computeSpyDodge(nv, a, b, spyState) {
     const cpy = s.p[1] + s.dir[1] * along;
     const cpz = s.p[2] + s.dir[2] * along;
     const missH = Math.hypot(cpx - ax, cpz - az);
-    if (missH < 1.38 && Math.abs(cpy - ay) < 1.08) {
+    if (missH < 1.38 && Math.abs(cpy - ay) < 1.08 && incomingPathClear(s, along, [cpx, cpy, cpz])) {
       incoming.push({
         px: s.p[0], pz: s.p[2],
         dx: s.dir[0], dz: s.dir[2],
@@ -899,7 +900,7 @@ export function computeSpyDodge(nv, a, b, spyState) {
     if (d < 2 || d > 44) continue;
     const fx = Math.sin(e.yaw), fz = -Math.cos(e.yaw);
     const aimDot = (ex * fx + ez * fz) / d;
-    if (aimDot > 0.945) {
+    if (aimDot > 0.945 && clearOpticalPath(eyeOf(e), targetPoint(a), nv.match.aeroVortex)) {
       aimRay = {ex: e.x, ez: e.z, fx, fz, d, aimDot};
       break;
     }

@@ -1,12 +1,75 @@
 import {layers} from './geometry.js';
-export function imageFrom(url) {
+const loadTimeout = 8000;
+
+export function imageFrom(url, timeout = loadTimeout) {
   return new Promise((resolve, reject) => {
     const im = new Image();
-    im.onload = () => resolve(im);
-    im.onerror = () => reject(new Error('画像を読み込めませんでした ' + url));
-    im.src = url
-  })
+    const finish = error => {
+      clearTimeout(timer);
+      im.onload = im.onerror = null;
+      if (error) reject(error);
+      else resolve(im);
+    };
+    const timer = setTimeout(() => finish(new Error('画像の読み込みがタイムアウトしました ' + url)), timeout);
+    im.onload = () => finish();
+    im.onerror = () => finish(new Error('画像を読み込めませんでした ' + url));
+    im.src = url;
+  });
 }
+
+async function fetchManifest() {
+  const signal = new AbortController();
+  const timer = setTimeout(() => signal.abort(), loadTimeout);
+  try {
+    const response = await fetch('./assets/materials.json', {signal: signal.signal});
+    if (!response.ok) throw new Error('素材一覧を読み込めません');
+    return await response.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function loadAtlas() {
+  try {
+    const [manifest, sheet] = await Promise.all([fetchManifest(), imageFrom('./assets/materials.webp')]);
+    const {tile, columns, layers: entries} = manifest;
+    if (!Number.isInteger(tile) || tile < 1 || tile > 1024 || !Number.isInteger(columns) || columns < 1 ||
+        !Array.isArray(entries) || entries.length > 128 ||
+        entries.some(entry => typeof entry?.name !== 'string' || !/^[a-z][a-z0-9]*$/i.test(entry.name) ||
+          entry.name === 'white' || Object.hasOwn(Object.prototype, entry.name)) ||
+        new Set(entries.map(entry => entry.name)).size !== entries.length ||
+        sheet.width < columns * tile || sheet.height < Math.ceil(entries.length / columns) * tile) {
+      throw new Error('素材一覧と画像が一致しません');
+    }
+    return {manifest, sheet};
+  } catch {
+    return {manifest: {tile: 128, columns: 1, layers: []}, sheet: null};
+  }
+}
+
+function fallbackScenery(sky) {
+  const canvas = document.createElement('canvas');
+  canvas.width = sky ? 64 : 4;
+  canvas.height = sky ? 32 : 4;
+  const ctx = canvas.getContext('2d');
+  const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+  gradient.addColorStop(0, sky ? '#aac9d1' : '#7b8280');
+  gradient.addColorStop(1, sky ? '#607f9a' : '#858281');
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  return canvas;
+}
+
+export function loadScenery(sky) {
+  const url = sky ? './assets/marine-sky.webp' : './assets/waves.webp';
+  return imageFrom(url).catch(() => fallbackScenery(sky));
+}
+
+export function resetMaterialLayers() {
+  for (const key of Object.keys(layers)) delete layers[key];
+  layers.white = 0;
+}
+
 export const labelNames = ['HBR', 'NORTH', 'TIDE', 'serial', 'hazard', '04', '05', '07', 'berth', 'door', 'gate', 'yard', 'arrow', 'mark04', 'ship', 'portal', 'supply'];
 export function makeLabel(name, ctx, s) {
   ctx.clearRect(0, 0, s, s);
@@ -149,10 +212,8 @@ export function makeLabel(name, ctx, s) {
   return ctx.getImageData(0, 0, s, s)
 }
 export async function loadTextures(gl) {
-  const [manifest, sheet, sky] = await Promise.all([fetch('./assets/materials.json').then(r => {
-    if (!r.ok)throw Error('素材一覧を読み込めません');
-    return r.json()
-  }), imageFrom('./assets/materials.webp'), imageFrom('./assets/marine-sky.webp')]);
+  const [{manifest, sheet}, sky] = await Promise.all([loadAtlas(), loadScenery(true)]);
+  resetMaterialLayers();
   const s = manifest.tile, n = 1 + manifest.layers.length + labelNames.length, can = document.createElement('canvas');
   can.width = can.height = s;
   const ctx = can.getContext('2d', {willReadFrequently: true});
@@ -184,5 +245,11 @@ export async function loadTextures(gl) {
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-  return {tex, sky: skyTex}
+  const error = gl.getError();
+  if (error !== gl.NO_ERROR) {
+    gl.deleteTexture(tex);
+    gl.deleteTexture(skyTex);
+    throw new Error('WebGL テクスチャを割り当てられませんでした (' + error + ')');
+  }
+  return {tex, sky: skyTex};
 }
