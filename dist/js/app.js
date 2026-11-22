@@ -474,7 +474,7 @@ document.addEventListener('pointerdown', e => {
 }, true);
 coarsePointer.addEventListener?.('change', e => setInputType(e.matches));
 function controls() {
-  const rows = touch ? [['移動 / ダッシュ', '左スティック（強く前傾でダッシュ）'], ['視点', '右側スワイプ / 射撃長押しドラッグ / 右スティック'], ['発射 / 再装填', '射撃(長押しで連射)・R2 / R・X'], ['ジャンプ / しゃがみ', '↑・A / しゃがみ・B'], ['FLIR / 煙幕 / 解析', '左下 FLIR・煙幕・解析ボタン']] : [['移動 / ダッシュ', 'WASD / Shift · 左スティック強前傾'], ['視点', 'マウス / 矢印キー / 右スティック'], ['発射 / 再装填', '左クリック(長押しで連射)・F・R2 / R・X'], ['ジャンプ / しゃがむ', 'Space・A / Ctrl・B'], ['熱視界 / 煙幕 / 解析', 'T (FLIR) · G (煙幕) · L (弾道解析) · K (跳弾) · M (波動図)'], ['一時停止', 'Esc / P / Start']];
+  const rows = touch ? [['移動 / ダッシュ', '左スティック（強く前傾でダッシュ）'], ['視点', '右側スワイプ / 射撃長押しドラッグ / 右スティック'], ['発射 / 再装填', '射撃(長押しで連射)・R2 / R・X'], ['ジャンプ / しゃがみ', '↑・A / しゃがみ・B'], ['オートエイム / 全画面', '右上 AA ボタン / 全画面ボタン'], ['FLIR / 煙幕 / 解析', '左下 FLIR・煙幕・解析ボタン']] : [['移動 / ダッシュ', 'WASD / Shift · 左スティック強前傾'], ['視点', 'マウス / 矢印キー / 右スティック'], ['発射 / 再装填', '左クリック(長押しで連射)・F・R2 / R・X'], ['ジャンプ / しゃがむ', 'Space・A / Ctrl・B'], ['オートエイム / 全画面', 'O (ON/OFF) · U (全画面切替)'], ['熱視界 / 煙幕 / 解析', 'T (FLIR) · G (煙幕) · L (弾道解析) · K (跳弾) · M (波動図)'], ['一時停止', 'Esc / P / Start']];
   if (match?.player.df)rows.push(...(touch ? [['DF1 OUT', '画面右の専用ボタン / L2・Y・LB・RB']] : [['中央集中 / 散弾', 'Q / Y'], ['P1 ブースト', 'X / LB'], ['照準 / レンズ切替', '右クリック・C・L2 / V・RB'], ['EVR1 購入', 'B']]));
   if (match?.player.df40)rows.push(...(touch ? [['DF40 II · AA1.4', '画面右 AA1.4 ボタン / LB（一時強化・過熱冷却あり）']] : [['オートエイム 1.4 起動/解除', 'X / E / LB（一時強化・オーバーヒートあり）']]));
   $('controls').innerHTML = rows.map(([a, b]) => `<span>${a}</span><b>${b}</b>`).join('')
@@ -509,7 +509,9 @@ function show(s) {
       match = null;
       tourTime = 0
     }
-    lobby()
+    lobby();
+    syncFullscreenUI();
+    syncAutoAimUI();
   }
   if (s === 'settings')drawSettings();
   if (s === 'title') {
@@ -519,12 +521,15 @@ function show(s) {
     audio.resetMatch();
     tourTime = 0;
     resetView = true;
-    soundButton()
+    soundButton();
+    syncFullscreenUI();
   }
   if (s === 'pause') {
     audio.stopMatchSounds();
     controls();
-    equipment.pause(match?.player)
+    equipment.pause(match?.player);
+    syncFullscreenUI();
+    syncAutoAimUI();
   }
   if (s === 'results')resultUI();
   const focus = {title: 'play', lobby: 'lobbyBack', settings: 'settingsClose', pause: 'resume', results: 'rematch'}[s];
@@ -618,6 +623,149 @@ function lobby() {
   equipment.lobby(rules.loadout)
 }
 const effectiveAudioMode = () => settings.lightMode ? 'stereo' : settings.audioMode;
+function fullscreenElement() {
+  return document.fullscreenElement || document.webkitFullscreenElement || document.mozFullScreenElement || document.msFullscreenElement || null;
+}
+function fullscreenSupported() {
+  const el = document.documentElement;
+  return !!(
+    document.fullscreenEnabled || document.webkitFullscreenEnabled ||
+    typeof el.requestFullscreen === 'function' || typeof el.webkitRequestFullscreen === 'function'
+  );
+}
+function syncFullscreenUI() {
+  const on = !!fullscreenElement();
+  const supported = fullscreenSupported();
+  document.body.classList.toggle('is-fullscreen', on);
+  const appEl = $('app');
+  if (appEl) appEl.dataset.fullscreen = String(on);
+  const iconHref = on ? '#i-exit-fullscreen' : '#i-fullscreen';
+  const titleBtn = $('fullscreenTitle');
+  if (titleBtn) {
+    titleBtn.setAttribute('aria-pressed', String(on));
+    titleBtn.setAttribute('aria-label', on ? '全画面を解除' : '全画面表示');
+    titleBtn.classList.toggle('is-on', on);
+    titleBtn.querySelector('use')?.setAttribute('href', iconHref);
+    const sp = titleBtn.querySelector('span');
+    if (sp) sp.textContent = on ? '解除' : '全画面';
+  }
+  for (const id of ['lobbyFullscreen', 'hudFullscreen']) {
+    const btn = $(id);
+    if (!btn) continue;
+    btn.setAttribute('aria-pressed', String(on));
+    btn.setAttribute('aria-label', on ? '全画面を解除' : '全画面表示');
+    btn.classList.toggle('is-on', on);
+    btn.querySelector('use')?.setAttribute('href', iconHref);
+  }
+  const pauseFs = $('pauseFullscreen');
+  if (pauseFs) {
+    pauseFs.setAttribute('aria-pressed', String(on));
+    pauseFs.classList.toggle('is-on', on);
+    pauseFs.querySelector('use')?.setAttribute('href', iconHref);
+    const sp = pauseFs.querySelector('span');
+    if (sp) sp.textContent = on ? '全画面解除' : '全画面';
+  }
+  const setFs = $('fullscreenSettings');
+  if (setFs) {
+    setFs.setAttribute('aria-pressed', String(on));
+    setFs.classList.toggle('is-on', on);
+    setFs.querySelector('use')?.setAttribute('href', iconHref);
+    const sp = setFs.querySelector('span');
+    if (sp) sp.textContent = on ? '全画面を解除' : '全画面にする';
+  }
+  const fsHint = $('fullscreenHint');
+  if (fsHint) {
+    fsHint.textContent = !supported
+      ? 'このブラウザは全画面API非対応です（ホーム画面に追加で全画面表示可能）'
+      : on
+        ? '現在全画面表示中 · Esc / U キーまたはボタンで解除'
+        : 'ボタンまたは試合中 U キーで画面いっぱいに全画面表示';
+  }
+}
+async function toggleFullscreen() {
+  const notify = msg => {
+    if (screen === 'game' && match) {
+      $('combatNotice').textContent = msg;
+      noticeUntil = match.time + 2.0;
+    }
+    const status = {lobby: 'lobbyNotice', pause: 'pauseNotice', results: 'resultNotice', settings: 'settingStatus'}[screen];
+    if (status && $(status)) $(status).textContent = msg;
+  };
+  if (!fullscreenSupported()) {
+    notify('このブラウザは全画面API非対応です（ホーム画面に追加で全画面表示可能）');
+    syncFullscreenUI();
+    return false;
+  }
+  try {
+    if (fullscreenElement()) {
+      const p = document.exitFullscreen?.() || document.webkitExitFullscreen?.();
+      if (p?.then) await p;
+    } else {
+      const el = document.documentElement;
+      if (typeof el.requestFullscreen === 'function') {
+        try {
+          await el.requestFullscreen({navigationUI: 'hide'});
+        } catch {
+          await el.requestFullscreen();
+        }
+      } else if (typeof el.webkitRequestFullscreen === 'function') {
+        el.webkitRequestFullscreen();
+      }
+    }
+  } catch {
+    notify('全画面表示に切り替えできませんでした');
+  }
+  syncFullscreenUI();
+  if (ready && renderer) {
+    try { renderer.resize(); } catch {}
+    requestAnimationFrame(() => {
+      if (ready && renderer) try { renderer.resize(); } catch {}
+    });
+  }
+  return !!fullscreenElement();
+}
+function syncAutoAimUI() {
+  const on = settings.autoAim !== false;
+  const appEl = $('app');
+  if (appEl) appEl.dataset.autoAim = String(on);
+  const sw = $('autoAimSwitch');
+  if (sw) sw.setAttribute('aria-checked', String(on));
+  const hint = $('autoAimHint');
+  if (hint) {
+    hint.textContent = on
+      ? 'オン · DF1 OUT / RD系 / DF40 II のロックオン＆弾道誘導・追従を有効化（試合中 O / AAボタンで切替）'
+      : 'オフ · 全武器のロックオン・弾道誘導・エイム追従を完全停止（手動エイム専用）';
+  }
+  for (const id of ['hudAutoAim', 'lobbyAutoAim']) {
+    const btn = $(id);
+    if (!btn) continue;
+    btn.setAttribute('aria-pressed', String(on));
+    btn.classList.toggle('is-on', on);
+    btn.classList.toggle('is-off', !on);
+    btn.textContent = on ? 'AA ON' : 'AA OFF';
+  }
+  const pauseBtn = $('pauseAutoAim');
+  if (pauseBtn) {
+    pauseBtn.setAttribute('aria-pressed', String(on));
+    pauseBtn.classList.toggle('is-on', on);
+    pauseBtn.classList.toggle('is-off', !on);
+    pauseBtn.textContent = on ? 'オートエイム ON' : 'オートエイム OFF';
+  }
+}
+function setAutoAim(on, announce = false) {
+  settings.autoAim = !!on;
+  save();
+  match?.setAutoAim?.(settings.autoAim);
+  syncAutoAimUI();
+  if (announce && match) {
+    $('combatNotice').textContent = settings.autoAim
+      ? 'オートエイム ON（ARV ロック＆弾道誘導 有効）'
+      : 'オートエイム OFF（手動エイム）';
+    noticeUntil = match.time + 1.5;
+  }
+  if (screen === 'game') hud();
+  if (screen === 'settings') drawSettings();
+}
 function applyLightModeChrome() {
   const lite = !!settings.lightMode;
   document.body.classList.toggle('light-mode', lite);
@@ -645,6 +793,8 @@ function setGraphics(key, value) {
 }
 function drawSettings() {
   const lite = !!settings.lightMode;
+  syncFullscreenUI();
+  syncAutoAimUI();
   group('resolution', settings.resolution, k => setGraphics('resolution', k));
   group('graphics', settings.graphics, k => setGraphics('graphics', k));
   group('rate', settings.rate, k => setGraphics('rate', Number(k)));
@@ -749,6 +899,22 @@ $('pauseSettings').onclick = () => {
   previous = 'pause';
   show('settings')
 };
+for (const id of ['fullscreenTitle', 'lobbyFullscreen', 'fullscreenSettings', 'hudFullscreen', 'pauseFullscreen']) {
+  const el = $(id);
+  if (el) el.onclick = () => { el.blur?.(); toggleFullscreen(); };
+}
+for (const id of ['autoAimSwitch', 'lobbyAutoAim', 'hudAutoAim', 'pauseAutoAim']) {
+  const el = $(id);
+  if (el) el.onclick = () => { el.blur?.(); setAutoAim(!(settings.autoAim !== false), screen === 'game'); };
+}
+for (const ev of ['fullscreenchange', 'webkitfullscreenchange']) {
+  document.addEventListener(ev, () => {
+    syncFullscreenUI();
+    if (ready && renderer) {
+      try { renderer.resize(); } catch {}
+    }
+  });
+}
 $('sound').onclick = async() => {
   settings.sound = !(settings.sound && audio.on && settings.volume);
   if (settings.sound && !settings.volume)settings.volume = 55;
@@ -878,15 +1044,17 @@ function startMatch() {
   spectraAt = 0;
   resetMotion();
   audio.resetMatch();
-  match = new Match(rules, event);
+  match = new Match({...rules, autoAim: settings.autoAim !== false}, event);
   equipment.prepare(match.player);
+  syncAutoAimUI();
+  syncFullscreenUI();
   show('game');
   if (!touch) pointer();
   audio.setMode(effectiveAudioMode());
   if (settings.sound)audio.enable(true);
   audio.set(settings.volume / 100);
   $('startHint').hidden = false;
-  $('startHint').textContent = touch ? '左強傾ダッシュ · FLIR熱視界 · 煙幕 · 4D弾道解析 · 鋼鉄ノック探知' : 'WASD 移動 / Shift ダッシュ · T FLIR · G 流体煙幕 · L 4D弾道解析 · M 波動図';
+  $('startHint').textContent = touch ? '左強傾ダッシュ · 右上 AA / 全画面 · 左下 FLIR・煙幕・解析' : 'WASD 移動 / Shift ダッシュ · O オートエイム · U 全画面 · T FLIR · G 煙幕';
   $('combatNotice').textContent = '';
   $('feed').replaceChildren();
   delete $('feed').dataset.stamp;
@@ -1160,7 +1328,7 @@ document.addEventListener('keydown', e => {
   }
   if (screen !== 'game' || !match || document.hidden || e.target?.closest?.('input, textarea, select, [contenteditable=true]')) return;
   if (e.code === 'Space' && e.target?.closest?.('button')) return;
-  if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyF', 'KeyR', 'KeyT', 'KeyG', 'KeyL', 'KeyK', 'KeyM'].includes(e.code))e.preventDefault();
+  if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyF', 'KeyR', 'KeyT', 'KeyG', 'KeyL', 'KeyK', 'KeyM', 'KeyO', 'KeyU'].includes(e.code))e.preventDefault();
   keys.add(e.code);
   if (e.repeat) return;
   if (e.code === 'KeyF' && match.player.alive) holdFireKey = true;
@@ -1169,6 +1337,8 @@ document.addEventListener('keydown', e => {
   if (e.code === 'KeyT')toggleFlir();
   if (e.code === 'KeyG')triggerSmokeVent();
   if (e.code === 'KeyL')toggleChrono();
+  if (e.code === 'KeyO')setAutoAim(!(settings.autoAim !== false), true);
+  if (e.code === 'KeyU')toggleFullscreen();
   if (e.code === 'KeyK') {
     settings.fermatCore = !settings.fermatCore;
     save();
@@ -1546,6 +1716,8 @@ function frame(ms) {
   appEl.dataset.spectraField = String(!!settings.spectraField);
   appEl.dataset.flirActive = String(!!(renderer.native && flirActive && !settings.lightMode && settings.thermoFlux && match?.player.alive));
   appEl.dataset.echoPulse = String(!!settings.echoPulse);
+  appEl.dataset.autoAim = String(settings.autoAim !== false);
+  appEl.dataset.fullscreen = String(!!fullscreenElement());
   appEl.dataset.aiModel = match?.aiModel || rules.aiModel;
   appEl.dataset.audioEngine = SOUND_ENGIN_VERSION;
   appEl.dataset.audioControlHz = String(audio.controlRateHz || 300);
@@ -1590,6 +1762,8 @@ async function recoverRenderer(error) {
 async function init() {
   controls();
   applyLightModeChrome();
+  syncFullscreenUI();
+  syncAutoAimUI();
   soundButton();
   audio.set(settings.volume / 100);
   $('start').disabled = true;

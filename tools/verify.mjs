@@ -10,6 +10,7 @@ import {
   AA14_OVERHEAT_COOLDOWN,AA14_COOL_DELAY
 } from '../dist/js/df40ii.js';
 import {PilotWallet} from '../dist/js/wallet.js';
+import {readPreferences} from '../dist/js/preferences.js';
 import {ThermalOptic} from '../dist/js/optic.js';
 import {eyeOf,targetPoint} from '../dist/js/posture.js';
 import {obstruction,surfaceAt,raycastMaterial,walkable} from '../dist/js/yard.js';
@@ -330,6 +331,42 @@ for(const [id,cap,damage,rate,velocity,burstSize,shotsPerTrigger] of [['SW T',10
  assert(vm40.count>500&&mf40.count>mf40Lite.count&&mf40Lite.count>0&&fx40.count>0);
  for(const mesh of [vm40,mf40,mf40Lite,fx40]) for(let i=0;i<mesh.data.length;i+=STRIDE) assert(Number.isFinite(mesh.data[i])&&Number.isFinite(mesh.data[i+1])&&Number.isFinite(mesh.data[i+2]));
  console.log('DF40 II (ARV1.3 / AA1.3 / AA1.4 Overheat) OK:',{mag:w40.capacity,pellets:w40.pellets,damage:w40.damage,rate:w40.rate,velocity:w40.velocity,aa13Strength:AA13_ASSIST_STRENGTH,aa14Strength:AA14_ASSIST_STRENGTH,vmVerts:vm40.count});
+}
+{
+ // Auto-Aim ON/OFF toggle: preference persistence + complete disable across DF1 OUT / RD-series / DF40 II + live toggle mid-match
+ assert.equal(readPreferences({}).settings.autoAim,true,'autoAim should default to true');
+ assert.equal(readPreferences({settings:{autoAim:false}}).settings.autoAim,false,'autoAim=false must persist cleanly');
+ for(const gun of ['DF1 OUT','RD20','RD30','RD40',DF40II]){
+  const mOff=new Match({mode:'1v1',limit:'unlimited',loadout:gun,autoAim:false});
+  const [p,t]=arrange(mOff,2,85,72);
+  p.yaw+=0.05;
+  const yawBefore=p.yaw,pitchBefore=p.pitch;
+  forward(mOff,p,200);
+  const st=p.df||p.rd||p.df40;
+  assert.equal(st.locked,false,`${gun} must NOT lock when autoAim is OFF`);
+  assert.equal(st.focusId,-1,`${gun} must NOT track focusId when autoAim is OFF`);
+  assert.equal(p.yaw,yawBefore,`${gun} must NOT pull player yaw when autoAim is OFF`);
+  assert.equal(p.pitch,pitchBefore,`${gun} must NOT pull player pitch when autoAim is OFF`);
+  if(p.df40){
+   const res=mOff.toggleAA14(p);
+   assert.equal(res.ok,false,'AA1.4 must be blocked when autoAim is OFF');
+   assert.equal(res.reason,'autoaim_off');
+  }
+  assert(mOff.trigger(p)&&mOff.shots.length>0,`${gun} must still fire normally when autoAim is OFF`);
+  assert(mOff.shots.every(s=>!s.guided&&s.homingBudget===0),`${gun} rounds must be unguided when autoAim is OFF`);
+  // Live toggle ON -> locks & guides; live toggle OFF -> clears lock & cuts in-flight homing!
+  mOff.setAutoAim(true);
+  mOff.shots.length=0;p.cooldown=0;p.burstLeft=0;p.queue.length=0;
+  forward(mOff,p,200);
+  assert.equal(st.locked,true,`${gun} must re-enable lock when autoAim is toggled back ON`);
+  assert(mOff.trigger(p)&&mOff.shots.some(s=>s.guided),`${gun} must fire guided rounds after toggling autoAim ON`);
+  mOff.setAutoAim(false);
+  assert.equal(st.locked,false,`${gun} must immediately drop lock on setAutoAim(false)`);
+  for(const s of mOff.shots) s.homingTurned=0;
+  mOff.step(h,{forward:0,side:0,jump:false,crouch:false,sprint:false});
+  assert(mOff.shots.every(s=>s.homingTurned===0),`${gun} must halt in-flight player homing on setAutoAim(false)`);
+ }
+ console.log('Auto-Aim ON/OFF toggle OK: DF1 OUT, RD20, RD30, RD40, DF40 II verified.');
 }
 {
  // Supply tanker: +100 rounds immediately and 1.5x ammo refinement speed (0.6667s/round vs 1.0s/round, plus DF1 P1 1.5x), cooldown enforced, reset on respawn.

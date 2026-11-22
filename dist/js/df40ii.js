@@ -290,6 +290,10 @@ export function toggleAA14(match, a) {
     if (a.human) match.event('aa14', {actor: a, gun: a.gun, state: 'off', heat: d.aa14Heat});
     return {ok: true, active: false, state: 'off', heat: d.aa14Heat};
   }
+  if (a.human && match.autoAim === false) {
+    if (a.human) match.event('aa14', {actor: a, gun: a.gun, state: 'blocked', reason: 'autoaim_off'});
+    return {ok: false, reason: 'autoaim_off'};
+  }
   if (d.aa14Overheated || d.aa14Cooldown > 1e-6) {
     if (a.human) match.event('aa14', {actor: a, gun: a.gun, state: 'blocked', cooldown: d.aa14Cooldown});
     return {ok: false, reason: 'overheated', cooldown: d.aa14Cooldown};
@@ -323,6 +327,12 @@ export function updateDF40II(match, a, dt) {
   const d = a.df40;
   if (!d) return;
   const t = match.time;
+  const autoAimOff = !!(a.human && match.autoAim === false);
+  if (autoAimOff && d.aa14Active) {
+    d.aa14Active = false;
+    d.aa14LastOffAt = t;
+    d.aaVersion = AA13_VERSION;
+  }
 
   // 1. Update Auto-Aim 1.4 thermal state & overheat purge lockout
   if (d.aa14Overheated) {
@@ -359,6 +369,18 @@ export function updateDF40II(match, a, dt) {
   d.firePulse = Math.max(0, d.firePulse - dt * 8.0);
   d.aa14Pulse = Math.max(0, d.aa14Pulse - dt * 2.4);
   d.aa14ReadyPulse = Math.max(0, d.aa14ReadyPulse - dt * 1.8);
+
+  if (autoAimOff) {
+    if (d.focusId >= 0 || d.locked || d.d01Active) clearLock(d, t);
+    const kPose = 1 - Math.exp(-15 * dt);
+    const kGimbal = 1 - Math.exp(-18 * dt);
+    d.lockBlend += (0 - d.lockBlend) * kPose;
+    d.d01Blend += (0 - d.d01Blend) * kPose;
+    d.aa14Blend += (0 - d.aa14Blend) * kPose;
+    d.trackYaw += (0 - d.trackYaw) * kGimbal;
+    d.trackPitch += (0 - d.trackPitch) * kGimbal;
+    return;
+  }
 
   // 2. Validate & maintain active ARV1.3 target lock (plus zero-deadtime handoff on elimination)
   if (d.focusId >= 0) {
@@ -493,7 +515,7 @@ export function bulletGuidanceDF40II(match, a, barrelSide = 0, barrelVert = 0) {
   const baseFanYaw = barrelSide * 0.0044;
   const baseFanPitch = barrelVert * 0.0028;
   const e = d && d.focusId >= 0 ? match.actors[d.focusId] : null;
-  if (!d || !d.locked || !e?.alive || e.team === a.team || e.spawnId !== d.focusSpawnId) {
+  if ((a.human && match.autoAim === false) || !d || !d.locked || !e?.alive || e.team === a.team || e.spawnId !== d.focusSpawnId) {
     return {
       dir: forward(a.yaw + baseFanYaw, clamp(a.pitch + baseFanPitch, -1.31, 1.31)),
       guided: false,

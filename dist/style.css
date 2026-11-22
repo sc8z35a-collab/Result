@@ -2258,3 +2258,594 @@ body.touch #fermatTag {
 
 .wallet-notice { display: block; margin: 0.35rem 0; flex: 1 1 auto; }
 .wallet-notice:empty { display: none; }
+
+/* ==========================================================================
+   Fullscreen Controls, Auto-Aim ON/OFF Toggle & Compact Ergonomic HUD
+   (Keeps #pad joystick & #touchFire large while shrinking all other UI)
+   ========================================================================== */
+
+/* Header, Lobby, Settings & Pause Fullscreen / Auto-Aim Controls */
+.head-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.head .fs-btn,
+.head .settings-btn {
+  min-height: 30px;
+  padding: 5px 10px;
+  font-size: 11px;
+  gap: 5px;
+  border-radius: 5px;
+}
+.head .fs-btn svg,
+.head .settings-btn svg {
+  width: 14px;
+  height: 14px;
+}
+.fs-btn.is-on,
+.fs-icon-btn.is-on,
+.fs-setting-btn.is-on,
+#pauseFullscreen.is-on,
+#hudFullscreen.is-on {
+  border-color: #78f0e299;
+  color: #d6fff9;
+  background: #14363ad0;
+}
+.panel-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.mini-toggle-pill {
+  min-height: 26px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font: 700 10px/1 var(--mono);
+  letter-spacing: .06em;
+  white-space: nowrap;
+}
+.mini-toggle-pill.is-on,
+.hud-mini-pill.is-on,
+#pauseAutoAim.is-on {
+  border-color: #6ee8d899;
+  color: #d4fff8;
+  background: #133638d4;
+}
+.mini-toggle-pill.is-off,
+.hud-mini-pill.is-off,
+#pauseAutoAim.is-off {
+  border-color: #8f9e9a4d;
+  color: #9baaa6;
+  background: #151e20c4;
+}
+.fs-setting-btn {
+  min-height: 32px;
+  padding: 5px 12px;
+  font-size: 11.5px;
+  gap: 6px;
+  border-radius: 5px;
+  white-space: nowrap;
+}
+.fs-setting-btn svg {
+  width: 14px;
+  height: 14px;
+}
+.badge-aa {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1.5px 6px;
+  border-radius: 999px;
+  font: 700 9.5px/1.2 var(--mono);
+  letter-spacing: .06em;
+  vertical-align: middle;
+  color: #d4fff8;
+  background: linear-gradient(90deg, #123e42, #383014);
+  border: 1px solid #68e8d880;
+}
+.aa-toggle[aria-checked=true] {
+  background: linear-gradient(90deg, #34cfb8, #e8be62);
+  border-color: #b8fff2;
+  box-shadow: 0 0 12px #44dcc844;
+}
+.pause-quick-bar {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.pause-quick-bar button {
+  flex: 1;
+  min-height: 34px;
+  padding: 5px 10px;
+  font-size: 11.5px;
+  gap: 6px;
+  border-radius: 5px;
+}
+.pause-quick-bar svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* Auto-Aim OFF Visual Feedback on Weapon HUDs & Reticle */
+#dfHud.is-aa-off,
+#rdHud.is-aa-off {
+  border-color: #91a29f3a;
+  border-left-color: #7d8e8c;
+  background: #10191cc4;
+  color: #b8c6c4;
+  box-shadow: none;
+}
+#reticle.is-aa-off:before {
+  opacity: .24;
+  border-style: dotted;
+  border-color: #9fb0ad70;
+  box-shadow: none;
+}
+#touchDF40 button.is-disabled {
+  opacity: .56;
+  color: #9caaa8;
+  background: #141c20b8;
+  border-color: #88989455;
+  box-shadow: none;
+}
+
+/* Compact Top-Right HUD Action Strip (Auto-Aim + Fullscreen + Pause) */
+.hud-actions {
+  position: absolute;
+  top: max(6px, env(safe-area-inset-top));
+  right: max(8px, env(safe-area-inset-right));
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  z-index: 5;
+  pointer-events: none;
+}
+.hud-actions button {
+  pointer-events: auto;
+  position: static;
+  margin: 0;
+  backdrop-filter: blur(4px);
+  box-shadow: 0 2px 8px #05101348;
+}
+.hud-actions .hud-icon-btn,
+.hud-actions .hud-pause {
+  width: 26px;
+  height: 26px;
+  min-height: 26px;
+  padding: 0;
+  border-radius: 6px;
+  background: #0e1c1fb8;
+  border: 1px solid #d5e4d948;
+}
+.hud-actions .hud-icon-btn svg,
+.hud-actions .hud-pause svg {
+  width: 12px;
+  height: 12px;
+}
+.hud-actions .hud-mini-pill {
+  height: 26px;
+  min-height: 26px;
+  padding: 0 7px;
+  border-radius: 6px;
+  font: 700 8.5px/1 var(--mono);
+  letter-spacing: .04em;
+  white-space: nowrap;
+}
+
+/* Compact Non-Primary In-Game HUD (Desktop & Touch) */
+#scoreboard {
+  top: max(6px, env(safe-area-inset-top));
+  padding: 3px 10px;
+  gap: 9px;
+  background: #0f1e22ba;
+  border-color: #c9d6c036;
+  backdrop-filter: blur(4px);
+  box-shadow: 0 2px 10px #06111444;
+}
+.team-val { gap: 5px; }
+.team-val b { font-size: 15px; }
+.team-val small { font-size: 8px; }
+.score-rule { font-size: 8px; }
+
+#feed {
+  top: calc(max(6px, env(safe-area-inset-top)) + 32px);
+  right: max(8px, env(safe-area-inset-right));
+  font-size: 9px;
+  gap: 2px;
+}
+.feed-line {
+  padding: 2px 6px;
+  background: #0f1f22b8;
+  backdrop-filter: blur(3px);
+}
+
+#vitals, #weaponHud {
+  bottom: max(10px, env(safe-area-inset-bottom));
+  background: #0f1e22b8;
+  border-color: #c8d6cc30;
+  backdrop-filter: blur(4px);
+  padding: 4px 8px;
+  border-radius: 5px;
+  box-shadow: 0 2px 10px #06121544;
+}
+#vitals { left: max(10px, env(safe-area-inset-left)); }
+#vitals .vrow { gap: 4px; }
+#vitals .vrow svg { width: 11px; height: 11px; }
+#vitals .meter { width: 50px; height: 3px; }
+#vitals .vrow strong { font-size: 13px; width: 24px; }
+#vitals .vrow.shield strong { font-size: 11px; }
+
+#weaponHud {
+  right: max(10px, env(safe-area-inset-right));
+  min-width: 82px;
+}
+#weaponHud .round-count { gap: 4px; }
+#weaponHud .round-count b { font-size: 18px; }
+#weaponHud .round-count strong { font-size: 10px; }
+#weaponHud > span { font-size: 8px; }
+#ammoBoost { font-size: 7.5px; padding: 1px 5px; margin-bottom: 1px; }
+#tankerHint { font-size: 7.5px; margin-top: 1px; }
+
+#dfHud, #rdHud {
+  left: max(10px, env(safe-area-inset-left));
+  bottom: calc(max(10px, env(safe-area-inset-bottom)) + 48px);
+  padding: 3.5px 7px;
+  border-radius: 4px;
+  font-size: 8.5px;
+  line-height: 1.3;
+  box-shadow: 0 2px 10px #06101448;
+}
+#dfKeys { font-size: 7.5px; }
+.heat-line, .d01-line, .aa14-heat-line { height: 2.5px; margin-top: 2.5px; }
+
+#spectraBox {
+  left: max(10px, env(safe-area-inset-left));
+  top: max(8px, env(safe-area-inset-top));
+  width: 56px;
+  padding: 3px 4px;
+  border-radius: 5px;
+  background: #0d1d22ad;
+  box-shadow: 0 2px 10px #040d1048;
+}
+.spec-head { font-size: 6.5px; margin-bottom: 2px; letter-spacing: .02em; }
+.spec-head b { font-size: 7px; }
+#spectraCanvas { width: 48px; height: 96px; }
+.spec-foot { font-size: 6px; margin-top: 2px; }
+
+#tacStrip {
+  right: max(10px, env(safe-area-inset-right));
+  bottom: calc(max(10px, env(safe-area-inset-bottom)) + 62px);
+  gap: 3px;
+}
+#tacStrip span {
+  padding: 2px 5px;
+  font-size: 7.8px;
+  border-radius: 3px;
+}
+
+#combatNotice { top: 57%; font-size: 9.5px; }
+#startHint {
+  bottom: max(10px, env(safe-area-inset-bottom));
+  font-size: 8.5px;
+  padding: 3px 9px;
+  border-radius: 4px;
+}
+#flirFrame span { font-size: 7.5px; padding: 1.5px 7px; }
+#chronoBanner {
+  top: calc(max(6px, env(safe-area-inset-top)) + 30px);
+  font-size: 8px;
+  padding: 2px 8px;
+}
+#hitBanner { font-size: 9px; top: calc(50% + 22px); }
+#respawn { padding: 6px 16px; }
+#respawn span { font-size: 9.5px; }
+#respawn strong { font-size: 20px; }
+
+/* Ultra-Compact Touch HUD — Maximum Sightline & Swipe Space */
+body.touch #scoreboard {
+  top: max(4px, env(safe-area-inset-top));
+  padding: 2px 7px;
+  gap: 5px;
+}
+body.touch .team-val { gap: 3px; }
+body.touch .team-val b { font-size: 12px; }
+body.touch .team-val small { font-size: 7px; }
+body.touch .score-rule { font-size: 7px; }
+
+body.touch .hud-actions {
+  top: max(4px, env(safe-area-inset-top));
+  right: max(6px, env(safe-area-inset-right));
+  gap: 3px;
+}
+body.touch .hud-actions .hud-icon-btn,
+body.touch .hud-actions .hud-pause {
+  width: 22px;
+  height: 22px;
+  min-height: 22px;
+  border-radius: 5px;
+}
+body.touch .hud-actions .hud-icon-btn svg,
+body.touch .hud-actions .hud-pause svg {
+  width: 10px;
+  height: 10px;
+}
+body.touch .hud-actions .hud-mini-pill {
+  height: 22px;
+  min-height: 22px;
+  padding: 0 5px;
+  border-radius: 5px;
+  font-size: 7.5px;
+}
+
+body.touch #feed {
+  top: calc(max(4px, env(safe-area-inset-top)) + 28px);
+  right: max(6px, env(safe-area-inset-right));
+  font-size: 7.5px;
+  gap: 1.5px;
+}
+body.touch .feed-line { padding: 1.5px 5px; }
+
+body.touch #vitals {
+  top: max(4px, env(safe-area-inset-top));
+  left: max(6px, env(safe-area-inset-left));
+  bottom: auto;
+  padding: 2.5px 5px;
+  border-radius: 4px;
+}
+body.touch #vitals .vrow { gap: 3px; }
+body.touch #vitals .vrow svg { width: 9px; height: 9px; }
+body.touch #vitals .meter { width: 30px; height: 2.5px; }
+body.touch #vitals .vrow strong { font-size: 10px; width: 18px; }
+body.touch #vitals .vrow.shield strong { font-size: 8.5px; }
+
+body.touch #dfHud,
+body.touch #rdHud {
+  top: calc(max(4px, env(safe-area-inset-top)) + 30px);
+  left: max(6px, env(safe-area-inset-left));
+  bottom: auto;
+  padding: 2px 5px;
+  border-radius: 3px;
+  font-size: 7px;
+  line-height: 1.2;
+  max-width: 42vw;
+  overflow: hidden;
+}
+body.touch #dfHud > span,
+body.touch #rdHud > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+body.touch #spectraBox {
+  left: max(6px, env(safe-area-inset-left));
+  top: calc(max(4px, env(safe-area-inset-top)) + 64px);
+  width: 42px;
+  padding: 2px 3px;
+}
+body.touch #spectraCanvas { width: 36px; height: 72px; }
+body.touch .spec-head { font-size: 5.8px; margin-bottom: 1.5px; }
+body.touch .spec-head b { font-size: 6.2px; }
+
+body.touch #weaponHud {
+  bottom: max(4px, env(safe-area-inset-bottom));
+  padding: 2px 6px;
+  min-width: 66px;
+  border-radius: 4px;
+}
+body.touch #weaponHud .round-count { gap: 3px; }
+body.touch #weaponHud .round-count b { font-size: 13.5px; }
+body.touch #weaponHud .round-count strong { font-size: 8.5px; }
+body.touch #weaponHud > span { font-size: 6.8px; }
+body.touch #ammoBoost { font-size: 6.5px; padding: 1px 4px; }
+body.touch #tankerHint { font-size: 6.5px; }
+
+body.touch #combatNotice { font-size: 8px; }
+body.touch #startHint {
+  top: calc(max(4px, env(safe-area-inset-top)) + 25px);
+  bottom: auto;
+  max-width: 58vw;
+  font-size: 7px;
+  padding: 1.5px 6px;
+}
+body.touch #flirFrame span {
+  top: calc(max(4px, env(safe-area-inset-top)) + 25px);
+  font-size: 6.5px;
+  padding: 1px 5px;
+}
+body.touch #chronoBanner {
+  top: calc(max(4px, env(safe-area-inset-top)) + 25px);
+  font-size: 7px;
+  padding: 1.5px 6px;
+}
+
+/* Ergonomic Touch Controls: Generous Control Stick (#pad) & Fire Button (#touchFire),
+   Compact Out-of-the-Way Secondary Buttons */
+#pad {
+  width: 108px;
+  height: 108px;
+  left: max(14px, calc(env(safe-area-inset-left) + 12px));
+  bottom: max(14px, calc(env(safe-area-inset-bottom) + 12px));
+}
+#pad:before { inset: 9px; }
+#pad i {
+  width: 40px;
+  height: 40px;
+}
+.pad-sprint {
+  top: 5px;
+  font-size: 7.5px;
+}
+
+#touchFire {
+  width: 78px;
+  height: 78px;
+  right: max(16px, calc(env(safe-area-inset-right) + 12px));
+  bottom: max(16px, calc(env(safe-area-inset-bottom) + 12px));
+  font-size: 13px;
+  letter-spacing: .06em;
+  border-width: 2px;
+}
+
+#touchReload {
+  width: 28px;
+  height: 28px;
+  right: calc(max(16px, calc(env(safe-area-inset-right) + 12px)) + 25px);
+  bottom: calc(max(16px, calc(env(safe-area-inset-bottom) + 12px)) + 88px);
+  font-size: 10px;
+}
+#touchJump {
+  width: 28px;
+  height: 28px;
+  right: calc(max(16px, calc(env(safe-area-inset-right) + 12px)) + 86px);
+  bottom: calc(max(16px, calc(env(safe-area-inset-bottom) + 12px)) + 48px);
+  font-size: 11px;
+}
+#touchCrouch {
+  width: auto;
+  min-width: 38px;
+  height: 24px;
+  padding: 0 6px;
+  border-radius: 999px;
+  right: calc(max(16px, calc(env(safe-area-inset-right) + 12px)) + 86px);
+  bottom: calc(max(16px, calc(env(safe-area-inset-bottom) + 12px)) + 12px);
+  font-size: 7.5px;
+}
+
+#touchTac {
+  left: max(10px, calc(env(safe-area-inset-left) + 8px));
+  bottom: calc(max(14px, calc(env(safe-area-inset-bottom) + 12px)) + 116px);
+  gap: 3px;
+}
+#touchTac button,
+body.touch #touchTac button {
+  min-width: 26px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 7.5px;
+}
+
+#touchDF {
+  right: max(10px, calc(env(safe-area-inset-right) + 8px));
+  bottom: calc(max(16px, calc(env(safe-area-inset-bottom) + 12px)) + 124px);
+  gap: 3px;
+}
+#touchDF button {
+  min-width: 26px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 7.5px;
+}
+
+#touchDF40 {
+  right: max(10px, calc(env(safe-area-inset-right) + 8px));
+  bottom: calc(max(16px, calc(env(safe-area-inset-bottom) + 12px)) + 124px);
+  gap: 3px;
+}
+#touchDF40 button {
+  min-width: 40px;
+  height: 21px;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 7.8px;
+}
+
+@media (max-width: 600px) {
+  body.touch #startHint {
+    top: calc(max(4px, env(safe-area-inset-top)) + 68px);
+    max-width: 82vw;
+  }
+}
+
+@media (max-width: 440px) {
+  #pad { width: 98px; height: 98px; }
+  #pad i { width: 36px; height: 36px; }
+  #touchFire { width: 72px; height: 72px; font-size: 12px; }
+  #touchReload {
+    width: 26px; height: 26px;
+    right: calc(max(16px, calc(env(safe-area-inset-right) + 12px)) + 23px);
+    bottom: calc(max(16px, calc(env(safe-area-inset-bottom) + 12px)) + 80px);
+  }
+  #touchJump {
+    width: 26px; height: 26px;
+    right: calc(max(16px, calc(env(safe-area-inset-right) + 12px)) + 78px);
+    bottom: calc(max(16px, calc(env(safe-area-inset-bottom) + 12px)) + 44px);
+  }
+  #touchCrouch {
+    min-width: 34px; height: 22px; padding: 0 5px; font-size: 7px;
+    right: calc(max(16px, calc(env(safe-area-inset-right) + 12px)) + 78px);
+    bottom: calc(max(16px, calc(env(safe-area-inset-bottom) + 12px)) + 10px);
+  }
+  #touchTac { bottom: calc(max(14px, calc(env(safe-area-inset-bottom) + 12px)) + 106px); }
+  #touchDF, #touchDF40 { bottom: calc(max(16px, calc(env(safe-area-inset-bottom) + 12px)) + 114px); }
+}
+
+@media (max-height: 580px) {
+  #pad {
+    width: 96px;
+    height: 96px;
+    left: max(12px, calc(env(safe-area-inset-left) + 10px));
+    bottom: max(10px, calc(env(safe-area-inset-bottom) + 8px));
+  }
+  #pad i { width: 35px; height: 35px; }
+  #touchFire {
+    width: 70px;
+    height: 70px;
+    right: max(12px, calc(env(safe-area-inset-right) + 10px));
+    bottom: max(10px, calc(env(safe-area-inset-bottom) + 8px));
+    font-size: 12px;
+  }
+  #touchReload {
+    width: 26px;
+    height: 26px;
+    right: calc(max(12px, calc(env(safe-area-inset-right) + 10px)) + 22px);
+    bottom: calc(max(10px, calc(env(safe-area-inset-bottom) + 8px)) + 78px);
+    font-size: 9.5px;
+  }
+  #touchJump {
+    width: 26px;
+    height: 26px;
+    right: calc(max(12px, calc(env(safe-area-inset-right) + 10px)) + 78px);
+    bottom: calc(max(10px, calc(env(safe-area-inset-bottom) + 8px)) + 42px);
+    font-size: 10.5px;
+  }
+  #touchCrouch {
+    min-width: 36px;
+    height: 22px;
+    padding: 0 6px;
+    right: calc(max(12px, calc(env(safe-area-inset-right) + 10px)) + 78px);
+    bottom: calc(max(10px, calc(env(safe-area-inset-bottom) + 8px)) + 10px);
+    font-size: 7px;
+  }
+  #touchTac {
+    left: max(10px, calc(env(safe-area-inset-left) + 8px));
+    bottom: calc(max(10px, calc(env(safe-area-inset-bottom) + 8px)) + 104px);
+  }
+  #touchTac button,
+  body.touch #touchTac button {
+    height: 19px;
+    font-size: 7px;
+  }
+  #touchDF,
+  #touchDF40 {
+    bottom: calc(max(10px, calc(env(safe-area-inset-bottom) + 8px)) + 110px);
+  }
+  #touchDF button { min-width: 24px; height: 19px; font-size: 7px; }
+  #touchDF40 button { min-width: 38px; height: 20px; font-size: 7.5px; }
+}
+
+@media (max-height: 500px) {
+  body.touch #spectraBox {
+    top: calc(max(4px, env(safe-area-inset-top)) + 56px);
+    width: 34px;
+  }
+  body.touch #spectraCanvas { width: 28px; height: 56px; }
+}
+
+body.light-mode .hud-actions button {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  box-shadow: none !important;
+}
+

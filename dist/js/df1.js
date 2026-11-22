@@ -67,6 +67,12 @@ function canSee(match, a, origin, point) {
 
 export function senseFocus(match, a, dt) {
   const d = a.df, t = match.time;
+  if (a.human && match.autoAim === false) {
+    d.focusId = -1;
+    d.focus = 0;
+    d.locked = false;
+    return;
+  }
   const current = match.actors[d.focusId];
   const usable = (e, cone) => {
     if (!e?.alive || e.team === a.team) return Infinity;
@@ -104,13 +110,14 @@ export function senseFocus(match, a, dt) {
     d.locked = d.focus >= 1
   } else {
     d.focus = 0;
-    d.locked = false
+    d.locked = false;
   }
 }
 
 // Validate ARV1.1 lock state on trigger WITHOUT mutating player camera yaw/pitch.
 // All auto-aim redirection happens strictly on the fired projectile side (bulletGuidanceDF + steerGuidedShot).
 export function assist(match, a) {
+  if (a.human && match.autoAim === false) return null;
   const d = a.df, e = match.actors[d.focusId];
   if (!d.locked || !e?.alive || e.team === a.team || e.spawnId !== d.focusSpawnId) return null;
   const raw = aimAt(a, e);
@@ -180,6 +187,11 @@ export function bulletGuidanceDF(match, a) {
 // Per-tick 360Hz ARV1.1 / ARV1.2 / ARV1.3 / AA1.4 smart-bullet in-flight homing with kinematic lead prediction.
 export function steerGuidedShot(match, s, dt) {
   if (!s.guided || s.homingTargetId < 0 || s.homingBudget <= 1e-5)return;
+  const owner = s.owner || match.actors[s.actor];
+  if (owner?.human && match.autoAim === false) {
+    s.homingBudget = 0;
+    return;
+  }
   const e = match.actors[s.homingTargetId];
   if (!e?.alive || e.team === s.team || (s.homingSpawnId !== undefined && e.spawnId !== s.homingSpawnId)) {
     s.homingBudget = 0;
