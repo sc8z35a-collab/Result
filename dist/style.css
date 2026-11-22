@@ -2266,6 +2266,150 @@ body.touch #fermatTag {
 .wallet-notice { display: block; margin: 0.35rem 0; flex: 1 1 auto; }
 .wallet-notice:empty { display: none; }
 
+/* ============================================================================
+   NV2.6 Force: Diegetic Squad Radio Comms, 3-2-1 Sync Countdown & Squad Orders
+   ============================================================================ */
+#radioComms {
+  position: absolute;
+  left: max(clamp(16px, 3vw, 44px), env(safe-area-inset-left));
+  bottom: calc(max(clamp(10px, 2.2vh, 24px), env(safe-area-inset-bottom)) + 126px);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  max-width: min(340px, 40vw);
+  pointer-events: none;
+  z-index: 4;
+}
+.radio-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 5px;
+  background: linear-gradient(90deg, #0b1c20d8, #0f2529b8);
+  border-left: 3px solid #59e3ee;
+  box-shadow: 0 3px 12px #040d1158;
+  backdrop-filter: blur(6px);
+  font: 600 11px/1.35 var(--sans);
+  color: #e4f4f0;
+  animation: radioIn .18s ease-out;
+}
+.radio-line.is-urgent {
+  border-left-color: #ff9c52;
+  background: linear-gradient(90deg, #27150ed8, #1a181ab8);
+}
+.radio-line.is-trap {
+  border-left-color: #f4c56a;
+}
+.radio-line.is-enemy {
+  border-left-color: #f06d54;
+  background: linear-gradient(90deg, #241111cc, #181416a0);
+  color: #f7d8cc;
+  font-style: italic;
+}
+.radio-tag {
+  font: 700 9.5px/1 var(--mono);
+  letter-spacing: .06em;
+  color: #7df2ff;
+  text-transform: uppercase;
+}
+.radio-line.is-urgent .radio-tag { color: #ffba7a; }
+.radio-line.is-trap .radio-tag { color: #f6d482; }
+.radio-line.is-enemy .radio-tag { color: #ff8a70; }
+.radio-sec {
+  font: 600 9px/1 var(--mono);
+  color: #9bb8b4;
+}
+@keyframes radioIn {
+  from { opacity: 0; transform: translateX(-10px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+#syncBanner {
+  position: absolute;
+  left: 50%;
+  top: calc(max(12px, env(safe-area-inset-top)) + 68px);
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 14px;
+  border-radius: 6px;
+  background: linear-gradient(180deg, #0d2a30e2, #091d22d8);
+  border: 1px solid #68eef788;
+  box-shadow: 0 4px 18px #04131780, 0 0 18px #5ce8f72e;
+  pointer-events: none;
+  z-index: 6;
+}
+#syncBanner[hidden] { display: none; }
+#syncBanner.is-go {
+  border-color: #ffd36e;
+  box-shadow: 0 4px 22px #2a1d0688, 0 0 24px #ffcf6450;
+}
+#syncText {
+  font: 700 11.5px/1.1 var(--mono);
+  letter-spacing: .09em;
+  color: #9ff8ff;
+  text-shadow: 0 1px 4px #041216;
+}
+#syncBanner.is-go #syncText { color: #ffe591; }
+.sync-meter {
+  width: 164px;
+  height: 3px;
+  border-radius: 2px;
+  background: #ffffff24;
+  overflow: hidden;
+}
+#syncBar {
+  display: block;
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #5be9f7, #ffe07d);
+  transition: width 40ms linear;
+}
+
+#squadStrip {
+  position: absolute;
+  left: max(clamp(16px, 3vw, 44px), env(safe-area-inset-left));
+  bottom: calc(max(clamp(10px, 2.2vh, 24px), env(safe-area-inset-bottom)) + 92px);
+  display: flex;
+  gap: 5px;
+  z-index: 4;
+}
+#squadStrip[hidden] { display: none; }
+#squadStrip button {
+  padding: 3px 7px;
+  min-height: 22px;
+  border-radius: 4px;
+  border: 1px solid #72dce842;
+  background: #0d2126be;
+  color: #c7e6e4;
+  font: 700 9px/1.1 var(--mono);
+  letter-spacing: .04em;
+  cursor: pointer;
+}
+#squadStrip button:hover,
+#squadStrip button.is-active {
+  border-color: #7cf3ffaa;
+  background: #173a42dc;
+  color: #ecffff;
+}
+body.touch #radioComms {
+  bottom: auto;
+  top: calc(max(6px, env(safe-area-inset-top)) + 42px);
+  left: max(8px, env(safe-area-inset-left));
+  max-width: 52vw;
+}
+body.touch .radio-line { font-size: 9px; padding: 3px 6px; }
+body.touch #squadStrip {
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: max(8px, env(safe-area-inset-bottom));
+}
+body.touch #squadStrip button { font-size: 8px; padding: 2px 5px; min-height: 20px; }
+
 /* ==========================================================================
    Fullscreen Controls, Auto-Aim ON/OFF Toggle & Compact Ergonomic HUD
    (Keeps #pad joystick & #touchFire large while shrinking all other UI)
@@ -3146,13 +3290,28 @@ body.touch #skillProg { font-size: 7px; }
   body.touch #spectraCanvas { width: 28px; height: 56px; }
 }
 
+body.touch #squadStrip {
+  bottom: calc(max(6px, env(safe-area-inset-bottom)) + 36px);
+}
+@media (max-width: 680px) {
+  body.touch #squadStrip {
+    bottom: calc(var(--ctrl-b) + max(var(--pad-sz), var(--fire-sz)) + 108px);
+  }
+}
+@media (max-height: 580px) {
+  body.touch #squadStrip {
+    bottom: calc(max(6px, env(safe-area-inset-bottom)) + 34px);
+  }
+}
+
 body.light-mode .hud-actions button,
 body.light-mode #skillBar,
 body.light-mode #pad,
-body.light-mode #touchFire {
+body.light-mode #touchFire,
+body.light-mode .radio-line,
+body.light-mode #syncBanner {
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
   box-shadow: none !important;
 }
-
 

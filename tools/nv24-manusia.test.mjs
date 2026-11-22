@@ -40,7 +40,7 @@ test('NV2.4-01 | NV 2.4 Manusia & NV2.5 humain subclass inheritance across all N
   const kai = m.actors[2];
   assert.equal(nagi.isSpy, true);
   assert.equal(nagi.aiVersion, 'NV2.1');
-  assert(kai.aiVersion === NV24_MANUSIA_VERSION || kai.aiVersion === 'NV2.5 humain');
+  assert(kai.aiVersion === NV24_MANUSIA_VERSION || kai.aiVersion === 'NV2.5 humain' || kai.aiVersion === 'NV2.6 Force');
 
   for (const a of m.actors.filter(x => !x.human)) {
     const b = m.nv.brains.get(a.id);

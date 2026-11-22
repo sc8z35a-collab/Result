@@ -1,4 +1,5 @@
 import {Mesh, scale, add, sub, unit, cross, dot, clamp} from './geometry.js';
+import {obstruction} from './yard.js';
 const rubber = '#485050', cloth = '#64716b', metal = '#9babad', ink = '#536067', ivory = '#c8c7ad';
 
 // Helper: build an orthonormal basis (u, v, n) around an arbitrary axis.
@@ -1494,6 +1495,58 @@ export function movingDetails(match, time, extra = false, lite = false, opts = n
       const x = clamp(px + rx, -24, 24), z = clamp(pz + rz, -96, 96);
       const y = .7 + (i % 6) * .85 + Math.sin(time * 1.4 + i) * .25;
       m.box(x, y, z, .028, .028, .028, 'white', '#fff2cf', 0, 3);
+    }
+  }
+
+  // NV2.6 Force Diegetic 3D Micro-Cues (100% Fair-Play: strictly LOS-gated via obstruction() — ZERO wallhack!)
+  if (match.player && match.actors) {
+    const pl = match.player;
+    const cueTime = Number.isFinite(time) ? time : (match.time || 0);
+    const pEye = [pl.x, pl.y + (pl.crouch > .5 ? 1.12 : 1.52), pl.z];
+    for (const a of match.actors) {
+      if (!a.alive || a.human || !a.expr) continue;
+      if (a.team !== viewerTeam && (a.shafferTimer || 0) > 0) continue;
+      const ex = a.expr;
+      const isAlly = a.team === pl.team;
+      const hasCue = isAlly
+        ? (ex.speaking || ex.syncRally || ex.baitReady)
+        : (ex.startleArc > 0.06);
+      if (!hasCue) continue;
+      const headH = a.y + (a.crouch > .5 ? 1.42 : 1.88);
+      const dCue = Math.hypot(a.x - pl.x, a.z - pl.z);
+      if (dCue > 58 || obstruction(pEye, [a.x, a.y + 1.48, a.z]) <= 1) continue;
+
+      if (!isAlly && ex.startleArc > 0.06) {
+        // Brief 0.34s kinetic startle jolt ring behind visibly ambushed enemy's shoulders!
+        const sf = ex.startleArc;
+        const r = .14 + (1 - sf) * .38;
+        ring(m, [a.x, a.y + 1.62, a.z], [0, 1, 0], r, .018 * sf + .004, 8, '#ffd478', 3);
+        const top = [a.x, a.y + 1.98 + (1 - sf) * .12, a.z];
+        m.beam([a.x, a.y + 1.78, a.z], top, .018 * sf, .006 * sf, 'white', '#fff2c4', 3);
+      } else if (isAlly) {
+        if (ex.speaking) {
+          // Subtle cyan headset-radio transmission wave pulsing gently above visible ally
+          const ph = (cueTime * 2.8 + a.id) % 1;
+          ring(m, [a.x, headH + .08 + ph * .08, a.z], [0, 1, 0], .12 + ph * .22, .012 * (1 - ph) + .003, 10, '#6cf2ff', 3);
+        }
+        if (ex.syncRally) {
+          // Crisp directional sync-swing rally chevron above visible ally waving forward!
+          const bob = Math.sin(cueTime * 10) * .04;
+          const fx = Math.sin(a.yaw), fz = -Math.cos(a.yaw);
+          const rx = Math.cos(a.yaw), rz = Math.sin(a.yaw);
+          const cy = headH + .22 + bob;
+          const tip = [a.x + fx * .28, cy, a.z + fz * .28];
+          const wL = [a.x - rx * .16, cy, a.z - rz * .16];
+          const wR = [a.x + rx * .16, cy, a.z + rz * .16];
+          m.beam(wL, tip, .016, .012, 'white', '#74f8ff', 3);
+          m.beam(wR, tip, .016, .012, 'white', '#74f8ff', 3);
+        }
+        if (ex.baitReady) {
+          // Warm amber low-profile trap anchor indicator next to baiting ally
+          const pulse = .65 + .35 * Math.sin(cueTime * 6.5);
+          ring(m, [a.x, a.y + .18, a.z], [0, 1, 0], .42, .012 * pulse, 10, '#f4c56a', 3);
+        }
+      }
     }
   }
 

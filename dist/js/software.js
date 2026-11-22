@@ -408,6 +408,24 @@ export class SoftwareRenderer {
             y += p.aimPose * .06;
             z += (p.recoil || 0) * .045;
           }
+          if (p.expr) {
+            const ex = p.expr;
+            if ((boneId === 3 || boneId === 4) && Math.abs(ex.headYaw) > .01) {
+              const hy = ex.headYaw * (boneId === 4 ? .64 : .36), ch = Math.cos(hy), sh = Math.sin(hy);
+              const hx = x, hz = z + .008;
+              x = hx * ch - hz * sh;
+              z = -.008 + hx * sh + hz * ch;
+            }
+            if ((boneId === 5 || boneId === 6) && ex.gesture > 0 && ex.gestureBlend > .05) {
+              const gb = ex.gestureBlend;
+              if (ex.gesture === 1) { y += .22 * gb; x -= .14 * gb; }
+              else if (ex.gesture === 3) { z -= .18 * gb; x -= .10 * gb; y += .08 * gb; }
+            }
+            if (ex.gesture === -1 && ex.gestureBlend > .05 && oy > .85) {
+              z += .08 * ex.gestureBlend;
+              y += .02 * ex.gestureBlend;
+            }
+          }
           if (p.hitRecoil > .01) {
             const flinch = Math.sin(p.hitRecoil * Math.PI) * p.hitRecoil * clamp((oy - .72) / .96, 0, 1);
             z += flinch * .20;

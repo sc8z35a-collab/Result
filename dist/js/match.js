@@ -104,7 +104,9 @@ export class Match {
         ? 'nv23'
         : (config.aiModel === 'manusia' || config.aiModel === 'nv24')
           ? 'manusia'
-          : 'human';
+          : (config.aiModel === 'humain' || config.aiModel === 'nv25')
+            ? 'humain'
+            : 'human';
     this.teamAiModels = Array.isArray(config.teamAiModels) && config.teamAiModels.length === 2 ? [...config.teamAiModels] : null;
     this.nv = new NV2(this);
     const rawSpy = config.allyNv21 === true ? 1 : Number(config.allyNv21 || 0);
@@ -130,7 +132,9 @@ export class Match {
               ? 'NV2.3 HUMAN'
               : (teamModel === 'manusia' || teamModel === 'nv24')
                 ? 'NV 2.4 Manusia'
-                : 'NV2.5 humain';
+                : (teamModel === 'humain' || teamModel === 'nv25')
+                  ? 'NV2.5 humain'
+                  : 'NV2.6 Force';
       const a = {id: this.actors.length, team, slot, human, name: names[team][slot], gun, aiVersion, isSpy, kills: 0, deaths: 0, earned: 0};
       this.actors.push(a);
       this.spawn(a, true)
@@ -218,6 +222,7 @@ export class Match {
       landCompress: 0,
       sprintAmt: 0,
       reloadFrac: 0,
+      expr: null,
       queue: [],
       df: a.gun === DF ? {...initialDF(), pattern: a.df?.pattern || 'central', scope: a.df?.scope || 'plastic'} : null,
       rd: isRDWeapon(a.gun) ? initialRD(a.gun) : null,
@@ -479,6 +484,10 @@ export class Match {
     this.echoPulse.emit(this, {kind: 'smoke', pos: [sx, 1.2, sz], actor: a, team: a.team, loudness: 0.72});
     this.event('smoke', {actor: a, point: [sx, 1.0, sz]});
     return true;
+  }
+  issueSquadOrder(kind, a = this.player) {
+    if (!a?.alive || this.ended) return null;
+    return this.nv?.issuePlayerSquadOrder?.(kind, a) || null;
   }
   damage(v, owner, power, dir = null, meta = null) {
     if (this.ended || !v.alive || !owner || owner.team === v.team || !Number.isFinite(power) || power <= 0) return null;

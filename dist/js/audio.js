@@ -22,6 +22,7 @@ export {
   estimateEnclosure,
   synthesizeWaveShaperCurve,
   synthesizeModalSamples,
+  computeVocalFormantPlan,
   createGunImpulseSamples,
   generateHarborIR2,
   generateHarborIR

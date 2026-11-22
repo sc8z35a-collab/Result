@@ -393,6 +393,7 @@ export class Renderer {
     gl.uniform2f(p.uRecoil, 0, 0);
     if (p.uAnim) gl.uniform4f(p.uAnim, 0, 0, 0, 0);
     if (p.uAnim2) gl.uniform4f(p.uAnim2, 0, 0, 0, 0);
+    if (p.uExpr) gl.uniform4f(p.uExpr, 0, 0, 0, 0);
     gl.uniform2f(p.uHitFX, 0, 0);
     gl.uniform1f(p.uGunHeat, 0);
     gl.uniform1f(p.uTime, time);
@@ -472,10 +473,12 @@ export class Renderer {
     this.actorData.fill(0);
     this.flirActors.fill(0);
     if (match && !lite) {
+      const viewerTeam = match.player?.team ?? 0;
       let fk = 0;
       match.actors.forEach((a, i) => {
-        this.actorData.set([a.x, a.y, a.z, a.alive ? 1 + (a.crouch || 0) : 0], i * 4);
-        if (a.alive && !a.human && fk < 6) {
+        const cloakedFromViewer = a.team !== viewerTeam && (a.shafferTimer || 0) > 0;
+        this.actorData.set([a.x, a.y, a.z, (a.alive && !cloakedFromViewer) ? 1 + (a.crouch || 0) : 0], i * 4);
+        if (a.alive && !a.human && !cloakedFromViewer && fk < 6) {
           const [cx, cz] = bodyCenter(a);
           const cy = a.y + 0.92 * torso(a);
           const bioHeat = clamp(0.86 + (a.sprintAmt || 0) * 0.14 + (a.flash > 0 ? 0.25 : 0) + (a.hitFlash || 0) * 0.22, 0.5, 1.35);
@@ -558,6 +561,10 @@ export class Renderer {
         gl.uniform2f(p.uRecoil, a.recoil || 0, a.recoilSide || 0);
         if (p.uAnim) gl.uniform4f(p.uAnim, a.fwdVel || 0, a.sideVel || 0, a.airBlend || 0, a.landCompress || 0);
         if (p.uAnim2) gl.uniform4f(p.uAnim2, a.pitch || 0, time + a.id * 1.13, a.sprintAmt || 0, a.reloadFrac || 0);
+        if (p.uExpr) {
+          const ex = a.expr;
+          gl.uniform4f(p.uExpr, ex?.headYaw || 0, ex?.gestureEncoded || 0, ex?.tension || 0, ex?.breathWave || 0);
+        }
         gl.uniform2f(p.uHitFX, a.hitFlash || 0, Math.max(a.shieldFlash || 0, a.baizerFlash || 0));
         this.draw(this.actorMesh(a, lite));
       }

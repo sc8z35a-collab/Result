@@ -832,7 +832,7 @@ export class NV13Pro extends NV12 {
   }
 
   // Fast O(1)-filtered prebaked cover search with exact LOS verification for retreat OR peek-skirmish.
-  findProCover(a, b, threats, mode = 'retreat') {
+  findProCover(a, b, threats, mode = 'retreat', crossfireAnchor = null) {
     const g = this.graph;
     const cog = this.teams[a.team];
     const band = WEAPON_BAND[a.gun] || WEAPON_BAND['SW T'];
@@ -885,6 +885,10 @@ export class NV13Pro extends NV12 {
         if (i === b.coverNodeId) sc += 5.5; // cover hysteresis prevents thrashing between adjacent edges
         if (minThreatD < band.min * .78) sc -= 18;
         if (minThreatD > band.max) sc -= (minThreatD - band.max) * 1.4;
+        // NV2.6 Force: True 45-110 deg Orthogonal Crossfire Selection when syncing or bait-partnering!
+        if (crossfireAnchor && this.tempo?.scoreCrossfireAngle) {
+          sc += this.tempo.scoreCrossfireAngle(bestPeek[0], bestPeek[1], [primary.x, primary.z], crossfireAnchor);
+        }
       }
       // ResonanceCore 5,100 m/s Container Knock: immediately abandon a knocked steel cover node!
       if (b.vision?.needsKnockReposition(this.match.time) && i === b.coverNodeId) {

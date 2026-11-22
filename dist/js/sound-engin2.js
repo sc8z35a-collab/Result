@@ -120,6 +120,14 @@ export const SOUND_CATALOG = Object.freeze({
     'Distant Gantry Crane Structural Steel Groan',
     'Distant Cargo Ship <300Hz Brass Foghorn',
     'Spatial Maritime Sea Gulls & Mooring Buoy Bell'
+  ],
+  vocal: [
+    'NV2.6 Force Tactical Radio PTT + Klatt Formant Voice',
+    'NV2.6 Force Sync Double-Swing 3-2-1 Tactile Radio Beat',
+    'NV2.6 Force 3D Spatial Blind-Side Startle Gasp + Rig Jolt',
+    'NV2.6 Force 3D Spatial Container-Diffracted Enemy Shout',
+    'NV2.6 Force Somatic Deep-Breath Reset Exhale',
+    'NV2.6 Force Bait-Trap Focus Breath & Safety Check Click'
   ]
 });
 
@@ -255,6 +263,79 @@ export function computeBinauralNearField(srcPos, listenerPos, listenerRight = [1
     pinnaNotchHz,
     frontPresenceDb
   };
+}
+
+/**
+ * NV2.6 Force Klatt Physical Vocal-Tract & Stress-Modulated Prosody Planner (100% Pure-JS Unit-Testable):
+ * Generates realistic multi-syllable vowel-formant trajectories (F1, F2, F3), fundamental F0 glottal pitch
+ * contours, aspiration breathiness, and timing cadence tailored to callsign vocal anatomy & live combat stress!
+ */
+export function computeVocalFormantPlan(kind, prosody = {}) {
+  const f0Base = clamp(finite(prosody.f0Hz, 155), 88, 340);
+  const scale = clamp(finite(prosody.tractScale, 1.0), 0.80, 1.32);
+  const tempo = clamp(finite(prosody.tempo, 1.0), 0.72, 1.48);
+  const stress = clamp(finite(prosody.stress, 0.25), 0, 1);
+  const breath = clamp(finite(prosody.breathiness, 0.24), 0.08, 0.92);
+
+  // Japanese-inspired vowel formant prototypes [F1, F2, F3] scaled by vocal-tract length
+  const V = {
+    a: [720 * scale, 1240 * scale, 2550 * scale],
+    i: [310 * scale, 2260 * scale, 3020 * scale],
+    u: [350 * scale, 1180 * scale, 2420 * scale],
+    e: [510 * scale, 1920 * scale, 2680 * scale],
+    o: [490 * scale,  960 * scale, 2480 * scale]
+  };
+
+  if (kind === 'STARTLE') {
+    return {
+      mode: 'gasp',
+      syllables: [
+        {dur: 0.13 / tempo, gap: 0.02, f0Start: f0Base * 1.18, f0End: f0Base * 1.56, f1: 780 * scale, f2: 1620 * scale, f3: 2740 * scale, asp: 0.92, gain: 0.95}
+      ]
+    };
+  }
+  if (kind === 'BREATH_RESET') {
+    return {
+      mode: 'exhale',
+      syllables: [
+        {dur: 0.36 / tempo, gap: 0.0, f0Start: f0Base * 0.86, f0End: f0Base * 0.72, f1: 480 * scale, f2: 1220 * scale, f3: 2380 * scale, asp: 0.96, gain: 0.78}
+      ]
+    };
+  }
+
+  // Distinct phonetic rhythm & pitch contour per tactical channel!
+  const specs = {
+    SWING_NOW:          [['i', 0.075, 1.05, 1.14], ['e', 0.075, 1.12, 1.24], ['o', 0.115, 1.24, 1.38]],
+    PLAYER_ORDER_SWING: [['a', 0.070, 1.04, 1.12], ['e', 0.075, 1.12, 1.22], ['o', 0.110, 1.20, 1.34]],
+    AMBUSH:             [['u', 0.068, 1.22, 1.36], ['a', 0.088, 1.34, 1.14], ['a', 0.078, 1.24, 1.06]],
+    MAN_DOWN:           [['a', 0.092, 1.18, 0.92], ['e', 0.085, 1.06, 0.84], ['a', 0.105, 0.96, 0.76]],
+    SHIELD_BREAK:       [['a', 0.082, 1.10, 1.26], ['o', 0.095, 1.22, 1.08]],
+    BAIT_READY:         [['u', 0.095, 0.90, 0.86], ['o', 0.110, 0.88, 0.82]],
+    BAIT_PARTNER:       [['o', 0.082, 0.96, 1.02], ['a', 0.095, 1.02, 0.94]],
+    PLAYER_ORDER_TRAP:  [['o', 0.085, 0.94, 0.98], ['u', 0.105, 0.92, 0.86]],
+    RELOAD_COVER:       [['i', 0.072, 1.08, 1.16], ['o', 0.082, 1.14, 1.02], ['a', 0.085, 1.04, 0.94]],
+    TRADE_REQUEST:      [['e', 0.076, 1.12, 1.22], ['a', 0.092, 1.18, 1.02]],
+    SUPPRESS_PIN:       [['o', 0.080, 1.04, 1.14], ['e', 0.092, 1.12, 0.98]],
+    PLAYER_ORDER_COVER: [['o', 0.078, 1.02, 1.10], ['a', 0.092, 1.08, 0.96]],
+    FLANK_CLEAR:        [['i', 0.082, 0.98, 1.04], ['a', 0.105, 1.02, 0.90]],
+    CONTACT:            [['e', 0.075, 1.08, 1.20], ['i', 0.088, 1.16, 1.04]]
+  };
+
+  const seq = specs[kind] || specs.CONTACT;
+  const whisper = kind === 'BAIT_READY' || kind === 'PLAYER_ORDER_TRAP';
+  const syllables = seq.map(([vKey, baseDur, p0, p1]) => {
+    const [f1, f2, f3] = V[vKey] || V.a;
+    return {
+      dur: clamp((baseDur / tempo) * (1 - stress * 0.12), 0.045, 0.16),
+      gap: clamp(0.032 / tempo, 0.018, 0.055),
+      f0Start: f0Base * p0,
+      f0End: f0Base * p1,
+      f1, f2, f3,
+      asp: whisper ? clamp(breath + 0.44, 0.52, 0.92) : clamp(breath + stress * 0.16, 0.14, 0.78),
+      gain: whisper ? 0.62 : (0.84 + stress * 0.16)
+    };
+  });
+  return {mode: whisper ? 'whisper' : 'speech', syllables};
 }
 
 /**
@@ -1074,6 +1155,8 @@ export class SoundEngin2 {
     this.lastFermatLockAt = -Infinity;
     this.lastResonateAt = -Infinity;
     this.lastWaterAt = -Infinity;
+    this.lastNpcRadioAt = -Infinity;
+    this.lastNpcSpatialVoiceAt = -Infinity;
     this.lastFootstepAt = new Map();
     this.actorState = new Map();
     this._lastFermatLocked = false;
@@ -1090,6 +1173,7 @@ export class SoundEngin2 {
       waterSplashes: 0,
       systemCues: 0,
       foleyCues: 0,
+      vocalCues: 0,
       dopplerCurves300Hz: 0,
       controlTicks300Hz: 0
     };
@@ -1133,6 +1217,8 @@ export class SoundEngin2 {
     this.stopMatchSounds();
     this.actorState.clear();
     this.lastFootstepAt.clear();
+    this.lastNpcRadioAt = -Infinity;
+    this.lastNpcSpatialVoiceAt = -Infinity;
     this.heartbeatTimer = 0;
     this.stapediusDip = 0;
     this.barrelHeat = 0;
@@ -1170,6 +1256,8 @@ export class SoundEngin2 {
         this.lastFermatLockAt = -Infinity;
         this.lastResonateAt = -Infinity;
         this.lastWaterAt = -Infinity;
+        this.lastNpcRadioAt = -Infinity;
+        this.lastNpcSpatialVoiceAt = -Infinity;
         this.lastFootstepAt.clear();
         try {
           this._buildGraph();
@@ -2944,6 +3032,7 @@ export class SoundEngin2 {
       if (e.victim === player) this._playIncomingHit(e, player, now);
       return;
     }
+    if (e.type === 'npcSignal') { this._playNpcSignal(e, player, now); return; }
     if (e.type === 'tanker') { this._playTankerActivate(e, player, now); return; }
     if (e.type === 'baizer' && a === player) {
       const hi = (e.amount || 20) >= 40;
@@ -2986,6 +3075,155 @@ export class SoundEngin2 {
       chord.forEach((f, idx) => {
         this._playTone({f0: f, f1: f * (won ? 1.005 : 0.98), dur: 0.38, gain: 0.088, type: 'triangle', bus: this.uiBus, priority: 4, start: now + idx * 0.07});
       });
+    }
+  }
+
+  /**
+   * NV2.6 Force Klatt Physical Vocal-Tract & Spatial Tactical Voice Synthesizer:
+   *  - Ally radio callouts: PTT squelch open -> stress-modulated formant cadence -> PTT click
+   *    (+ crisp 3-2-1 tactile countdown ticks for Synchronized Double-Swings!)
+   *  - Enemy/Field vocalizations: 100% fair-play 3D spatialized with speed-of-sound delay,
+   *    3-band UTD container diffraction, and harbor canyon reverb (Startle Gasp, Combat Shout,
+   *    Deep-Breath Exhale, Bait-Trap bolt check!).
+   */
+  _playNpcSignal(e, player, now) {
+    if (!this.ctx || !player) return;
+    const isAlly = e.team === player.team;
+    const kind = e.kind || 'CONTACT';
+    const isRadio = !!(isAlly && e.isRadio);
+
+    if (isRadio) {
+      if (now - this.lastNpcRadioAt < 0.72) return;
+      this.lastNpcRadioAt = now;
+    } else {
+      if (now - this.lastNpcSpatialVoiceAt < 0.58) return;
+      this.lastNpcSpatialVoiceAt = now;
+    }
+
+    const plan = computeVocalFormantPlan(kind, e.prosody || {});
+    const pos = e.pos || (e.actor ? eyeOf(e.actor) : null);
+
+    if (isRadio) {
+      this.stats.vocalCues++;
+      const pan = pos ? clamp(this._computeStereoPan(pos) * 0.45, -0.55, 0.55) : 0;
+      const urgent = kind === 'AMBUSH' || kind === 'MAN_DOWN' || kind === 'SWING_NOW' || kind === 'PLAYER_ORDER_SWING';
+
+      // 1. Military Headset PTT Squelch Open
+      this._playBuffer({
+        buffer: this.whiteNoiseBuf, loop: true, dur: 0.026, attack: 0.002,
+        gain: 0.036, filterType: 'bandpass', f0: 2150, f1: 1680, q: 2.4,
+        pan, bus: this.uiBus, priority: 3, start: now
+      });
+      this._playTone({
+        f0: urgent ? 1920 : 1620, f1: urgent ? 2280 : 1780, dur: 0.022, attack: 0.002,
+        gain: 0.028, type: 'sine', pan, bus: this.uiBus, priority: 3, start: now + 0.004
+      });
+
+      // 2. Klatt Multi-Syllable Radio-Filtered Formant Prosody (320-3200Hz comms character!)
+      let cursor = now + 0.034;
+      for (const syl of plan.syllables) {
+        const g = 0.056 * syl.gain;
+        // Glottal F0 carrier through F1 chest resonance
+        this._playTone({
+          f0: syl.f0Start, f1: syl.f0End, dur: syl.dur, attack: 0.010,
+          gain: g * (1 - syl.asp * 0.55), type: 'sawtooth',
+          lpf: Math.min(2850, syl.f2 * 1.15), pan, bus: this.uiBus, priority: 3, start: cursor
+        });
+        // F1 & F2 vocal-tract formant aspiration noise sculpted cleanly for crisp human vocal timbre
+        this._playBuffer({
+          buffer: this.breathBuf, rate: clamp(syl.f1 / 520, 0.65, 1.85), dur: syl.dur, attack: 0.008,
+          gain: g * (0.62 + syl.asp * 0.55), filterType: 'bandpass',
+          f0: clamp(syl.f2, 750, 2950), f1: clamp(syl.f2 * 0.92, 680, 2800), q: 3.2,
+          pan, bus: this.uiBus, priority: 3, start: cursor
+        });
+        cursor += syl.dur + syl.gap;
+      }
+
+      // 3. Subtle PTT Squelch Release Click
+      this._playBuffer({
+        buffer: this.whiteNoiseBuf, loop: true, dur: 0.018, attack: 0.001,
+        gain: 0.024, filterType: 'bandpass', f0: 1950, f1: 1200, q: 2.2,
+        pan, bus: this.uiBus, priority: 2, start: cursor + 0.010
+      });
+
+      // 4. Bait-Trap Subtle Bolt/Safety Check Cue
+      if (kind === 'BAIT_READY' || kind === 'BAIT_PARTNER' || kind === 'PLAYER_ORDER_TRAP') {
+        this._playTone({f0: 2640, f1: 1480, dur: 0.018, attack: 0.001, gain: 0.034, type: 'triangle', pan, bus: this.foleyBus, priority: 3, start: now + 0.04});
+      }
+
+      // 5. Synchronized Double-Swing 3-2-1 Tactile Radio Countdown!
+      if ((kind === 'SWING_NOW' || kind === 'PLAYER_ORDER_SWING') && Number.isFinite(e.syncGoAt) && Number.isFinite(e.time)) {
+        const rem = clamp(e.syncGoAt - e.time, 0.35, 1.10);
+        const step = rem / 3;
+        this._playTone({f0: 980, f1: 980, dur: 0.036, attack: 0.002, gain: 0.044, type: 'triangle', pan, bus: this.uiBus, priority: 4, start: now + 0.01});
+        this._playTone({f0: 1175, f1: 1175, dur: 0.036, attack: 0.002, gain: 0.050, type: 'triangle', pan, bus: this.uiBus, priority: 4, start: now + step});
+        this._playTone({f0: 1568, f1: 1760, dur: 0.072, attack: 0.002, gain: 0.068, type: 'sine', pan, bus: this.uiBus, priority: 4, start: now + step * 2});
+      }
+      return;
+    }
+
+    // 3D Spatialized Field Vocalization (Enemy shouts, Blind-Side Startle Gasps, Deep-Breath Sighs, Trap Clicks)
+    if (!pos) return;
+    const maxDist = kind === 'BREATH_RESET' ? 15 : kind === 'BAIT_READY' ? 18 : kind === 'STARTLE' ? 26 : 40;
+    const path = computeMultiBandAcousticPath(pos, this.listenerPos);
+    if (path.dist > maxDist) return;
+
+    this.stats.vocalCues++;
+    if (path.occluded) this.stats.occludedEvents++;
+    const start = now + path.delay;
+    const distScale = clamp(1 - path.dist / maxDist, 0.06, 1);
+    const vol = clamp(path.directGain * (kind === 'BREATH_RESET' ? 0.55 : kind === 'STARTLE' ? 1.08 : 0.92) * (0.45 + distScale * 0.55), 0.025, 0.72);
+    const lpf = Math.min(path.cutoffHz, kind === 'BREATH_RESET' ? 2800 : 4800);
+    const rev = clamp(0.28 + path.reverbBoost + this.enclosure * 0.30, 0.18, 0.84);
+
+    if (kind === 'STARTLE') {
+      // Audible Blind-Side Startle Gasp + Kevlar Gear Jolt!
+      const s0 = plan.syllables[0];
+      this._playBuffer({
+        buffer: this.breathBuf, rate: clamp(s0.f1 / 460, 1.0, 2.0), dur: s0.dur, attack: 0.005,
+        gain: 0.16 * vol, filterType: 'bandpass', f0: 880, f1: 1960, q: 2.1,
+        lpf, pos, bus: this.foleyBus, reverbSend: rev, priority: 3, start
+      });
+      this._playTone({
+        f0: s0.f0Start, f1: s0.f0End, dur: s0.dur * 0.72, attack: 0.006,
+        gain: 0.048 * vol, type: 'triangle', lpf, pos, bus: this.foleyBus, reverbSend: rev * 0.8, priority: 3, start: start + 0.012
+      });
+      // Quick armor/sling startle jolt rustle
+      this._playBuffer({
+        buffer: this.clothBuf, rate: 1.38, dur: 0.095, attack: 0.003,
+        gain: 0.12 * vol, lpf, pos, bus: this.foleyBus, reverbSend: rev * 0.4, priority: 2, start: start + 0.006
+      });
+      return;
+    }
+
+    if (kind === 'BREATH_RESET') {
+      // Restorative Somatic Exhale Sigh behind cover
+      this._playBuffer({
+        buffer: this.breathBuf, rate: 0.86, dur: 0.34, attack: 0.028,
+        gain: 0.11 * vol, filterType: 'bandpass', f0: 1120, f1: 680, q: 1.6,
+        lpf, pos, bus: this.foleyBus, reverbSend: rev * 0.5, priority: 1, start
+      });
+      return;
+    }
+
+    // Overheard Enemy Tactical Combat Shout (3D spatialized & container-diffracted!)
+    let cursor = start;
+    for (const syl of plan.syllables) {
+      this._playTone({
+        f0: syl.f0Start, f1: syl.f0End, dur: syl.dur, attack: 0.008,
+        gain: 0.068 * syl.gain * vol, type: 'sawtooth',
+        lpf: Math.min(lpf, syl.f2 * 1.1), pos, bus: this.foleyBus, reverbSend: rev, priority: 2, start: cursor
+      });
+      this._playBuffer({
+        buffer: this.breathBuf, rate: clamp(syl.f1 / 520, 0.72, 1.75), dur: syl.dur, attack: 0.007,
+        gain: 0.095 * syl.gain * vol, filterType: 'bandpass',
+        f0: clamp(syl.f2, 700, 3100), f1: clamp(syl.f2 * 0.90, 620, 2900), q: 2.6,
+        lpf, pos, bus: this.foleyBus, reverbSend: rev, priority: 2, start: cursor
+      });
+      cursor += syl.dur + syl.gap;
+    }
+    if (kind === 'BAIT_READY') {
+      this._playTone({f0: 2520, f1: 1380, dur: 0.018, attack: 0.001, gain: 0.048 * vol, type: 'triangle', lpf, pos, bus: this.foleyBus, priority: 2, start: start + 0.05});
     }
   }
 
