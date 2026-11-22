@@ -112,6 +112,7 @@ export class PilotEquipment {
       const res = m.toggleAA14(a);
       if (res.state === 'on') this.notice('AUTO-AIM 1.4 OVERDRIVE 起動 · 過熱に注意（X / E で解除）');
       else if (res.state === 'off') this.notice('AUTO-AIM 1.4 解除 · ARV1.3 / AA1.3 へ復帰');
+      else if (res.reason === 'autoaim_off') this.notice('オートエイム OFF 中 · O キー / AAボタンで ON にしてください');
       else if (res.reason === 'overheated') this.notice(`AUTO-AIM 1.4 オーバーヒート冷却中（残り ${res.cooldown.toFixed(1)}s）`);
       else if (res.reason === 'hot') this.notice(`AUTO-AIM 1.4 高温待機中（${Math.round(res.heat)}%）`);
       return;
@@ -189,6 +190,7 @@ export class PilotEquipment {
       isRD20 = rdOn && a.gun === 'RD20',
       aa14On = !!(df40On && df40.aa14Active && !df40.aa14Overheated),
       aa14Hot = !!(df40On && df40.aa14Overheated),
+      autoAimOn = match?.autoAim !== false,
       ads = !!(on && d.ads),
       thermal = ads && d.scope === 'thermal' && this.wallet.state.evr;
 
@@ -216,6 +218,7 @@ export class PilotEquipment {
     }
 
     $('dfHud').hidden = !on;
+    $('dfHud').classList.toggle('is-aa-off', !autoAimOn);
     const rdHud = $('rdHud');
     const heatWrap = $('aa14HeatWrap');
     if (rdHud) {
@@ -226,7 +229,8 @@ export class PilotEquipment {
       rdHud.classList.toggle('is-df40ii', df40On);
       rdHud.classList.toggle('is-aa14', aa14On);
       rdHud.classList.toggle('is-overheat', aa14Hot);
-      rdHud.classList.toggle('is-locked', !!(rdOn && rd.locked) || !!(df40On && df40.locked));
+      rdHud.classList.toggle('is-aa-off', !autoAimOn);
+      rdHud.classList.toggle('is-locked', autoAimOn && (!!(rdOn && rd.locked) || !!(df40On && df40.locked)));
     }
     if (heatWrap) heatWrap.hidden = !df40On;
     $('touchDF').hidden = !on;
@@ -235,15 +239,18 @@ export class PilotEquipment {
       touchDF40.hidden = !df40On;
       const btn = $('mobileAA14');
       if (btn && df40On) {
-        btn.classList.toggle('is-active', aa14On);
+        btn.classList.toggle('is-active', autoAimOn && aa14On);
         btn.classList.toggle('is-overheat', aa14Hot);
-        btn.textContent = aa14Hot
-          ? `過熱 ${Math.ceil(df40.aa14Cooldown)}s`
-          : aa14On
-            ? `AA1.4 ${Math.round(df40.aa14Heat)}%`
-            : df40.aa14Heat > 1
-              ? `AA1.4 · ${Math.round(df40.aa14Heat)}%`
-              : 'AA1.4';
+        btn.classList.toggle('is-disabled', !autoAimOn);
+        btn.textContent = !autoAimOn
+          ? 'AA OFF'
+          : aa14Hot
+            ? `過熱 ${Math.ceil(df40.aa14Cooldown)}s`
+            : aa14On
+              ? `AA1.4 ${Math.round(df40.aa14Heat)}%`
+              : df40.aa14Heat > 1
+                ? `AA1.4 · ${Math.round(df40.aa14Heat)}%`
+                : 'AA1.4';
       }
     }
     $('optics').hidden = !ads;
@@ -252,11 +259,12 @@ export class PilotEquipment {
 
     const reticle = $('reticle');
     if (reticle) {
-      const smartObj = isRD40 ? rd : df40On ? df40 : null;
+      const smartObj = autoAimOn ? (isRD40 ? rd : df40On ? df40 : null) : null;
+      reticle.classList.toggle('is-aa-off', !autoAimOn);
       reticle.classList.toggle('is-rd-locked', !!(smartObj && smartObj.locked));
       reticle.classList.toggle('is-rd-d01', !!(smartObj && smartObj.d01Active));
       reticle.classList.toggle('is-rd-fire', !!(smartObj && (smartObj.firePulse || 0) > .18));
-      reticle.classList.toggle('is-aa14', aa14On);
+      reticle.classList.toggle('is-aa14', autoAimOn && aa14On);
       reticle.classList.toggle('is-overheat', aa14Hot);
     }
 
@@ -280,48 +288,67 @@ export class PilotEquipment {
         if (!this.wasThermal) this.thermal.reset();
         this.thermal.draw(renderer, match, cam, t);
       }
-      $('focusText').textContent = d.locked ? 'ARV1.1  •  弾道誘導 1.76× LOCK' : d.focus ? 'ARV1.1  ·  焦点 ' + Math.round(d.focus * 100) + '%' : 'ARV1.1  ·  待機';
+      $('focusText').textContent = !autoAimOn
+        ? 'ARV1.1  ·  オートエイム OFF'
+        : d.locked ? 'ARV1.1  •  弾道誘導 1.76× LOCK' : d.focus ? 'ARV1.1  ·  焦点 ' + Math.round(d.focus * 100) + '%' : 'ARV1.1  ·  待機';
       $('dfMode').textContent = (d.pattern === 'central' ? '中央集中' : '散弾') + '  /  ' + (d.scope === 'thermal' ? 'EVR1' : 'プラスチック');
       $('p1Text').textContent = `P1 ${d.p1} / 20　${d.cooling>0?'冷却 '+d.cooling.toFixed(1)+' s':d.boost?'BOOST':'待機'}　${Math.round(d.heat)}%`;
       $('heatBar').style.width = d.heat + '%';
       $('dfKeys').textContent = 'Q 範囲 · X ブースト · 右クリック 照準 · V レンズ';
-      if (d.locked && !thermal) {
+      if (autoAimOn && d.locked && !thermal) {
         lockTargetId = d.focusId;
         lockStyle = 'df';
       }
     } else if (df40On && rdHud) {
       const pct = Math.round((df40.focus || 0) * 100);
       const heatPct = Math.round(df40.aa14Heat || 0);
-      if (aa14On) {
-        $('rdFocusText').textContent = df40.locked
-          ? (df40.d01Active ? `ARV1.3 · AA1.4  •  壁裏超LOCK ${df40.d01Timer.toFixed(1)}s` : 'ARV1.3 · AA1.4  •  超LOCK (2.80×収束)')
-          : df40.focus > 0 ? `ARV1.3 · AA1.4  ·  即焦点 ${pct}%` : 'ARV1.3 · AA1.4 OVERDRIVE  ·  超広域';
+      if (!autoAimOn) {
+        $('rdFocusText').textContent = 'ARV1.3  ·  オートエイム OFF';
+        $('rdSensorText').hidden = false;
+        $('rdSensorText').textContent = aa14Hot
+          ? `AA1.4 冷却中 ${df40.aa14Cooldown.toFixed(1)}s · 手動エイム`
+          : '手動エイム中 · O / AAでON';
+        rdHud.classList.remove('is-d01');
+        $('d01Bar').style.width = '0%';
       } else {
-        $('rdFocusText').textContent = df40.locked
-          ? (df40.d01Active ? `ARV1.3 · AA1.3  •  壁裏LOCK ${df40.d01Timer.toFixed(1)}s` : 'ARV1.3 · AA1.3  •  LOCK (2.08×収束)')
-          : df40.focus > 0 ? `ARV1.3 · AA1.3  ·  焦点 ${pct}%` : 'ARV1.3 · AA1.3  ·  待機 (1.65×広域)';
+        if (aa14On) {
+          $('rdFocusText').textContent = df40.locked
+            ? (df40.d01Active ? `ARV1.3 · AA1.4  •  壁裏超LOCK ${df40.d01Timer.toFixed(1)}s` : 'ARV1.3 · AA1.4  •  超LOCK (2.80×収束)')
+            : df40.focus > 0 ? `ARV1.3 · AA1.4  ·  即焦点 ${pct}%` : 'ARV1.3 · AA1.4 OVERDRIVE  ·  超広域';
+        } else {
+          $('rdFocusText').textContent = df40.locked
+            ? (df40.d01Active ? `ARV1.3 · AA1.3  •  壁裏LOCK ${df40.d01Timer.toFixed(1)}s` : 'ARV1.3 · AA1.3  •  LOCK (2.08×収束)')
+            : df40.focus > 0 ? `ARV1.3 · AA1.3  ·  焦点 ${pct}%` : 'ARV1.3 · AA1.3  ·  待機 (1.65×広域)';
+        }
+        $('rdSensorText').hidden = false;
+        $('rdSensorText').textContent = aa14Hot
+          ? `AA1.4 OVERHEAT  ·  冷却 ${df40.aa14Cooldown.toFixed(1)}s (${heatPct}%)`
+          : aa14On
+            ? `AA1.4 OVERDRIVE  ·  熱量 ${heatPct}%  [X/E 解除]`
+            : heatPct > 0
+              ? `AA1.4 放熱中 ${heatPct}%  ·  [X/E 再起動]`
+              : 'AA1.4 READY  ·  X / E で一時強化起動';
+        rdHud.classList.toggle('is-d01', !!df40.d01Active && !aa14Hot);
+        const barPct = df40.d01Active ? (df40.d01Timer / (df40.d01Max || 4.5)) * 100 : df40.locked ? 100 : (df40.focus || 0) * 100;
+        $('d01Bar').style.width = Math.max(0, Math.min(100, barPct)).toFixed(1) + '%';
+        if (df40.focusId >= 0 && (df40.locked || df40.focus > .04)) {
+          lockTargetId = df40.focusId;
+          lockStyle = 'df40ii';
+          isD01 = !!df40.d01Active;
+          isAcquiring = !df40.locked;
+        }
       }
-      $('rdSensorText').hidden = false;
-      $('rdSensorText').textContent = aa14Hot
-        ? `AA1.4 OVERHEAT  ·  冷却 ${df40.aa14Cooldown.toFixed(1)}s (${heatPct}%)`
-        : aa14On
-          ? `AA1.4 OVERDRIVE  ·  熱量 ${heatPct}%  [X/E 解除]`
-          : heatPct > 0
-            ? `AA1.4 放熱中 ${heatPct}%  ·  [X/E 再起動]`
-            : 'AA1.4 READY  ·  X / E で一時強化起動';
-      rdHud.classList.toggle('is-d01', !!df40.d01Active && !aa14Hot);
-      const barPct = df40.d01Active ? (df40.d01Timer / (df40.d01Max || 4.5)) * 100 : df40.locked ? 100 : (df40.focus || 0) * 100;
-      $('d01Bar').style.width = Math.max(0, Math.min(100, barPct)).toFixed(1) + '%';
       if ($('aa14HeatBar')) $('aa14HeatBar').style.width = Math.max(0, Math.min(100, df40.aa14Heat || 0)).toFixed(1) + '%';
-      if (df40.focusId >= 0 && (df40.locked || df40.focus > .04)) {
-        lockTargetId = df40.focusId;
-        lockStyle = 'df40ii';
-        isD01 = !!df40.d01Active;
-        isAcquiring = !df40.locked;
-      }
     } else if (rdOn && rdHud) {
       const pct = Math.round((rd.focus || 0) * 100);
-      if (isRD40) {
+      if (!autoAimOn) {
+        const label = isRD40 ? 'ARV1.2' : isRD30 ? 'ARV1.1 mini' : 'ARV1.1';
+        $('rdFocusText').textContent = `${label}  ·  オートエイム OFF`;
+        $('rdSensorText').hidden = false;
+        $('rdSensorText').textContent = '手動エイム中 · O / AAでON';
+        rdHud.classList.remove('is-d01');
+        $('d01Bar').style.width = '0%';
+      } else if (isRD40) {
         $('rdFocusText').textContent = rd.locked
           ? (rd.d01Active ? 'ARV1.2  •  D01 壁裏LOCK' : 'ARV1.2  •  LOCK (1.4×広域)')
           : rd.focus > 0 ? `ARV1.2  ·  焦点 ${pct}%` : 'ARV1.2  ·  待機 (1.4×広域)';

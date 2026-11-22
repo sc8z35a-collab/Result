@@ -64,6 +64,7 @@ export class Match {
     const mode = Object.hasOwn(modes, config.mode) ? config.mode : '3v3';
     const loadout = Object.hasOwn(weapons, config.loadout) ? config.loadout : 'SW T';
     this.config = {...config, mode, loadout};
+    this.autoAim = config.autoAim !== false;
     this.time = 0;
     this.tremorAt = 68;
     this.groundMotion = 0;
@@ -214,6 +215,47 @@ export class Match {
   }
   toggleAA14(a = this.player) {
     return toggleAA14(this, a);
+  }
+  setAutoAim(enabled) {
+    this.autoAim = !!enabled;
+    const a = this.player;
+    if (!this.autoAim && a) {
+      if (a.df) {
+        a.df.focusId = -1;
+        a.df.focus = 0;
+        a.df.locked = false;
+      }
+      if (a.rd) {
+        a.rd.focusId = -1;
+        a.rd.focus = 0;
+        a.rd.locked = false;
+        a.rd.occluded = false;
+        a.rd.d01Active = false;
+        a.rd.d01Timer = 0;
+        a.rd.lastAimPoint = null;
+        a.rd.targetDist = 0;
+        a.rd.trackYaw = 0;
+        a.rd.trackPitch = 0;
+      }
+      if (a.df40) {
+        a.df40.focusId = -1;
+        a.df40.focus = 0;
+        a.df40.locked = false;
+        a.df40.occluded = false;
+        a.df40.d01Active = false;
+        a.df40.d01Timer = 0;
+        a.df40.lastAimPoint = null;
+        a.df40.targetDist = 0;
+        a.df40.trackYaw = 0;
+        a.df40.trackPitch = 0;
+        if (a.df40.aa14Active) {
+          a.df40.aa14Active = false;
+          a.df40.aa14LastOffAt = this.time;
+          a.df40.aaVersion = '1.3';
+        }
+      }
+    }
+    return this.autoAim;
   }
   reload(a) {
     if (!a.alive || this.ended || a.reload > 0 || a.burstLeft || a.mag >= this.weapon(a).capacity || a.stock <= 0)return false;

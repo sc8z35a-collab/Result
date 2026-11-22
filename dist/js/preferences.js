@@ -8,6 +8,7 @@ const defaultSettings = {
   hdr: true, khdr: true, shadowMode: 'pro', shadows: true,
   fluxGI: true, schlieren: true, aeroVortex: true, thermoFlux: true, resonance: true,
   chronoTrace: true, fermatCore: true, spectraField: true, echoPulse: true,
+  autoAim: true,
   audioMode: 'ultra300', audioV2: true, sensitivity: 1, volume: 55, sound: false
 };
 const gameRules = {mode: '3v3', limit: 'points', multiplier: 5, loadout: 'SW T', allyNv21: 0, aiModel: 'human'};
