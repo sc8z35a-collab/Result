@@ -6,6 +6,7 @@ import {Match, modes, weapons} from './match.js';
 import {forward, add, clamp} from './geometry.js';
 import {SoundEngin, SOUND_ENGIN_VERSION} from './audio.js';
 import {readPreferences, scoreMultiplier} from './preferences.js';
+import {relativeDirectionJa} from './nv26-force.js';
 const $ = s => document.getElementById(s),
   views = {title: 'titleView', lobby: 'lobby', settings: 'settings', game: 'hud', pause: 'pause', results: 'results'};
 // Optically exact +2/3 wider view width relative to 24.7° / 13.0° FOV:
@@ -105,6 +106,8 @@ let screen = 'title',
 const gpPrev = new Uint8Array(18);
 const keys = new Set(), audio = new SoundEngin();
 let feed = [];
+let radioFeed = [];
+let syncBannerState = null;
 const fixed = 1 / 360;
 const maxStepBudget = 1 / 8;
 
@@ -474,7 +477,7 @@ document.addEventListener('pointerdown', e => {
 }, true);
 coarsePointer.addEventListener?.('change', e => setInputType(e.matches));
 function controls() {
-  const rows = touch ? [['移動 / ダッシュ', '左スティック（強く前傾でダッシュ）'], ['視点', '右側スワイプ / 射撃長押しドラッグ / 右スティック'], ['発射 / 再装填', '射撃(長押しで連射)・R2 / R・X'], ['ジャンプ / しゃがみ', '↑・A / しゃがみ・B'], ['オートエイム / 全画面', '右上 AA ボタン / 全画面ボタン'], ['FLIR / 煙幕 / 解析', '左下 FLIR・煙幕・解析ボタン']] : [['移動 / ダッシュ', 'WASD / Shift · 左スティック強前傾'], ['視点', 'マウス / 矢印キー / 右スティック'], ['発射 / 再装填', '左クリック(長押しで連射)・F・R2 / R・X'], ['ジャンプ / しゃがむ', 'Space・A / Ctrl・B'], ['オートエイム / 全画面', 'O (ON/OFF) · U (全画面切替)'], ['熱視界 / 煙幕 / 解析', 'T (FLIR) · G (煙幕) · L (弾道解析) · K (跳弾) · M (波動図)'], ['一時停止', 'Esc / P / Start']];
+  const rows = touch ? [['移動 / ダッシュ', '左スティック（強く前傾でダッシュ）'], ['視点', '右側スワイプ / 射撃長押しドラッグ / 右スティック'], ['発射 / 再装填', '射撃(長押しで連射)・R2 / R・X'], ['ジャンプ / しゃがみ', '↑・A / しゃがみ・B'], ['オートエイム / 全画面', '右上 AA ボタン / 全画面ボタン'], ['FLIR / 煙幕 / 解析', '左下 FLIR・煙幕・解析ボタン'], ['味方への指示（3v3）', '下部 同期突入・援護・罠待機ボタン']] : [['移動 / ダッシュ', 'WASD / Shift · 左スティック強前傾'], ['視点', 'マウス / 矢印キー / 右スティック'], ['発射 / 再装填', '左クリック(長押しで連射)・F・R2 / R・X'], ['ジャンプ / しゃがむ', 'Space・A / Ctrl・B'], ['オートエイム / 全画面', 'O (ON/OFF) · U (全画面切替)'], ['熱視界 / 煙幕 / 解析', 'T (FLIR) · G (煙幕) · L (弾道解析) · K (跳弾) · M (波動図)'], ['分隊コマンド（3v3）', '1 (3-2-1同期突入) · 2 (援護カバー) · 3 (罠待機)'], ['一時停止', 'Esc / P / Start']];
   if (match?.player.df)rows.push(...(touch ? [['DF1 OUT', '画面右の専用ボタン / L2・Y・LB・RB']] : [['中央集中 / 散弾', 'Q / Y'], ['P1 ブースト', 'X / LB'], ['照準 / レンズ切替', '右クリック・C・L2 / V・RB'], ['EVR1 購入', 'B']]));
   if (match?.player.df40)rows.push(...(touch ? [['DF40 II · AA1.4', '画面右 AA1.4 ボタン / LB（一時強化・過熱冷却あり）']] : [['オートエイム 1.4 起動/解除', 'X / E / LB（一時強化・オーバーヒートあり）']]));
   $('controls').innerHTML = rows.map(([a, b]) => `<span>${a}</span><b>${b}</b>`).join('')
@@ -569,7 +572,7 @@ function lobby() {
   const isHuman = rules.aiModel !== 'classic';
   if ($('aiModelHint')) {
     $('aiModelHint').textContent = isHuman
-      ? '16次元個性 · 自由エネルギー能動推論 · DDM迷い＆判断変更 · 眼球先行＆2段階マウスリフト · 情動評価＆深呼吸リセット · 負傷ベイト罠 · 同期ダブルスイング · プレイヤー連動援護'
+      ? '16関節独立ヘッドルック＆IKハンドサイン · 300Hz Klatt物理無線/敵声 · 3-2-1同期クロスファイア · 負傷ベイト連携罠 · 驚愕リアクション可視化 · 1/2/3分隊コマンド対応'
       : '従来の NV2 Transformer 戦術AI（均質反応・標準照準）で対戦します';
   }
   const is3v3 = rules.mode === '3v3';
@@ -581,18 +584,18 @@ function lobby() {
   });
   $('allyNv21Hint').textContent = rules.allyNv21 === 1
     ? isHuman
-      ? 'NAGI（D1）に NV2.5 humain 能動推論・DDM・戦術煙幕・同期スイング＋NV2.1 スパイ裏どりを統合'
+      ? 'NAGI（D1）に NV2.6 Force 音声通話・ハンドサイン・3-2-1同期突入＋NV2.1 スパイ裏どりを統合'
       : 'NAGI（D1）を NV2.1 に強化 · 高速反応 / 多弾同時回避 / 目視予測スパイ裏どり'
     : rules.allyNv21 === 2
       ? isHuman
-        ? 'KAI（MS10）に NV2.5 humain 能動推論・DDM・プレイヤー並走援護＋NV2.1 スパイ裏どりを統合'
+        ? 'KAI（MS10）に NV2.6 Force 音声通話・ハンドサイン・プレイヤー並走援護＋NV2.1 スパイ裏どりを統合'
         : 'KAI（MS10）を NV2.1 に強化 · 高速反応 / 多弾同時回避 / 目視予測スパイ裏どり'
       : isHuman
-        ? '味方NPC2体は NV2.5 humain（能動推論・DDM・同期ダブルスイング・あなたの押し上げ並走）で出撃します'
+        ? '味方NPC2体は NV2.6 Force（無線通話・16関節ハンドサイン・3-2-1同期クロスファイア・1/2/3分隊命令対応）で出撃します'
         : '味方NPC2体は標準NV2（人間的な照準・戦術連携）で出撃します';
-  const baseAiLabel = isHuman ? 'NV2.5 humain' : 'NV2 Deep Tactical';
+  const baseAiLabel = isHuman ? 'NV2.6 Force' : 'NV2 Deep Tactical';
   $('lobbyAiLabel').textContent = is3v3 && rules.allyNv21 > 0
-    ? `${isHuman ? 'NV2.5 humain' : 'NV2'} + SPY (${rules.allyNv21 === 1 ? 'NAGI' : 'KAI'})`
+    ? `${isHuman ? 'NV2.6 Force' : 'NV2'} + SPY (${rules.allyNv21 === 1 ? 'NAGI' : 'KAI'})`
     : baseAiLabel;
   group('limit', rules.limit, k => {
     rules.limit = k;
@@ -1040,6 +1043,8 @@ function toggleChrono() {
 function startMatch() {
   if (!ready || screen !== 'lobby') return;
   feed = [];
+  radioFeed = [];
+  syncBannerState = null;
   gameKick = hurt = 0;
   noticeUntil = 0;
   flirActive = false;
@@ -1057,11 +1062,31 @@ function startMatch() {
   if (settings.sound)audio.enable(true);
   audio.set(settings.volume / 100);
   $('startHint').hidden = false;
-  $('startHint').textContent = touch ? '左強傾ダッシュ · 右上 AA / 全画面 · 左下 FLIR・煙幕・解析' : 'WASD 移動 / Shift ダッシュ · O オートエイム · U 全画面 · T FLIR · G 煙幕';
+  $('startHint').textContent = touch ? '左強傾ダッシュ · 右上 AA / 全画面 · 左下 FLIR・煙幕・解析 · 下部で味方へ指示' : 'WASD 移動 / Shift ダッシュ · 1/2/3 分隊コマンド · O オートエイム · U 全画面 · T FLIR · G 煙幕';
   $('combatNotice').textContent = '';
   $('feed').replaceChildren();
   delete $('feed').dataset.stamp;
+  if ($('radioComms')) { $('radioComms').replaceChildren(); delete $('radioComms').dataset.stamp; }
+  if ($('syncBanner')) $('syncBanner').hidden = true;
   hud();
+}
+function triggerSquadOrder(kind) {
+  if (screen !== 'game' || !match?.player?.alive || match.config.mode !== '3v3' || match.aiModel === 'classic') return;
+  const order = match.issueSquadOrder(kind);
+  if (order) {
+    const label = kind === 'SWING' ? '分隊命令: 3-2-1 同期ダブルスイング！' : kind === 'COVER' ? '分隊命令: 死角カバー援護！' : '分隊命令: 角でベイト罠待機！';
+    $('combatNotice').textContent = label;
+    noticeUntil = match.time + 1.4;
+    if (kind === 'SWING') {
+      syncBannerState = {callsign: 'SQUAD', issuedAt: match.time, goAt: order.goAt, until: order.goAt + 0.75};
+    }
+    hud();
+  }
+}
+if ($('squadStrip')) {
+  for (const btn of $('squadStrip').querySelectorAll('button[data-order]')) {
+    btn.addEventListener('click', () => triggerSquadOrder(btn.dataset.order));
+  }
 }
 function doPause() {
   if (screen === 'game' && match && !match.ended)show('pause')
@@ -1125,6 +1150,40 @@ function event(e) {
     const ms = Number.isFinite(e.waveDelayMs) ? e.waveDelayMs.toFixed(1) : '1.2';
     $('combatNotice').textContent = `ResonanceCore 鋼鉄波ノック (${ms}ms · 5,100m/s) · ${e.knockedEnemy.name} を遮蔽裏から動揺`;
     noticeUntil = match.time + 2.2;
+  }
+  if (e.type === 'npcSignal') {
+    const isAlly = e.team === p.team;
+    if (isAlly && e.lineJa) {
+      const cls = (e.kind === 'AMBUSH' || e.kind === 'MAN_DOWN' || e.kind === 'SWING_NOW' || e.kind === 'PLAYER_ORDER_SWING')
+        ? 'is-urgent'
+        : (e.kind === 'BAIT_READY' || e.kind === 'BAIT_PARTNER' || e.kind === 'PLAYER_ORDER_TRAP')
+          ? 'is-trap'
+          : '';
+      radioFeed.push({
+        id: `${e.callsign}:${e.kind}:${Math.round((e.time || match.time) * 10)}`,
+        tag: e.callsign || 'ALLY',
+        sec: e.sectorJa || '',
+        text: e.lineJa,
+        cls,
+        until: match.time + (cls === 'is-urgent' ? 3.8 : 3.2)
+      });
+      if ((e.kind === 'SWING_NOW' || e.kind === 'PLAYER_ORDER_SWING') && Number.isFinite(e.syncGoAt)) {
+        syncBannerState = {callsign: e.callsign || 'ALLY', issuedAt: match.time, goAt: e.syncGoAt, until: e.syncGoAt + 0.72};
+      }
+    } else if (!isAlly && e.pos && e.lineJa && e.kind !== 'BREATH_RESET') {
+      const dVoice = Math.hypot(e.pos[0] - p.x, e.pos[2] - p.z);
+      const hearCap = e.kind === 'STARTLE' ? 24 : e.kind === 'BAIT_READY' ? 16 : 34;
+      if (dVoice <= hearCap) {
+        radioFeed.push({
+          id: `EN:${e.kind}:${Math.round((e.time || match.time) * 10)}`,
+          tag: '敵声',
+          sec: relativeDirectionJa(e.pos[0], e.pos[2], p),
+          text: e.lineJa,
+          cls: 'is-enemy',
+          until: match.time + 2.4
+        });
+      }
+    }
   }
   if (e.type === 'spawn' && e.actor === p) {
     resetMotion();
@@ -1231,6 +1290,39 @@ function hud() {
     const w = match.aeroVortex.sample(a.x, a.z);
     $('windVal').textContent = `風 ${w.speed.toFixed(1)}m/s`;
   }
+  const sqStrip = $('squadStrip');
+  if (sqStrip) {
+    sqStrip.hidden = !(a.alive && match.config.mode === '3v3' && match.aiModel !== 'classic');
+  }
+  const syncEl = $('syncBanner');
+  if (syncEl) {
+    if (syncBannerState && match.time < syncBannerState.until && a.alive) {
+      const rem = syncBannerState.goAt - match.time;
+      const total = Math.max(0.25, syncBannerState.goAt - syncBannerState.issuedAt);
+      const frac = clamp(1 - rem / total, 0, 1);
+      syncEl.hidden = false;
+      syncEl.classList.toggle('is-go', rem <= 0.08);
+      if ($('syncText')) {
+        const beat = rem > total * 0.66 ? '3…' : rem > total * 0.33 ? '2…' : rem > 0.08 ? '1…' : 'GO!! 同期突入！';
+        $('syncText').textContent = `SYNC SWING · ${syncBannerState.callsign} — ${beat}`;
+      }
+      if ($('syncBar')) $('syncBar').style.width = `${Math.round(frac * 100)}%`;
+    } else {
+      syncEl.hidden = true;
+      if (syncBannerState && match.time >= syncBannerState.until) syncBannerState = null;
+    }
+  }
+  const radioEl = $('radioComms');
+  if (radioEl) {
+    radioFeed = radioFeed.filter(x => x.until > match.time).slice(-3);
+    const rStamp = radioFeed.map(x => x.id).join('|');
+    if (radioEl.dataset.stamp !== rStamp) {
+      radioEl.dataset.stamp = rStamp;
+      radioEl.innerHTML = radioFeed.map(x =>
+        `<div class="radio-line ${x.cls}"><span class="radio-tag">${x.tag}</span>${x.sec ? `<span class="radio-sec">${x.sec}</span>` : ''}<span>${x.text}</span></div>`
+      ).join('');
+    }
+  }
   const specBox = $('spectraBox');
   if (specBox && match.spectraField) {
     const showSpec = !!settings.spectraField && a.alive;
@@ -1259,8 +1351,8 @@ function resultUI() {
     const tag = a.human
       ? ' · 自分'
       : a.isSpy
-        ? `<span class="tag-nv21">NV2.1 SPY${a.humanPersona ? ' × humain · ' + a.humanPersona : ''}</span>`
-        : (a.aiVersion === 'NV2.5 humain' || a.aiVersion === 'NV 2.4 Manusia' || a.aiVersion === 'NV2.3 HUMAN' || a.aiVersion === 'NV2 Human')
+        ? `<span class="tag-nv21">NV2.1 SPY${a.humanPersona ? ' × Force · ' + a.humanPersona : ''}</span>`
+        : (a.aiVersion === 'NV2.6 Force' || a.aiVersion === 'NV2.5 humain' || a.aiVersion === 'NV 2.4 Manusia' || a.aiVersion === 'NV2.3 HUMAN' || a.aiVersion === 'NV2 Human')
           ? `<span class="tag-human">${a.aiVersion}${a.humanPersona ? ' · ' + a.humanPersona : ''}</span>`
           : '';
     return `<div class="roster-row"><span class="${a.team?'orange':'cyan'}">${a.name}${tag}</span><span>${a.kills}</span><span>${a.deaths}</span></div>`;
@@ -1297,7 +1389,7 @@ function resultUI() {
         `<span>構造ノック <b>${rc.seismicKnocks}</b></span>` +
         `<span>最長キル <b>${ct.longestKillM > 0 ? ct.longestKillM.toFixed(1) + 'm' : '—'}</b></span>` +
         `<span>鏡像跳弾解 <b>${fc.solutionsFound}</b>${fc.aiBankShots ? ` / AI跳弾${fc.aiBankShots}` : ''}</span>` +
-        (match.aiModel !== 'classic' ? `<span>NV2.5 humain <b>能動探索${nm.humainEpistemicScans || 0} / 判断変更${nm.humainChangeOfMinds || 0} / 罠${nm.humainBaitTraps || 0} / 同期突入${nm.humainSyncSwings || 0} / 戦術煙幕${nm.manusiaSmokeDeploys || 0} / 通話${nm.humanCallouts || 0}</b></span>` : '') +
+        (match.aiModel !== 'classic' ? `<span>NV2.6 Force <b>音声${nm.forceVocalSignals || 0} / 仕草${nm.forceGestures || 0} / 同期突入${nm.humainSyncSwings || 0} / 罠連携${nm.forceBaitPartners || 0} / 切返迎撃${nm.forceReversalLocks || 0} / 通話${nm.humanCallouts || 0}</b></span>` : '') +
         `<span>ベイズ確定 <b>${sp.peakCertaintyPct}%</b></span>` +
       `</div>`;
   } else if (synEl) {
@@ -1333,7 +1425,7 @@ document.addEventListener('keydown', e => {
   }
   if (screen !== 'game' || !match || document.hidden || e.target?.closest?.('input, textarea, select, [contenteditable=true]')) return;
   if (e.code === 'Space' && e.target?.closest?.('button')) return;
-  if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyF', 'KeyR', 'KeyT', 'KeyG', 'KeyL', 'KeyK', 'KeyM', 'KeyO', 'KeyU'].includes(e.code))e.preventDefault();
+  if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyF', 'KeyR', 'KeyT', 'KeyG', 'KeyL', 'KeyK', 'KeyM', 'KeyO', 'KeyU', 'Digit1', 'Digit2', 'Digit3'].includes(e.code))e.preventDefault();
   keys.add(e.code);
   if (e.repeat) return;
   if (e.code === 'KeyF' && match.player.alive) holdFireKey = true;
@@ -1342,6 +1434,9 @@ document.addEventListener('keydown', e => {
   if (e.code === 'KeyT')toggleFlir();
   if (e.code === 'KeyG')triggerSmokeVent();
   if (e.code === 'KeyL')toggleChrono();
+  if (e.code === 'Digit1')triggerSquadOrder('SWING');
+  if (e.code === 'Digit2')triggerSquadOrder('COVER');
+  if (e.code === 'Digit3')triggerSquadOrder('TRAP');
   if (e.code === 'KeyO')setAutoAim(!(settings.autoAim !== false), true);
   if (e.code === 'KeyU')toggleFullscreen();
   if (e.code === 'KeyK') {

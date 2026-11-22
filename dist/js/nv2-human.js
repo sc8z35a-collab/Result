@@ -50,3 +50,25 @@ export {
   HumainEmbodiedTacticsV25,
   HumainSocialMindV25
 } from './nv25-humain.js';
+
+export {
+  NV26_FORCE_VERSION,
+  FORCE_GESTURES,
+  COMMS_CHANNELS_V26,
+  VOICE_PROFILES_V26,
+  CALLSIGN_PROFILES_V26,
+  CALLOUT_LINES_V26,
+  sectorNameJa,
+  relativeDirectionJa,
+  ForceBodyLanguageV26,
+  ForcePsycheV26,
+  ForceCounterBrainV26,
+  ForceTempoCoordV26,
+  ForceSensorimotorV26,
+  ForceTacticsV26,
+  ForceSocialVoiceV26,
+  ForceActiveInferenceV26,
+  ForceDecisionDDM_V26,
+  ForceMultisensoryV26,
+  ForceFixationGazeV26
+} from './nv26-force.js';

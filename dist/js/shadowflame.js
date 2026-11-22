@@ -116,12 +116,13 @@ uniform vec3 uHit;
 uniform vec2 uRecoil;
 uniform vec4 uAnim;
 uniform vec4 uAnim2;
+uniform vec4 uExpr;
 ${ARTICULATED_RIG_GLSL}
 void main(){
   vec3 p=aPos,n=aNormal;
   if(uMode==1){
     int boneId=int(floor(aKind*.1+.001));
-    rigApplyCharacter(p,n,boneId,uGait,uPose,uHit,uRecoil,uAnim,uAnim2);
+    rigApplyCharacter(p,n,boneId,uGait,uPose,uHit,uRecoil,uAnim,uAnim2,uExpr);
   }
   gl_Position=uVP*uModel*vec4(p,1.);
 }`;
@@ -549,6 +550,10 @@ export class ShadowFlame {
       if (d.uRecoil) gl.uniform2f(d.uRecoil, a.recoil || 0, a.recoilSide || 0);
       if (d.uAnim) gl.uniform4f(d.uAnim, a.fwdVel || 0, a.sideVel || 0, a.airBlend || 0, a.landCompress || 0);
       if (d.uAnim2) gl.uniform4f(d.uAnim2, a.pitch || 0, time + a.id * 1.13, a.sprintAmt || 0, a.reloadFrac || 0);
+      if (d.uExpr) {
+        const ex = a.expr;
+        gl.uniform4f(d.uExpr, ex?.headYaw || 0, ex?.gestureEncoded || 0, ex?.tension || 0, ex?.breathWave || 0);
+      }
       const actorMesh = actorsMap[(a.isSpy ? 'spy_' : '') + a.team + a.gun]
         || actorsMap[a.team + a.gun]
         || actorsMap[(a.isSpy ? 'spy_' : '') + a.team + 'SW T']
@@ -572,6 +577,7 @@ export class ShadowFlame {
     if (d.uRecoil) gl.uniform2f(d.uRecoil, 0, 0);
     if (d.uAnim) gl.uniform4f(d.uAnim, 0, 0, 0, 0);
     if (d.uAnim2) gl.uniform4f(d.uAnim2, 0, 0, 0, 0);
+    if (d.uExpr) gl.uniform4f(d.uExpr, 0, 0, 0, 0);
     gl.enable(gl.POLYGON_OFFSET_FILL);
     gl.polygonOffset(1.15, 2.0);
     drawFn(terrain);
@@ -644,6 +650,7 @@ export class ShadowFlame {
         if (d.uRecoil) gl.uniform2f(d.uRecoil, 0, 0);
         if (d.uAnim) gl.uniform4f(d.uAnim, 0, 0, 0, 0);
         if (d.uAnim2) gl.uniform4f(d.uAnim2, 0, 0, 0, 0);
+        if (d.uExpr) gl.uniform4f(d.uExpr, 0, 0, 0, 0);
         gl.enable(gl.POLYGON_OFFSET_FILL);
         gl.polygonOffset(1.0, 1.8);
         drawFn(terrain);
