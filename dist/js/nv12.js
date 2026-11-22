@@ -582,8 +582,9 @@ export class NV12 extends NV11 {
     }
 
     for (const a of this.match.actors) {
-      if (!a.alive || a.human) continue;
+      if (!a.alive || a.human || (this.teamFilter != null && a.team !== this.teamFilter)) continue;
       const b = this.brains.get(a.id);
+      if (!b) continue;
 
       if (t - b.damageClock > 1.65) b.recentDamage = Math.max(0, b.recentDamage - dt * 18);
 
@@ -611,7 +612,7 @@ export class NV12 extends NV11 {
       }
       postureStep(a, dt, p.crouch && a.onGround, p.lean, p.ads);
       a.paceFactor = b.vault ? 1.13 : b.state === '戦術退避' ? 1.16 : 1 - a.crouch * .36 - a.aimPose * .10;
-      vertical(a, dt, floorAt);
+      vertical(a, dt, floorAt, this.match.gravityScale || 1);
 
       while (b.path.length && Math.hypot(b.path[0][0] - a.x, b.path[0][1] - a.z) < .65) b.path.shift();
       const pt = b.path[0];
@@ -661,6 +662,9 @@ export class NV12 extends NV11 {
         b.progressAt = t + 1.15;
       }
 
+      const aa = a.aa;
+      const aaTracking = !!(aa?.locked && aa.level !== 'off' && aa.level !== '1.1');
+      const scherpFireReady = !!(aa?.locked && aa.level === '1.5' && (aa.solveMode === 'direct' || aa.solveMode === 'pen' || aa.solveMode === 'bank'));
       const fresh = b.seen && t - b.seenAt < .42;
       let desiredYaw = a.yaw, desiredPitch = 0, range = 0;
       if (fresh) {
@@ -691,28 +695,29 @@ export class NV12 extends NV11 {
         desiredYaw += Math.sin(t * .9 + a.id) * .42 * dt;
       }
 
-      const turnRate = dt * (fresh ? 5.6 : t - b.underFireAt < 1 ? 5.2 : 3.6);
-      a.yaw += clamp(angleDiff(desiredYaw, a.yaw), -turnRate, turnRate);
-      a.pitch = mix(a.pitch, desiredPitch, 1 - Math.exp(-10 * dt));
+      if (!aaTracking) {
+        const turnRate = dt * (fresh ? 5.6 : t - b.underFireAt < 1 ? 5.2 : 3.6);
+        a.yaw += clamp(angleDiff(desiredYaw, a.yaw), -turnRate, turnRate);
+        a.pitch = mix(a.pitch, desiredPitch, 1 - Math.exp(-10 * dt));
+      }
 
-      const canShoot = fresh
+      const canShoot = (scherpFireReady && t > b.triggerAt) || (fresh
         && t > b.reactionAt
         && t > b.triggerAt
-        && Math.abs(angleDiff(desiredYaw, a.yaw)) < .078
-        && Math.abs(desiredPitch - a.pitch) < .085
-        && (b.state !== '態勢立て直し' || range < 14);
+        && (aaTracking || (Math.abs(angleDiff(desiredYaw, a.yaw)) < .078 && Math.abs(desiredPitch - a.pitch) < .085))
+        && (b.state !== '態勢立て直し' || range < 14));
       if (canShoot) {
         const w = this.match.weapon(a);
         const enemy = this.match.actors[b.targetId];
-        if (enemy?.alive && obstruction(eyeOf(a), targetPoint(enemy)) > 1) {
+        if (scherpFireReady || (enemy?.alive && obstruction(eyeOf(a), targetPoint(enemy)) > 1)) {
           this.match.trigger(a);
-          const paceMult = a.gun === 'MS10' ? (1.02 + b.rng() * .32) : (1.05 + b.rng() * .52);
-          b.triggerAt = t + w.interval * paceMult + (b.rng() > .86 ? .20 : 0);
+          const paceMult = scherpFireReady ? 1.02 : a.gun === 'MS10' ? (1.02 + b.rng() * .32) : (1.05 + b.rng() * .52);
+          b.triggerAt = t + w.interval * paceMult + (scherpFireReady ? 0 : (b.rng() > .86 ? .20 : 0));
         }
       }
 
       const cap = this.match.weapon(a).capacity;
-      if (a.mag === 0 || (!fresh && a.mag < cap * .60 && (b.state === '態勢立て直し' || b.state === '遮蔽交戦' || b.rng() < dt * .9))) {
+      if (a.mag === 0 || (!fresh && !scherpFireReady && a.mag < cap * .60 && (b.state === '態勢立て直し' || b.state === '遮蔽交戦' || b.rng() < dt * .9))) {
         this.match.reload(a);
       }
     }

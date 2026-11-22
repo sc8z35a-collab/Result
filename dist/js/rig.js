@@ -102,29 +102,43 @@ struct LegAngles {
 LegAngles rigLegKinematics(float side, float phase, float moveAmt, float fwdVel, float sideVel, float sprint, float crouch, float air, float land, float timeSec){
   float ph = phase + (side > 0.0 ? 3.14159265 : 0.0);
   float dirSign = fwdVel < -0.15 ? -1.0 : 1.0;
-  float walkBlend = moveAmt * (1.0 - crouch * 0.55) * (1.0 - air);
+  float p = ph * dirSign;
+  float walkBlend = clamp(moveAmt, 0.0, 1.0) * (1.0 - crouch * 0.55) * (1.0 - air);
 
-  // Idle natural athletic combat stance (slight staggered feet & relaxed micro-bend, subtle breathing weight shift)
-  float breathShift = sin(timeSec * 1.8) * 0.025 * (1.0 - moveAmt);
-  float idleHipP = side < 0.0 ? 0.09 : -0.10;
-  float idleKnee = -0.13 - abs(breathShift) * 0.5;
+  // Natural athletic idle combat stance (subtle staggered feet, relaxed micro-bend, gentle breathing shift)
+  float breathShift = sin(timeSec * 1.7) * 0.018 * (1.0 - walkBlend);
+  float idleHipP = side < 0.0 ? 0.07 : -0.08;
+  float idleKnee = -0.11 - abs(breathShift) * 0.4;
   float idleAnk  = -idleHipP - idleKnee;
 
-  // Authentic human mocap Fourier gait cycle (heel-strike -> stance roll -> toe push-off -> high-knee swing!)
-  float hipAmp = mix(0.48, 0.90, sprint);
-  float walkHipP = dirSign * (hipAmp * sin(ph) + 0.16 * sprint * (1.0 - cos(2.0 * ph)));
-  // Knee bends strictly backward (<= 0): deep athletic flexion during swing + soft shock-absorption at heel-strike
-  float swingPhase = max(0.0, sin(ph * dirSign + 0.62));
-  float absorbPhase = max(0.0, sin(ph * dirSign - 1.38)) * 0.24;
-  float walkKnee = -(mix(0.84, 1.52, sprint) * pow(swingPhase, 1.30) + absorbPhase);
-  // Ankle: toe push-off plantarflexion + swing dorsiflexion for clean heel-strike
-  float walkAnk = (0.30 * sin(ph * dirSign - 0.42) - 0.38 * max(0.0, -sin(ph * dirSign + 0.35)));
-  float walkToe = max(0.0, -sin(ph * dirSign + 0.40)) * (0.45 + 0.35 * sprint);
+  // Authentic human biomechanical gait cycle:
+  //   p = 0        : Heel-strike / initial contact (hip forward, knee near-straight, toes slightly up)
+  //   p = 0.85     : Loading response / mid-stance (soft knee shock-absorption, flat planted foot)
+  //   p = PI       : Toe-off / push-off (hip extended back, ankle plantarflexing, toe hinged)
+  //   p = 4.18     : Mid-swing recovery (deep backward knee flexion lifting heel cleanly behind glutes)
+  //   p = 5.5->2PI : Terminal swing (knee smoothly extends forward into next contact)
+  float fwdMix = clamp(abs(fwdVel) / max(0.25, abs(fwdVel) + abs(sideVel) * 0.75), 0.35, 1.0);
+  float hipFwd = mix(0.35, 0.56, sprint) * fwdMix;
+  float hipBack = mix(0.27, 0.44, sprint) * fwdMix;
+  float cp = cos(p);
+  float walkHipP = (cp >= 0.0 ? cp * hipFwd : cp * hipBack) - 0.042 * sin(2.0 * p) * fwdMix;
 
-  // Directional strafe footwork (outer leg abducts & steps cleanly without crossing!)
-  float strafeAmt = clamp(abs(sideVel), 0.0, 1.2) * (1.0 - air);
-  float hipRoll = sideVel * sin(ph) * 0.28 + side * (0.04 + 0.06 * crouch);
-  float hipYaw  = -sideVel * 0.22 * moveAmt + side * 0.07;
+  // Biphasic human knee curve: gentle weight-acceptance bend + deep post-toe-off swing tuck (ZERO stork-bend!)
+  float loadBell  = pow(0.5 + 0.5 * cos(p - 0.85), 3.2);
+  float swingBell = pow(0.5 + 0.5 * cos(p - 4.18), 2.3);
+  float walkKnee  = -(0.08 + mix(0.16, 0.28, sprint) * loadBell + mix(0.74, 1.30, sprint) * swingBell);
+
+  // Natural ankle roll: heel-strike dorsiflexion -> flat stance -> toe push-off plantarflexion -> swing clearance
+  float strikeBell = pow(0.5 + 0.5 * cos(p - 0.05), 3.0);
+  float pushBell   = pow(0.5 + 0.5 * cos(p - 3.25), 3.0);
+  float swingClear = pow(0.5 + 0.5 * cos(p - 4.45), 2.4);
+  float stanceFlat = (-walkHipP - walkKnee) * pow(0.5 + 0.5 * cos(p - 1.20), 2.6);
+  float walkAnk    = stanceFlat * 0.72 + 0.12 * strikeBell + 0.10 * swingClear - mix(0.32, 0.48, sprint) * pushBell;
+  float walkToe    = pushBell * (0.40 + 0.30 * sprint);
+
+  // Restrained strafe footwork (knees track forward over toes — ZERO duck waddle!)
+  float hipRoll = sideVel * sin(ph) * 0.13 * (1.0 - air) + side * (0.024 + 0.045 * crouch);
+  float hipYaw  = -sideVel * 0.07 * walkBlend + side * 0.035;
 
   float hipP = mix(idleHipP, walkHipP, walkBlend);
   float knee = mix(idleKnee, walkKnee, walkBlend);
@@ -133,37 +147,37 @@ LegAngles rigLegKinematics(float side, float phase, float moveAmt, float fwdVel,
 
   // Tactical staggered combat crouch (100% rigid limb length — ZERO squashing!)
   if(crouch > 0.001){
-    float cHipP = side < 0.0 ? 1.24 : 0.04;
-    float cKnee = side < 0.0 ? -1.58 : -1.46;
-    float cAnk  = side < 0.0 ? 0.34 : 0.88;
-    float cToe  = side < 0.0 ? 0.04 : 0.62;
-    float cWalk = moveAmt * 0.26 * sin(ph);
+    float cHipP = side < 0.0 ? 1.18 : 0.06;
+    float cKnee = side < 0.0 ? -1.52 : -1.42;
+    float cAnk  = side < 0.0 ? 0.34 : 0.84;
+    float cToe  = side < 0.0 ? 0.04 : 0.56;
+    float cWalk = clamp(moveAmt, 0.0, 1.0) * 0.24 * cos(p);
     hipP = mix(hipP, cHipP + cWalk, crouch);
-    knee = mix(knee, cKnee - max(0.0, sin(ph + 0.6)) * 0.22 * moveAmt, crouch);
+    knee = mix(knee, cKnee - swingBell * 0.24 * clamp(moveAmt, 0.0, 1.0), crouch);
     ank  = mix(ank,  cAnk, crouch);
     toe  = mix(toe,  cToe, crouch);
-    hipRoll = mix(hipRoll, side * 0.14, crouch);
+    hipRoll = mix(hipRoll, side * 0.10, crouch);
   }
 
   // Landing shock absorption (both knees flex cleanly on touchdown)
   if(land > 0.001){
-    hipP += 0.42 * land;
-    knee -= 0.88 * land;
-    ank  += 0.46 * land;
+    hipP += 0.36 * land;
+    knee -= 0.76 * land;
+    ank  += 0.40 * land;
   }
 
   // Airborne athletic split-knee jump tuck
   if(air > 0.001){
-    float aHipP = side < 0.0 ? 0.82 : -0.24;
-    float aKnee = side < 0.0 ? -1.28 : -0.78;
-    float aAnk  = side < 0.0 ? -0.18 : -0.42;
+    float aHipP = side < 0.0 ? 0.72 : -0.22;
+    float aKnee = side < 0.0 ? -1.16 : -0.72;
+    float aAnk  = side < 0.0 ? -0.14 : -0.34;
     hipP = mix(hipP, aHipP, air);
     knee = mix(knee, aKnee, air);
     ank  = mix(ank,  aAnk, air);
     toe  = mix(toe,  0.0, air);
   }
 
-  return LegAngles(vec3(hipP, hipYaw, hipRoll), clamp(knee, -2.05, -0.04), clamp(ank, -0.85, 0.95), clamp(toe, 0.0, 0.85));
+  return LegAngles(vec3(hipP, hipYaw, hipRoll), clamp(knee, -1.95, -0.05), clamp(ank, -0.78, 0.88), clamp(toe, 0.0, 0.80));
 }
 
 // Evaluate a single leg's exact posed joint positions (Hip -> Knee -> Ankle -> Sole Bottom Y)
@@ -192,7 +206,7 @@ void rigEvalLegJoints(float side, vec3 pelPos, vec3 pelRot, LegAngles la, out ve
 
 void rigApplyCharacter(inout vec3 p, inout vec3 n, int boneId, vec2 gait, vec3 pose, vec3 hit, vec2 recoil, vec4 anim, vec4 anim2, vec4 expr){
   float phase   = gait.x;
-  float moveAmt = clamp(gait.y, 0.0, 1.2);
+  float moveAmt = clamp(gait.y, 0.0, 1.15);
   float crouch  = clamp(pose.x, 0.0, 1.0);
   float lean    = pose.y;
   float aimPose = clamp(pose.z, 0.0, 1.0);
@@ -205,43 +219,33 @@ void rigApplyCharacter(inout vec3 p, inout vec3 n, int boneId, vec2 gait, vec3 p
   float sprint  = clamp(anim2.z, 0.0, 1.0) * (1.0 - crouch) * (1.0 - air);
   float reloadF = clamp(anim2.w, 0.0, 1.0);
 
-  // NV2.6 Force Kinetic Embodiment channels:
-  //   expr.x = decoupled cervical headYaw (-0.9..+0.9 rad)
-  //   expr.y = encoded gesture + blend:
-  //            +0..+1 WAVE_SWING | +1..+2 HOLD_TRAP | +2..+3 POINT_CONTACT
-  //            -0..-1 STARTLE_JOLT | -1..-2 BREATH_SLUMP
-  //   expr.z = somatic cardiac tension (0..1)
-  //   expr.w = cardiac-coupled breath wave (-1..+1)
-  float headYawOff = clamp(expr.x, -0.92, 0.92);
-  float gCode      = expr.y;
+  // Natural head-look & cardiac breathing only (all NPC-to-NPC order hand gestures handled internally)
+  float headYawOff = clamp(expr.x, -0.82, 0.82);
   float tension    = clamp(expr.z, 0.0, 1.0);
-  float waveSwingB = (gCode >  0.001 && gCode <= 1.001) ? clamp(gCode, 0.0, 1.0) : 0.0;
-  float holdTrapB  = (gCode >  1.001 && gCode <= 2.001) ? clamp(gCode - 1.0, 0.0, 1.0) : 0.0;
-  float pointContB = (gCode >  2.001)                   ? clamp(gCode - 2.0, 0.0, 1.0) : 0.0;
-  float startleB   = (gCode < -0.001 && gCode >= -1.001) ? clamp(-gCode, 0.0, 1.0) : 0.0;
-  float slumpB     = (gCode < -1.001)                    ? clamp(-gCode - 1.0, 0.0, 1.0) : 0.0;
 
-  // 1. Pelvis kinematic base (vertical stride bounce, Trendelenburg hip drop, hip counter-yaw, strafe bank)
+  // 1. Pelvis kinematic base: smooth athletic stride arc, subtle Trendelenburg hip drop, natural hip counter-yaw
   vec3 J_PEL = vec3(0.0, 0.900, 0.010);
-  float runFactor = moveAmt * (1.0 - crouch * 0.55) * (1.0 - air);
-  float pelYaw   = sin(phase) * mix(0.11, 0.24, sprint) * runFactor * (1.0 - aimPose * 0.55);
-  float pelRoll  = cos(phase) * mix(0.045, 0.085, sprint) * runFactor + sideVel * 0.075 * (1.0 - crouch);
-  float pelPitch = -0.05 - 0.11 * sprint - 0.10 * crouch - 0.08 * land - 0.06 * holdTrapB + 0.09 * startleB;
+  float runFactor = clamp(moveAmt, 0.0, 1.0) * (1.0 - crouch * 0.55) * (1.0 - air);
+  float pelYaw   = -cos(phase) * mix(0.055, 0.115, sprint) * runFactor * (1.0 - aimPose * 0.55);
+  float pelRoll  = -cos(phase) * mix(0.020, 0.038, sprint) * runFactor + sideVel * 0.042 * (1.0 - crouch);
+  float pelPitch = -0.030 - 0.072 * sprint - 0.08 * crouch - 0.06 * land;
   vec3 pelRot = vec3(pelPitch, pelYaw, pelRoll);
 
-  float pelDrop = -0.032 * runFactor - 0.05 * sprint + cos(phase * 2.0) * (0.022 + 0.018 * sprint) * runFactor
-                  - 0.36 * crouch - 0.14 * land + 0.08 * air - 0.045 * startleB - 0.03 * holdTrapB;
-  float pelLat  = -cos(phase) * 0.024 * runFactor;
-  vec3 pelPos = J_PEL + vec3(pelLat, pelDrop, 0.04 * crouch + 0.035 * startleB);
+  // Natural double-frequency vertical running arc: lowest in mid-stance loading (p=0.85), highest in push-off float (p=2.45)
+  float pelBounce = -cos(phase * 2.0 - 1.70) * mix(0.014, 0.034, sprint) * runFactor;
+  float pelDrop = -0.016 * runFactor - 0.028 * sprint + pelBounce - 0.35 * crouch - 0.12 * land + 0.08 * air;
+  float pelLat  = cos(phase) * 0.014 * runFactor;
+  vec3 pelPos = J_PEL + vec3(pelLat, pelDrop, 0.035 * crouch);
 
-  // 2. Solve BOTH legs first so we know exact lowest sole height -> millimeter-exact ground contact (zero floating/sinking!)
+  // 2. Solve BOTH legs first -> smooth anti-sink ground contact (zero floor clipping, zero abrupt pogo snap!)
   LegAngles laL = rigLegKinematics(-1.0, phase, moveAmt, fwdVel, sideVel, sprint, crouch, air, land, timeSec);
   LegAngles laR = rigLegKinematics( 1.0, phase, moveAmt, fwdVel, sideVel, sprint, crouch, air, land, timeSec);
   vec3 hipL, kneeL, ankL, hipR, kneeR, ankR;
   float soleL, soleR;
   rigEvalLegJoints(-1.0, pelPos, pelRot, laL, hipL, kneeL, ankL, soleL);
   rigEvalLegJoints( 1.0, pelPos, pelRot, laR, hipR, kneeR, ankR, soleR);
-  float groundFix = -min(soleL, soleR) * (1.0 - air);
+  float lowestSole = min(soleL, soleR);
+  float groundFix = clamp(-lowestSole, -0.026 * sprint, 0.14) * (1.0 - air);
   pelPos.y += groundFix;
   hipL.y += groundFix; kneeL.y += groundFix; ankL.y += groundFix;
   hipR.y += groundFix; kneeR.y += groundFix; ankR.y += groundFix;
@@ -294,20 +298,19 @@ void rigApplyCharacter(inout vec3 p, inout vec3 n, int boneId, vec2 gait, vec3 p
 
   // 4. Upper Body Hierarchical Chain: Pelvis -> Lumbar Spine -> Thoracic Chest -> Neck -> Head
   float flinch = hit.x > 0.001 ? sin(hit.x * 3.14159265) * hit.x : 0.0;
-  // Cardiac-coupled breathing (falls back cleanly to natural 2.55 rad/s wave when expr.w == 0)
   float breathRaw = abs(expr.w) > 0.001 ? expr.w : sin(timeSec * 2.55);
-  float breath = breathRaw * (0.016 + 0.012 * sprint + 0.014 * tension + 0.016 * slumpB);
+  float breath = breathRaw * (0.014 + 0.010 * sprint + 0.010 * tension);
 
   vec3 J_LUM = vec3(0.0, 0.970, 0.010);
   vec3 J_CHS = vec3(0.0, 1.150, 0.010);
   vec3 J_NCK = vec3(0.0, 1.440, 0.000);
   vec3 J_HED = vec3(0.0, 1.535, -0.008);
 
-  // Lumbar spine absorbs counter-twist, tactical lean, sprint drive, hit stagger & NV2.6 startle/slump!
+  // Lumbar spine absorbs counter-twist, tactical lean, balanced sprint lean & hit stagger
   vec3 lumRot = vec3(
-    -0.06 - 0.14 * sprint - 0.14 * crouch + flinch * hit.z * 0.28 + breath * 0.4 + startleB * 0.22 - slumpB * 0.12 - holdTrapB * 0.08,
-    -pelYaw * 0.52 + flinch * hit.y * 0.24 + headYawOff * 0.08,
-    lean * 0.42 - pelRoll * 0.45 + flinch * hit.y * 0.12 + waveSwingB * 0.06
+    -0.025 - 0.062 * sprint - 0.10 * crouch + flinch * hit.z * 0.24 + breath * 0.35,
+    -pelYaw * 0.55 + flinch * hit.y * 0.20 + headYawOff * 0.06,
+    lean * 0.40 - pelRoll * 0.45 + flinch * hit.y * 0.10
   );
   vec3 lumPos = pelPos + rigEuler(J_LUM - J_PEL, pelRot);
   vec3 lumTotalRot = pelRot + lumRot;
@@ -318,30 +321,29 @@ void rigApplyCharacter(inout vec3 p, inout vec3 n, int boneId, vec2 gait, vec3 p
     return;
   }
 
-  // Thoracic chest completes counter-rotation so shoulders square cleanly toward aim line!
+  // Thoracic chest completes counter-rotation so shoulders stay athletic & squared cleanly toward aim line!
   vec3 chsRot = vec3(
-    aimPitch * 0.34 - 0.05 * aimPose + recoil.x * 0.045 + flinch * hit.z * 0.22 + breath + startleB * 0.16 - slumpB * 0.10,
-    -pelYaw * 0.48 + 0.14 * (1.0 - sprint) + flinch * hit.y * 0.18 + headYawOff * 0.10,
-    lean * 0.26 - pelRoll * 0.40 - pointContB * 0.06
+    aimPitch * 0.34 - 0.03 * aimPose + recoil.x * 0.040 + flinch * hit.z * 0.20 + breath,
+    -pelYaw * 0.45 + 0.08 * (1.0 - sprint) + flinch * hit.y * 0.16 + headYawOff * 0.08,
+    lean * 0.26 - pelRoll * 0.40
   );
   vec3 chsPos = lumPos + rigEuler(J_CHS - J_LUM, lumTotalRot);
   vec3 chsTotalRot = lumTotalRot + chsRot;
 
   if(boneId == 2){
     vec3 rel = p - J_CHS;
-    rel.z *= 1.0 + breath * 1.25;
-    rel.y += startleB * 0.014 - slumpB * 0.012;
+    rel.z *= 1.0 + breath * 1.15;
     p = chsPos + rigEuler(rel, chsTotalRot);
     n = normalize(rigEuler(n, chsTotalRot));
     return;
   }
 
-  // Cervical Neck & Decoupled Visor Head: head turns BEFORE torso toward eyes, sounds, allies & ambush threats!
+  // Cervical Neck & Head: stabilized smoothly against body pitch/roll during sprint
   vec3 nckPos = chsPos + rigEuler(J_NCK - J_CHS, chsTotalRot);
   vec3 nckRot = vec3(
-    aimPitch * 0.28 - chsTotalRot.x * 0.35 + flinch * 0.18 + startleB * 0.14 - slumpB * 0.08,
+    aimPitch * 0.28 - chsTotalRot.x * 0.42 + flinch * 0.16,
     -chsTotalRot.y * 0.45 + headYawOff * 0.36,
-    -chsTotalRot.z * 0.35 - headYawOff * 0.08
+    -chsTotalRot.z * 0.40 - headYawOff * 0.06
   );
   vec3 nckTotal = chsTotalRot + nckRot;
   if(boneId == 3){
@@ -352,9 +354,9 @@ void rigApplyCharacter(inout vec3 p, inout vec3 n, int boneId, vec2 gait, vec3 p
 
   vec3 hedPos = nckPos + rigEuler(J_HED - J_NCK, nckTotal);
   vec3 hedRot = vec3(
-    aimPitch * 0.38 - nckTotal.x * 0.45 + flinch * 0.24 + startleB * 0.18 - slumpB * 0.10,
+    aimPitch * 0.38 - nckTotal.x * 0.50 + flinch * 0.20,
     -nckTotal.y * 0.55 + headYawOff * 0.64,
-    aimPose * 0.12 - nckTotal.z * 0.45 - headYawOff * 0.12
+    aimPose * 0.10 - nckTotal.z * 0.50 - headYawOff * 0.10
   );
   vec3 hedTotal = nckTotal + hedRot;
   if(boneId == 4){
@@ -372,22 +374,21 @@ void rigApplyCharacter(inout vec3 p, inout vec3 n, int boneId, vec2 gait, vec3 p
   vec3 bElR   = vec3( 0.265, 1.145, -0.065);
   vec3 bHandR = vec3( 0.072, 1.170, -0.240);
 
-  // Weapon local animation relative to Chest: ADS cheek-weld, Sprint Low-Ready, Recoil, Reload, Startle Jolt & Trap Cant!
+  // Weapon local animation relative to Chest: ADS cheek-weld, Tactical Sprint Low-Ready, Recoil & Reload
   float lowReady = sprint * (1.0 - aimPose) * (1.0 - clamp(recoil.x * 2.5, 0.0, 1.0));
-  float pump = sin(phase) * lowReady;
+  float pump = -cos(phase) * lowReady;
   float relTilt = sin(reloadF * 3.14159265);
   float relSlam = (reloadF > 0.58 && reloadF < 0.78) ? sin((reloadF - 0.58) / 0.20 * 3.14159265) : 0.0;
-  float handSignaling = clamp(waveSwingB + holdTrapB + pointContB, 0.0, 1.0);
 
   vec3 gunOffset = vec3(
-    -0.032 * aimPose - 0.045 * lowReady + pump * 0.025 + 0.035 * handSignaling + 0.022 * startleB,
-     0.058 * aimPose - 0.055 * lowReady + recoil.x * 0.016 - relTilt * 0.045 + relSlam * 0.025 + 0.036 * startleB - 0.022 * slumpB,
-    -0.018 * aimPose + 0.030 * lowReady + recoil.x * 0.048 + 0.035 * startleB
+    -0.030 * aimPose - 0.038 * lowReady + pump * 0.022,
+     0.056 * aimPose - 0.042 * lowReady + recoil.x * 0.016 - relTilt * 0.045 + relSlam * 0.025,
+    -0.018 * aimPose + 0.024 * lowReady + recoil.x * 0.048
   );
   vec3 gunRot = vec3(
-    aimPitch * 0.66 - 0.28 * lowReady + recoil.x * 0.14 - relTilt * 0.24 + relSlam * 0.10 + 0.24 * startleB - 0.12 * slumpB,
-    -0.36 * lowReady + pump * 0.10 + recoil.y * recoil.x * 0.035 - 0.14 * handSignaling,
-    0.08 * aimPose - 0.34 * lowReady + relTilt * 0.42 + 0.16 * holdTrapB - 0.18 * startleB
+    aimPitch * 0.66 - 0.22 * lowReady + recoil.x * 0.14 - relTilt * 0.24 + relSlam * 0.10,
+    -0.30 * lowReady + pump * 0.08 + recoil.y * recoil.x * 0.035,
+    0.08 * aimPose - 0.26 * lowReady + relTilt * 0.42
   );
 
   vec3 gunPivot = chsPos + rigEuler((bGun + gunOffset) - J_CHS, chsTotalRot);
@@ -403,7 +404,7 @@ void rigApplyCharacter(inout vec3 p, inout vec3 n, int boneId, vec2 gait, vec3 p
   vec3 handR_gun = bGun + gunOffset + rigEuler(bHandR - bGun, gunRot);
   vec3 handL_gun = bGun + gunOffset + rigEuler(bHandL - bGun, gunRot);
 
-  // Dynamic Left-Hand Choreography: Reload OR NV2.6 Force Tactical Hand Signals!
+  // Left-Hand Reload Choreography
   if(reloadF > 0.005){
     vec3 pouchPos = vec3(-0.14, 1.05, -0.18);
     vec3 magwellPos = bGun + gunOffset + rigEuler(vec3(0.0, -0.11, -0.12), gunRot);
@@ -421,19 +422,6 @@ void rigApplyCharacter(inout vec3 p, inout vec3 n, int boneId, vec2 gait, vec3 p
       float u = smoothstep(0.84, 1.0, reloadF);
       handL_gun = mix(boltPos, handL_gun, u);
     }
-  } else if(waveSwingB > 0.005){
-    // Tactical "ADVANCE / SYNC SWING!" overhead-to-forward arm sweep via 2-bone IK!
-    float sweep = sin(timeSec * 11.5);
-    vec3 wavePos = vec3(-0.34, 1.56 + sweep * 0.08, -0.22 - max(0.0, sweep) * 0.24);
-    handL_gun = mix(handL_gun, wavePos, waveSwingB);
-  } else if(holdTrapB > 0.005){
-    // Tactical "HOLD / BAIT TRAP" low open-palm freeze gesture beside chest!
-    vec3 holdPos = vec3(-0.36, 1.24 + sin(timeSec * 4.0) * 0.018, -0.20);
-    handL_gun = mix(handL_gun, holdPos, holdTrapB);
-  } else if(pointContB > 0.005){
-    // Tactical "CONTACT!" forward-left threat-pointing gesture!
-    vec3 pointPos = vec3(-0.24, 1.38, -0.56);
-    handL_gun = mix(handL_gun, pointPos, pointContB);
   }
 
   // Solve 2-Bone Analytical Arm IK in Chest-Local Space, then lift into final Thoracic Chest transform!
@@ -443,14 +431,14 @@ void rigApplyCharacter(inout vec3 p, inout vec3 n, int boneId, vec2 gait, vec3 p
   vec3 hnBind   = isRightArm ? bHandR : bHandL;
   vec3 hnTarget = isRightArm ? handR_gun : handL_gun;
 
-  // Natural clavicle shoulder elevation/retraction (aiming, recoil, startle hunch & deep-breath shoulder drop!)
-  vec3 shPosed = shBind + vec3(0.0, 0.015 * aimPose + recoil.x * 0.008 + startleB * 0.042 - slumpB * 0.024, recoil.x * 0.015 - startleB * 0.020);
+  // Natural clavicle shoulder elevation/retraction
+  vec3 shPosed = shBind + vec3(0.0, 0.014 * aimPose + recoil.x * 0.008, recoil.x * 0.015);
   float L1 = length(elBind - shBind);
   float L2 = length(hnBind - elBind);
   vec3 poleBind = isRightArm ? vec3(0.82, -0.58, 0.32) : vec3(-0.82, -0.62, 0.24);
   vec3 polePose = isRightArm
     ? normalize(vec3(0.84 - 0.14 * aimPose, -0.56 - 0.12 * aimPose, 0.34 + 0.12 * lowReady))
-    : normalize(vec3(-0.76 + 0.10 * aimPose - 0.18 * waveSwingB, -0.68 + 0.42 * waveSwingB + 0.18 * pointContB, 0.22 + 0.15 * relTilt));
+    : normalize(vec3(-0.76 + 0.10 * aimPose, -0.68, 0.22 + 0.15 * relTilt));
   vec3 elPosed = rigSolveElbow(shPosed, hnTarget, L1, L2, polePose);
 
   vec3 pLocal = p, nLocal = n;

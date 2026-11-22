@@ -1,9 +1,12 @@
 import {money, PilotWallet} from './wallet.js';
 import {ThermalOptic} from './optic.js';
-import {targetPoint} from './posture.js';
-import {unit, sub, cross, dot} from './geometry.js';
+import {targetPoint, bodyCenter, torso} from './posture.js';
+import {unit, sub, cross, dot, clamp} from './geometry.js';
+import {clearOpticalPath} from './yard.js';
 const $ = s => document.getElementById(s);
 const setSvgHidden = (el, hide) => { if (el) el.toggleAttribute('hidden', !!hide); };
+const OH_SHIELD_MAX = 25;
+const OH_BAIZER_MAX = 100;
 export class PilotEquipment {
   constructor(getMatch, notice) {
     this.getMatch = getMatch;
@@ -21,6 +24,7 @@ export class PilotEquipment {
       if (el) el.onclick = () => this.action(code);
     }
     this.wasThermal = false;
+    this._ohPool = [];
     if (this.pendingAwards.size) this.saveAwards();
   }
   accountView() {
@@ -110,11 +114,11 @@ export class PilotEquipment {
     if (!a?.alive || m.ended) return;
     if ((code === 'boost' || code === 'aa14') && a.df40) {
       const res = m.toggleAA14(a);
-      if (res.state === 'on') this.notice('AUTO-AIM 1.4 OVERDRIVE 起動 · 過熱に注意（X / E で解除）');
-      else if (res.state === 'off') this.notice('AUTO-AIM 1.4 解除 · ARV1.3 / AA1.3 へ復帰');
-      else if (res.reason === 'autoaim_off') this.notice('オートエイム OFF 中 · O キー / AAボタンで ON にしてください');
-      else if (res.reason === 'overheated') this.notice(`AUTO-AIM 1.4 オーバーヒート冷却中（残り ${res.cooldown.toFixed(1)}s）`);
-      else if (res.reason === 'hot') this.notice(`AUTO-AIM 1.4 高温待機中（${Math.round(res.heat)}%）`);
+      if (res.state === 'on') this.notice('AA1.4 起動');
+      else if (res.state === 'off') this.notice('AA1.4 解除');
+      else if (res.reason === 'autoaim_off') this.notice('AA OFF');
+      else if (res.reason === 'overheated') this.notice(`過熱冷却 ${res.cooldown.toFixed(1)}s`);
+      else if (res.reason === 'hot') this.notice(`高温待機 ${Math.round(res.heat)}%`);
       return;
     }
     const d = a.df;
@@ -153,10 +157,10 @@ export class PilotEquipment {
       rdEl.classList.toggle('is-df40ii', loadout === 'DF40 II');
       if (isRD) {
         const specs = {
-          RD20: ['ARV1.1', 'オートエイム 1.1（1.76×弾道誘導＋予測射撃） · 20発 1発同時フルオート', 'CLASS', '軽量スマートカービン · プレイヤー / NPC 開放'],
-          RD30: ['ARV1.1 mini', '軽量オートエイム 1.1 mini 搭載 · 80発 2発同時フルオート', 'CLASS', '標準ツインバレル · プレイヤー / NPC 開放'],
-          RD40: ['ARV1.2', '強化オートエイム 1.2（1.92×） · ロック範囲 1.4倍 · 広域追従＆立体モーション', 'D01 SENSOR', '壁裏に隠れた敵にも最大 4.0秒間ロック＆エイムを追従'],
-          'DF40 II': ['ARV1.3 · AA1.3', '進化オートエイム 1.3（2.08×・2次加速度予測・4発散弾収束・壁裏 4.5s 追従） · 弾倉 350 / ストック上限 500（毎秒 2 発回復）', 'AUTO-AIM 1.4', 'X / E で一時強化（2.80×超誘導・0.06s即ロック） · 100%でオーバーヒート（6.0s冷却）']
+          RD20: ['ARV1.1', 'AA 1.1 · 1.76×誘導', 'CLASS', '20発 フルオート'],
+          RD30: ['ARV1.1 mini', 'AA 1.1 mini', 'CLASS', '80発 2発同時'],
+          RD40: ['ARV1.2', 'AA 1.2 · 1.92× · 1.4×広域', 'D01', '壁裏 4.0s 追従'],
+          'DF40 II': ['ARV1.3 · AA1.3', '2.08× · 4発同時 · 上限500 (2/s)', 'AA1.4', 'X / E 一時強化 (過熱 6s)']
         }[loadout];
         if ($('rdSpec1Title')) $('rdSpec1Title').textContent = specs[0];
         if ($('rdSpec1Desc')) $('rdSpec1Desc').textContent = specs[1];
@@ -177,14 +181,18 @@ export class PilotEquipment {
     $('pauseCredits').hidden = !a?.df;
     this.accountView()
   }
-  draw(renderer, match, cam, t, play, echoOn = true, fermatOn = true) {
-    const a = match?.player,
+  draw(renderer, match, cam, t, play, echoOn = true, fermatOn = true, viewActor = null, showOverheads = play) {
+    const a = viewActor || match?.player,
       d = a?.df,
       rd = a?.rd,
       df40 = a?.df40,
+      uaa = a?.aa,
+      uaaLevel = uaa?.level || 'off',
+      uaaOn = !!(play && a?.alive && uaa && uaaLevel !== 'off' && (match?.autoAim !== false || !a.human)),
+      isScherp = !!(uaaOn && uaaLevel === '1.5'),
       on = !!(play && d && a.alive),
-      rdOn = !!(play && rd && a.alive),
-      df40On = !!(play && df40 && a.alive),
+      rdOn = !!(play && !uaaOn && rd && a.alive),
+      df40On = !!(play && !uaaOn && df40 && a.alive),
       isRD40 = rdOn && a.gun === 'RD40',
       isRD30 = rdOn && a.gun === 'RD30',
       isRD20 = rdOn && a.gun === 'RD20',
@@ -194,8 +202,11 @@ export class PilotEquipment {
       ads = !!(on && d.ads),
       thermal = ads && d.scope === 'thermal' && this.wallet.state.evr;
 
+    // Overhead Enemy/Ally Identification Tags (100% Fair-Play LOS + Smoke + Shaffer gated)
+    this._drawOverheads(renderer, match, cam, !!(showOverheads && match && !thermal), a, play);
+
     // FermatCore 1.0: Ultra-Light Smartphone-Safe 2D Vector Projection (0 GPU passes, 0 textures, works in Lightweight Mode!)
-    this._drawFermat(renderer, match, cam, play && !ads, fermatOn);
+    this._drawFermat(renderer, match, cam, play && !ads && !match?.spectating, fermatOn);
 
     // EchoPulse 1.0 Peripheral Sound-to-Sight Tactical Acoustic Compass (works even when muted!)
     const compass = $('echoCompass');
@@ -217,26 +228,27 @@ export class PilotEquipment {
       }
     }
 
-    $('dfHud').hidden = !on;
+    $('dfHud').hidden = !on || uaaOn;
     $('dfHud').classList.toggle('is-aa-off', !autoAimOn);
     const rdHud = $('rdHud');
     const heatWrap = $('aa14HeatWrap');
     if (rdHud) {
-      rdHud.hidden = !(rdOn || df40On);
+      rdHud.hidden = !(uaaOn || rdOn || df40On);
+      rdHud.classList.toggle('is-scherp', isScherp);
       rdHud.classList.toggle('is-rd20', isRD20);
       rdHud.classList.toggle('is-rd30', isRD30);
       rdHud.classList.toggle('is-rd40', isRD40);
-      rdHud.classList.toggle('is-df40ii', df40On);
-      rdHud.classList.toggle('is-aa14', aa14On);
+      rdHud.classList.toggle('is-df40ii', df40On || (uaaOn && !isScherp));
+      rdHud.classList.toggle('is-aa14', aa14On || (uaaOn && uaaLevel === '1.4'));
       rdHud.classList.toggle('is-overheat', aa14Hot);
-      rdHud.classList.toggle('is-aa-off', !autoAimOn);
-      rdHud.classList.toggle('is-locked', autoAimOn && (!!(rdOn && rd.locked) || !!(df40On && df40.locked)));
+      rdHud.classList.toggle('is-aa-off', !autoAimOn && !uaaOn);
+      rdHud.classList.toggle('is-locked', (uaaOn && !!uaa.locked) || (autoAimOn && (!!(rdOn && rd.locked) || !!(df40On && df40.locked))));
     }
     if (heatWrap) heatWrap.hidden = !df40On;
-    $('touchDF').hidden = !on;
+    $('touchDF').hidden = !on || !!match?.spectating;
     const touchDF40 = $('touchDF40');
     if (touchDF40) {
-      touchDF40.hidden = !df40On;
+      touchDF40.hidden = !df40On || !!match?.spectating;
       const btn = $('mobileAA14');
       if (btn && df40On) {
         btn.classList.toggle('is-active', autoAimOn && aa14On);
@@ -259,12 +271,13 @@ export class PilotEquipment {
 
     const reticle = $('reticle');
     if (reticle) {
-      const smartObj = autoAimOn ? (isRD40 ? rd : df40On ? df40 : null) : null;
-      reticle.classList.toggle('is-aa-off', !autoAimOn);
+      const smartObj = uaaOn ? uaa : autoAimOn ? (isRD40 ? rd : df40On ? df40 : null) : null;
+      reticle.classList.toggle('is-aa-off', !autoAimOn && !uaaOn);
+      reticle.classList.toggle('is-scherp', isScherp);
       reticle.classList.toggle('is-rd-locked', !!(smartObj && smartObj.locked));
-      reticle.classList.toggle('is-rd-d01', !!(smartObj && smartObj.d01Active));
+      reticle.classList.toggle('is-rd-d01', !!(smartObj && (smartObj.d01Active || smartObj.wallActive)));
       reticle.classList.toggle('is-rd-fire', !!(smartObj && (smartObj.firePulse || 0) > .18));
-      reticle.classList.toggle('is-aa14', autoAimOn && aa14On);
+      reticle.classList.toggle('is-aa14', (autoAimOn && aa14On) || (uaaOn && uaaLevel === '1.4'));
       reticle.classList.toggle('is-overheat', aa14Hot);
     }
 
@@ -274,16 +287,36 @@ export class PilotEquipment {
     const rdTether = $('rdTether');
     const rdTetherGlow = $('rdTetherGlow');
     lock.hidden = true;
-    lock.classList.remove('is-rd40', 'is-rd30', 'is-rd20', 'is-df40ii', 'is-aa14', 'is-d01', 'is-acquiring', 'is-firing');
+    lock.classList.remove('is-scherp', 'is-rd40', 'is-rd30', 'is-rd20', 'is-df40ii', 'is-aa14', 'is-d01', 'is-acquiring', 'is-firing');
     if (lockTag) lockTag.hidden = true;
     if (rdOverlay) {
       setSvgHidden(rdOverlay, true);
-      rdOverlay.classList.remove('is-df40ii', 'is-aa14', 'is-d01', 'is-fire', 'is-acquiring');
+      rdOverlay.classList.remove('is-scherp', 'is-df40ii', 'is-aa14', 'is-d01', 'is-fire', 'is-acquiring');
     }
 
     let lockTargetId = -1, lockStyle = 'df', isD01 = false, isAcquiring = false;
     if (reticle) reticle.hidden = !!(play && (!a?.alive || ads));
-    if (on) {
+    if (uaaOn && rdHud) {
+      const pct = Math.round((uaa.focus || 0) * 100);
+      const tierLabel = isScherp ? '1.5 SCHERP' : `AA ${uaaLevel}`;
+      const modeTag = uaa.solveMode === 'bank' ? 'BANK' : uaa.solveMode === 'pen' ? 'PEN' : uaa.wallActive ? `WALL ${uaa.wallTimer.toFixed(1)}s` : 'LOCK';
+      $('rdFocusText').textContent = uaa.locked
+        ? `${tierLabel} · ${modeTag}`
+        : uaa.focus > 0 ? `${tierLabel} · ${pct}%` : `${tierLabel} · SCAN`;
+      $('rdSensorText').hidden = false;
+      $('rdSensorText').textContent = isScherp
+        ? (uaa.locked ? `ZEM-APN · ${Math.max(1, Math.round(uaa.targetDist || 0))}m` : 'ZEM-APN · BANK/PEN')
+        : (uaa.wallActive ? `WALL ${uaa.wallTimer.toFixed(1)}s` : `${a.gun}`);
+      rdHud.classList.toggle('is-d01', !!uaa.wallActive);
+      const barPct = uaa.wallActive ? (uaa.wallTimer / (uaa.wallMax || 4)) * 100 : uaa.locked ? 100 : (uaa.focus || 0) * 100;
+      $('d01Bar').style.width = Math.max(0, Math.min(100, barPct)).toFixed(1) + '%';
+      if (uaa.focusId >= 0 && (uaa.locked || uaa.focus > .04)) {
+        lockTargetId = uaa.focusId;
+        lockStyle = isScherp ? 'scherp' : 'uaa';
+        isD01 = !!uaa.wallActive;
+        isAcquiring = !uaa.locked;
+      }
+    } else if (on) {
       if (thermal) {
         if (!this.wasThermal) this.thermal.reset();
         this.thermal.draw(renderer, match, cam, t);
@@ -397,10 +430,12 @@ export class PilotEquipment {
     lock.style.left = sx.toFixed(2) + '%';
     lock.style.top = sy.toFixed(2) + '%';
 
-    if (lockStyle === 'rd40' || lockStyle === 'df40ii') {
-      const src = lockStyle === 'df40ii' ? df40 : rd;
+    if (lockStyle === 'scherp' || lockStyle === 'uaa' || lockStyle === 'rd40' || lockStyle === 'df40ii') {
+      const isUaaStyle = lockStyle === 'scherp' || lockStyle === 'uaa';
+      const src = isUaaStyle ? uaa : lockStyle === 'df40ii' ? df40 : rd;
       const isDF40 = lockStyle === 'df40ii';
-      const isAA14Lock = isDF40 && aa14On;
+      const isAA14Lock = (isDF40 && aa14On) || (lockStyle === 'uaa' && uaaLevel === '1.4');
+      const isScherpLock = lockStyle === 'scherp';
       const lp = src.lockPulse || 0;
       const fp = src.firePulse || 0;
       const dp = src.d01Pulse || 0;
@@ -408,17 +443,19 @@ export class PilotEquipment {
       const distM = Math.max(1, Math.round(src.targetDist || z));
       const rotDeg = isAcquiring
         ? (1 - foc) * 52
-        : isD01
-          ? 45 + Math.sin(t * 2.8) * 12
-          : Math.sin(t * (isAA14Lock ? 5.2 : 3.1)) * (isAA14Lock ? 6.0 : 3.5) + ((src.barrelPhase || 0) - (isDF40 ? 1 : .5)) * fp * 11;
+        : isScherpLock
+          ? Math.sin(t * 7.2) * 4.5 + (src.solveMode === 'bank' ? 45 : 0)
+          : isD01
+            ? 45 + Math.sin(t * 2.8) * 12
+            : Math.sin(t * (isAA14Lock ? 5.2 : 3.1)) * (isAA14Lock ? 6.0 : 3.5) + ((src.barrelPhase || 0) - (isDF40 ? 1 : .5)) * fp * 11;
       const scaleVal = isAcquiring
         ? 1.78 - 0.72 * foc
-        : (isAA14Lock ? 0.94 : 1.0) + fp * 0.22 - lp * 0.16 + (isD01 ? Math.sin(t * 6.0) * 0.045 : 0);
+        : (isScherpLock ? 0.90 : isAA14Lock ? 0.94 : 1.0) + fp * 0.22 - lp * 0.16 + (isD01 ? Math.sin(t * 6.0) * 0.045 : 0);
       const wavePulse = isD01 ? Math.max(dp, (t * 0.95) % 1) : lp;
       const ringScale = isD01 ? 0.75 + wavePulse * 1.95 : 0.72 + (1 - lp) * 2.15;
       const ringOp = isD01 ? Math.max(0, (1 - wavePulse) * 0.85) : lp * 0.95;
 
-      lock.classList.add(isD01 ? 'is-d01' : isDF40 ? 'is-df40ii' : 'is-rd40');
+      lock.classList.add(isScherpLock ? 'is-scherp' : isD01 ? 'is-d01' : (isDF40 || isUaaStyle) ? 'is-df40ii' : 'is-rd40');
       lock.classList.toggle('is-aa14', isAA14Lock);
       lock.classList.toggle('is-acquiring', isAcquiring);
       lock.classList.toggle('is-firing', fp > .15 && !isAcquiring);
@@ -429,24 +466,32 @@ export class PilotEquipment {
 
       if (lockTag) {
         lockTag.hidden = false;
-        lockTag.textContent = isD01
-          ? `${isDF40 ? 'D01-II' : 'D01'} ${src.d01Timer.toFixed(1)}s · ${distM}m`
-          : isAcquiring
-            ? `${isAA14Lock ? 'AA1.4' : isDF40 ? 'ARV1.3' : 'SCAN'} ${Math.round(foc * 100)}%`
-            : isAA14Lock
-              ? `AA1.4 OVERDRIVE · ${distM}m`
-              : isDF40
-                ? `ARV1.3 · AA1.3 · ${distM}m`
-                : `ARV1.2 · ${distM}m`;
+        if (isScherpLock) {
+          const mTag = src.solveMode === 'bank' ? 'BANK' : src.solveMode === 'pen' ? 'PEN' : isD01 ? `W ${src.wallTimer.toFixed(1)}s` : 'LOCK';
+          lockTag.textContent = `1.5 SCHERP · ${mTag} · ${distM}m`;
+        } else if (isUaaStyle) {
+          lockTag.textContent = `AA ${src.level || uaaLevel} · ${distM}m`;
+        } else {
+          lockTag.textContent = isD01
+            ? `${isDF40 ? 'D01-II' : 'D01'} ${src.d01Timer.toFixed(1)}s · ${distM}m`
+            : isAcquiring
+              ? `${isAA14Lock ? 'AA1.4' : isDF40 ? 'ARV1.3' : 'SCAN'} ${Math.round(foc * 100)}%`
+              : isAA14Lock
+                ? `AA1.4 · ${distM}m`
+                : isDF40
+                  ? `ARV1.3 · ${distM}m`
+                  : `ARV1.2 · ${distM}m`;
+        }
       }
 
       // Live vector tracking tether laser from reticle center (50, 50) to tracked target (sx, sy)
       if (rdOverlay && rdTether && (src.locked || foc > .32)) {
         const sxs = sx.toFixed(2), sys = sy.toFixed(2);
         setSvgHidden(rdOverlay, false);
-        rdOverlay.classList.toggle('is-df40ii', isDF40);
+        rdOverlay.classList.toggle('is-scherp', isScherpLock);
+        rdOverlay.classList.toggle('is-df40ii', isDF40 || (isUaaStyle && !isScherpLock));
         rdOverlay.classList.toggle('is-aa14', isAA14Lock);
-        rdOverlay.classList.toggle('is-d01', isD01);
+        rdOverlay.classList.toggle('is-d01', isD01 && !isScherpLock);
         rdOverlay.classList.toggle('is-fire', fp > .15 && !isAcquiring);
         rdOverlay.classList.toggle('is-acquiring', isAcquiring);
         rdTether.setAttribute('x2', sxs);
@@ -589,5 +634,144 @@ export class PilotEquipment {
 
     setSvgHidden(ov, true);
     node.hidden = true;
+  }
+
+  _ensureOverheadNode(layer, index) {
+    while (this._ohPool.length <= index) {
+      const el = document.createElement('div');
+      el.className = 'oh-tag';
+      el.hidden = true;
+      el.innerHTML =
+        '<div class="oh-top"><span class="oh-side"></span><b class="oh-name"></b><span class="oh-gun"></span><span class="oh-dist"></span></div>' +
+        '<div class="oh-bars">' +
+          '<div class="oh-bar oh-hp"><i></i></div>' +
+          '<div class="oh-bar oh-sh"><i></i></div>' +
+          '<div class="oh-bar oh-bz" hidden><i></i></div>' +
+        '</div>' +
+        '<div class="oh-pin"></div>';
+      layer.appendChild(el);
+      this._ohPool.push({
+        el,
+        side: el.querySelector('.oh-side'),
+        name: el.querySelector('.oh-name'),
+        gun: el.querySelector('.oh-gun'),
+        dist: el.querySelector('.oh-dist'),
+        hpFill: el.querySelector('.oh-hp > i'),
+        shFill: el.querySelector('.oh-sh > i'),
+        bzRow: el.querySelector('.oh-bz'),
+        bzFill: el.querySelector('.oh-bz > i'),
+        lastSide: '',
+        lastName: '',
+        lastGun: '',
+        lastDist: ''
+      });
+    }
+    return this._ohPool[index];
+  }
+
+  /**
+   * Projects at-a-glance Enemy / Ally overhead identification tags above each actor's head.
+   * Strictly Fair-Play: enemies require clear optical LOS (obstruction + AeroVortex smoke)
+   * and are completely hidden while Shaffer cloak is active.
+   */
+  _drawOverheads(renderer, match, cam, active, viewActor, isFirstPerson) {
+    const layer = $('overheadLayer');
+    if (!layer) return;
+    if (!active || !match?.actors?.length || !cam) {
+      for (let i = 0; i < this._ohPool.length; i++) this._ohPool[i].el.hidden = true;
+      return;
+    }
+    const f = unit(sub(cam.target, cam.pos));
+    const r = unit(cross(f, [0, 1, 0]));
+    const u = cross(r, f);
+    const tan = Math.tan(cam.fov * Math.PI / 360);
+    const asp = renderer?.aspect || (innerWidth / Math.max(1, innerHeight));
+    const spec = !!match.spectating;
+    const myTeam = spec ? 0 : (viewActor?.team ?? match.player?.team ?? 0);
+
+    let used = 0;
+    for (const e of match.actors) {
+      if (!e?.alive) continue;
+      if (!spec && e === match.player) continue;
+      if (spec && isFirstPerson && e === viewActor) continue;
+
+      const isAlly = e.team === myTeam;
+      const isEnemy = !isAlly;
+      const [cx, cz] = bodyCenter(e);
+      const tScale = torso(e);
+      const anchor = [cx, e.y + 1.98 * tScale + (e.crouch > 0.3 ? 0.08 : 0.14), cz];
+      const rel = sub(anchor, cam.pos);
+      const z = dot(rel, f);
+      if (z < 0.72 || z > 140) continue;
+
+      const sx = 50 + 50 * dot(rel, r) / (z * tan * asp);
+      const sy = 50 - 50 * dot(rel, u) / (z * tan);
+      if (sx < -4 || sx > 104 || sy < -4 || sy > 102) continue;
+
+      const chest = [cx, e.y + 1.24 * tScale, cz];
+      const head = [cx, e.y + 1.66 * tScale, cz];
+      const clearLos = clearOpticalPath(cam.pos, chest, match.aeroVortex) ||
+        clearOpticalPath(cam.pos, head, match.aeroVortex);
+
+      if (!spec && isEnemy) {
+        if ((e.shafferTimer || 0) > 0) continue;
+        if (!clearLos) continue;
+      }
+
+      const slot = this._ensureOverheadNode(layer, used++);
+      const el = slot.el;
+      el.hidden = false;
+      el.classList.toggle('is-ally', isAlly);
+      el.classList.toggle('is-enemy', isEnemy);
+      el.classList.toggle('is-occluded', !clearLos && !spec);
+      el.classList.toggle('is-cloak', (e.shafferTimer || 0) > 0);
+      el.classList.toggle('is-hit', (e.hitFlash || 0) > 0.15);
+
+      const scale = clamp(1.10 - z * 0.0075, 0.72, 1.06);
+      el.style.left = sx.toFixed(2) + '%';
+      el.style.top = sy.toFixed(2) + '%';
+      el.style.transform = `translate(-50%, -100%) scale(${scale.toFixed(3)})`;
+      el.style.zIndex = String(Math.max(1, 200 - Math.round(z)));
+
+      const sideText = spec
+        ? (e.team === 0 ? 'A' : 'B')
+        : (isAlly ? '味方' : '敵');
+      if (slot.lastSide !== sideText) {
+        slot.lastSide = sideText;
+        slot.side.textContent = sideText;
+      }
+
+      const nameText = e.name || '';
+      if (slot.lastName !== nameText) {
+        slot.lastName = nameText;
+        slot.name.textContent = nameText;
+      }
+
+      const aaTag = e.aa?.level === '1.5' ? ' · 1.5' : '';
+      const relTag = e.reload > 0 ? ' 装填' : '';
+      const gunText = `${e.gun}${aaTag}${relTag}`;
+      if (slot.lastGun !== gunText) {
+        slot.lastGun = gunText;
+        slot.gun.textContent = gunText;
+      }
+
+      const distText = `${Math.max(1, Math.round(z))}m`;
+      if (slot.lastDist !== distText) {
+        slot.lastDist = distText;
+        slot.dist.textContent = distText;
+      }
+
+      const maxHp = e.maxHp || 100;
+      const hpPct = clamp((e.hp / maxHp) * 100, 0, 100);
+      const shPct = clamp((e.shield / OH_SHIELD_MAX) * 100, 0, 100);
+      const bzVal = Math.max(0, e.baizerShield || 0);
+      slot.hpFill.style.width = hpPct.toFixed(1) + '%';
+      slot.shFill.style.width = shPct.toFixed(1) + '%';
+      slot.bzRow.hidden = bzVal <= 0;
+      if (bzVal > 0) slot.bzFill.style.width = clamp((bzVal / OH_BAIZER_MAX) * 100, 0, 100).toFixed(1) + '%';
+    }
+    for (let i = used; i < this._ohPool.length; i++) {
+      this._ohPool[i].el.hidden = true;
+    }
   }
 }

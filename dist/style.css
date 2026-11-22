@@ -3309,9 +3309,741 @@ body.light-mode #skillBar,
 body.light-mode #pad,
 body.light-mode #touchFire,
 body.light-mode .radio-line,
-body.light-mode #syncBanner {
+body.light-mode #syncBanner,
+body.light-mode #specBar {
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
   box-shadow: none !important;
 }
+
+/* ===== 実験場 (Lab Mode) & Auto-Aim 1.5 Scherp ===== */
+:root {
+  --scherp: #38ffbe;
+  --scherp-bright: #c8ffef;
+  --scherp-dim: #124538;
+}
+
+#modes.mode-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+@media (max-width: 560px) {
+  #modes.mode-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+#modes button.is-lab[aria-pressed="true"] {
+  border-color: var(--scherp);
+  background: linear-gradient(180deg, #103930e8, #0a2420ee);
+  box-shadow: inset 0 0 0 1px #38ffbe66, 0 0 14px #38ffbe28;
+}
+#modes button.is-lab b {
+  color: var(--scherp-bright);
+}
+
+.badge-scherp,
+.tag-scherp {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font: 700 9.5px/1.4 var(--mono);
+  letter-spacing: .06em;
+  color: #062118;
+  background: linear-gradient(90deg, #38ffbe, #8effdc);
+}
+
+.lab-config {
+  border: 1px solid #38ffbe3b;
+  background: #0a1c1ce0;
+  padding: 9px 11px 10px;
+  border-radius: 6px;
+}
+.lab-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 12px;
+}
+@media (max-width: 680px) {
+  .lab-grid {
+    grid-template-columns: 1fr;
+    gap: 5px;
+  }
+}
+.lab-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-height: 28px;
+}
+.lab-row > label {
+  font: 700 10.5px/1.2 var(--mono);
+  color: #a8c7be;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+.lab-row .seg.compact {
+  display: inline-flex;
+  gap: 3px;
+}
+.lab-row .seg.compact button {
+  min-height: 25px;
+  padding: 2px 7px;
+  font-size: 10.5px;
+  border-radius: 4px;
+}
+.lab-pair,
+.lab-tri {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+.lab-t {
+  font: 700 10px/1 var(--mono);
+  color: #c7d9d3;
+  padding: 0 2px;
+}
+.lab-t.cyan { color: var(--cyan); }
+.lab-t.orange { color: var(--orange); }
+.lab-sel {
+  height: 25px;
+  max-width: 112px;
+  padding: 0 5px;
+  border: 1px solid #6b918852;
+  border-radius: 4px;
+  background: #0f2526;
+  color: #e4f2ee;
+  font: 600 10.5px/1 var(--mono);
+  outline: none;
+}
+.lab-sel:focus {
+  border-color: var(--scherp);
+}
+.lab-tri .lab-sel {
+  max-width: 82px;
+}
+.lab-mini-btn {
+  height: 25px;
+  padding: 0 7px;
+  border: 1px solid #6b918852;
+  border-radius: 4px;
+  background: #102424;
+  color: #b7ccc5;
+  font: 700 10px/1 var(--mono);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.lab-mini-btn.is-on {
+  border-color: var(--scherp);
+  color: var(--scherp-bright);
+  background: #103a30;
+}
+
+/* Lab & Spectator Floating Control Bar */
+#specBar {
+  position: absolute;
+  top: 56px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 12;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: center;
+  max-width: calc(100vw - 24px);
+  padding: 4px 8px;
+  border-radius: 8px;
+  border: 1px solid #38ffbe40;
+  background: #0b1b1dd6;
+  backdrop-filter: blur(8px);
+  pointer-events: auto;
+}
+#specBar[hidden] { display: none; }
+#specBar .seg.compact button {
+  min-height: 22px;
+  padding: 2px 6px;
+  font: 700 10px/1 var(--mono);
+}
+#specActors {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-wrap: wrap;
+}
+.spec-chip {
+  height: 22px;
+  padding: 0 7px;
+  border: 1px solid #ffffff26;
+  border-radius: 4px;
+  background: #132528d8;
+  color: #dbe9e5;
+  font: 700 10px/1 var(--mono);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.spec-chip.cyan { border-color: #4ee4ff55; }
+.spec-chip.orange { border-color: #ff9a5255; }
+.spec-chip.is-sel {
+  background: #16443be8;
+  border-color: var(--scherp);
+  color: #ffffff;
+  box-shadow: 0 0 8px #38ffbe44;
+}
+.spec-chip.is-dead { opacity: .45; }
+.spec-chip em {
+  font-style: normal;
+  font-size: 8.5px;
+  padding: 1px 3px;
+  border-radius: 2px;
+  background: #38ffbe28;
+  color: var(--scherp-bright);
+}
+#labLiveStats {
+  font: 700 10px/1.2 var(--mono);
+  color: var(--scherp-bright);
+  padding: 0 4px;
+  white-space: nowrap;
+}
+
+/* 1.5 Scherp Optics (Reticle, Lock Bracket, Tether, Status Box) */
+#rdHud.is-scherp {
+  border-left: 2px solid var(--scherp);
+  background: #08201bd8;
+  box-shadow: 0 0 14px #38ffbe26;
+}
+#rdHud.is-scherp #rdFocusText {
+  color: var(--scherp-bright);
+  font-weight: 700;
+}
+#rdHud.is-scherp .d01-line i {
+  background: linear-gradient(90deg, #18d99a, #7effd4);
+}
+#reticle.is-scherp i,
+#reticle.is-scherp em {
+  background: var(--scherp);
+  box-shadow: 0 0 6px #38ffbeaa;
+}
+#lockDot.is-scherp {
+  --lock: #38ffbe;
+  filter: drop-shadow(0 0 6px #38ffbecc);
+}
+#lockDot.is-scherp i {
+  border-width: 2px 0 0 2px;
+}
+#lockDot.is-scherp #lockTag {
+  color: #d8fff2;
+  background: #07221be0;
+  border-color: #38ffbe88;
+}
+#rdOverlay.is-scherp {
+  filter: drop-shadow(0 0 6px #38ffbecc);
+}
+#rdOverlay.is-scherp #rdTetherGlow {
+  stroke: #38ffbe48;
+  stroke-width: 6px;
+}
+#rdOverlay.is-scherp #rdTether {
+  stroke: #8cffdcff;
+  stroke-width: 1.9px;
+  stroke-dasharray: none;
+}
+.syn-chips .chip-scherp {
+  border-color: #38ffbe66;
+  color: var(--scherp-bright);
+}
+
+/* ==========================================================================
+   Round 2: 10-Weapon Grid (RD 50), Separate AA 1.5, 3-Group Settings,
+            Overhead Enemy/Ally Identification Tags & Enlarged Bottom-Center HUD
+   ========================================================================== */
+
+/* 10-Weapon Clean 5x2 Loadout Grid + RD 50 Styling */
+#loadout.guns {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 5px;
+}
+#loadout button[data-value="DF40 II"] {
+  grid-column: auto;
+}
+#loadout button[data-value="RD 50"][aria-pressed="true"] {
+  border-color: #f6c453;
+  background: linear-gradient(135deg, #e8a83038, #6b522028);
+  color: #fff0c2;
+  box-shadow: inset 0 -3px #f6c453, 0 0 14px #f2b7403a;
+}
+#reticle.is-rd50 i,
+#reticle.is-rd50 em {
+  background: #ffe090;
+  box-shadow: 0 0 4px #f2b444aa, 0 0 1px #101d1f;
+}
+@media (max-width: 600px) {
+  #loadout.guns {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* Separate Auto-Aim Mode Selector (OFF / 標準 / 1.5 Scherp) */
+.aa-mode-wrap {
+  margin-bottom: 10px;
+}
+.aa-mode-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+.aa-mode-grid button {
+  min-height: 36px;
+  padding: 6px 10px;
+  font-size: 12.5px;
+  text-align: center;
+}
+.aa-mode-grid button.is-scherp[aria-pressed="true"] {
+  border-color: var(--scherp);
+  background: linear-gradient(135deg, #165242e8, #0c2c26ee);
+  color: var(--scherp-bright);
+  box-shadow: inset 0 -3px var(--scherp), 0 0 14px #38ffbe36;
+}
+#hudAutoAim.is-scherp,
+#lobbyAutoAim.is-scherp,
+#pauseAutoAim.is-scherp {
+  border-color: var(--scherp);
+  background: linear-gradient(135deg, #134a3be6, #0b2b25ee);
+  color: var(--scherp-bright);
+  box-shadow: 0 0 12px #38ffbe33;
+}
+
+/* Lab 1..5 Team Count Buttons */
+#labCountA button,
+#labCountB button {
+  padding: 2px 6px;
+  min-width: 22px;
+}
+
+/* 3-Group Settings Layout (高品質 / 軽量 / その他) */
+.settings-group {
+  margin: 10px 0 14px;
+  padding: 10px 14px 4px;
+  border-radius: 8px;
+  background: #101e21b8;
+  border: 1px solid #9eb8b02c;
+}
+.settings-group:first-child {
+  margin-top: 8px;
+}
+.settings-group[data-group="hq"] {
+  border-top: 2px solid #e8bf68;
+}
+.settings-group[data-group="lite"] {
+  border-top: 2px solid #59e2b8;
+}
+.settings-group[data-group="other"] {
+  border-top: 2px solid #72c4d4;
+}
+.settings-group-title {
+  margin: 0 0 6px;
+  font: 800 12px/1.2 var(--mono);
+  letter-spacing: .14em;
+  color: #dbe8e2;
+  text-transform: uppercase;
+}
+.settings-group[data-group="hq"] .settings-group-title { color: #f6d58b; }
+.settings-group[data-group="lite"] .settings-group-title { color: #84f5ce; }
+.settings-group[data-group="other"] .settings-group-title { color: #9ce6f2; }
+.settings-group .lite-row {
+  margin: 0 0 6px;
+  padding: 8px 10px;
+}
+.hq-toggle[aria-checked="true"] {
+  background: linear-gradient(90deg, #42c9be, #efc462);
+  border-color: #aefaf2;
+  box-shadow: 0 0 14px #5ce8dc48;
+}
+.tech-details {
+  margin: 4px 0 8px;
+  border-top: 1px solid #a2b8b024;
+  padding-top: 6px;
+}
+.tech-details > summary {
+  cursor: pointer;
+  user-select: none;
+  padding: 6px 4px;
+  font: 700 12px/1.3 var(--mono);
+  letter-spacing: .06em;
+  color: #a9c4bc;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.tech-details > summary::-webkit-details-marker { display: none; }
+.tech-details > summary::after {
+  content: '▸';
+  font-size: 13px;
+  color: var(--gold);
+  transition: transform .16s ease;
+}
+.tech-details[open] > summary::after {
+  transform: rotate(90deg);
+}
+.tech-details > summary:hover { color: #eef5ee; }
+#settingsAutoAimMode button {
+  min-height: 34px;
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+/* Overhead Enemy / Ally Identification Tags */
+#overheadLayer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 3;
+}
+.oh-tag {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  min-width: 112px;
+  padding: 4px 8px 5px;
+  border-radius: 6px;
+  background: #0a161ad8;
+  border: 1.5px solid #88d8e6aa;
+  box-shadow: 0 4px 14px #040c1088;
+  transform-origin: 50% 100%;
+  will-change: left, top, transform;
+  pointer-events: none;
+  white-space: nowrap;
+}
+.oh-tag.is-ally {
+  border-color: #36efffcc;
+  background: linear-gradient(180deg, #0b242ee0, #081820e0);
+  box-shadow: 0 3px 12px #05182288, 0 0 10px #36efff2c;
+}
+.oh-tag.is-enemy {
+  border-color: #ff4252e0;
+  background: linear-gradient(180deg, #2c0d14e6, #1a080ce6);
+  box-shadow: 0 3px 14px #18030899, 0 0 12px #ff384c38;
+}
+.oh-tag.is-occluded {
+  opacity: .56;
+  border-style: dashed;
+}
+.oh-tag.is-cloak {
+  opacity: .68;
+  border-color: #7da8ffcc;
+}
+.oh-tag.is-hit {
+  border-color: #ffffff;
+  box-shadow: 0 0 16px #ff7458cc;
+}
+.oh-top {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font: 700 10.5px/1.1 var(--mono);
+  letter-spacing: .03em;
+}
+.oh-side {
+  display: inline-block;
+  padding: 1.5px 5px;
+  border-radius: 3px;
+  font: 800 9.5px/1.15 var(--ui);
+  letter-spacing: .04em;
+}
+.oh-tag.is-ally .oh-side {
+  background: #28e5f5;
+  color: #051b22;
+}
+.oh-tag.is-enemy .oh-side {
+  background: #ff3b4a;
+  color: #fff6f7;
+}
+.oh-name {
+  font-weight: 800;
+  font-size: 11px;
+  color: #f4f9f7;
+}
+.oh-tag.is-ally .oh-name { color: #d6fbff; }
+.oh-tag.is-enemy .oh-name { color: #ffe0e3; }
+.oh-gun {
+  font-size: 9.5px;
+  color: #c2d4d0;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: #ffffff14;
+}
+.oh-dist {
+  font-size: 9.5px;
+  color: #9cb4b2;
+}
+.oh-bars {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 2.5px;
+}
+.oh-bar {
+  width: 100%;
+  height: 5px;
+  border-radius: 999px;
+  background: #ffffff26;
+  overflow: hidden;
+}
+.oh-bar i {
+  display: block;
+  height: 100%;
+  width: 100%;
+  border-radius: 999px;
+  transition: width .08s linear;
+}
+.oh-tag.is-ally .oh-hp i {
+  background: linear-gradient(90deg, #28d8c8, #7cf8e8);
+}
+.oh-tag.is-enemy .oh-hp i {
+  background: linear-gradient(90deg, #ff3448, #ff7a64);
+}
+.oh-bar.oh-sh { height: 3.5px; }
+.oh-bar.oh-sh i {
+  background: linear-gradient(90deg, #3ac8ff, #9df2ff);
+}
+.oh-bar.oh-bz { height: 3.5px; }
+.oh-bar.oh-bz i {
+  background: linear-gradient(90deg, #b856ff, #f2b4ff);
+}
+.oh-pin {
+  position: absolute;
+  bottom: -6px;
+  left: 50%;
+  width: 9px;
+  height: 9px;
+  transform: translateX(-50%) rotate(45deg);
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+}
+.oh-tag.is-ally .oh-pin {
+  background: #081820;
+  color: #36efff;
+}
+.oh-tag.is-enemy .oh-pin {
+  background: #1a080c;
+  color: #ff4252;
+}
+body.light-mode .oh-tag {
+  box-shadow: none !important;
+}
+
+/* ==========================================================================
+   Enlarged Bottom-Center Vitals & Skill Dock (#bottomDock)
+   ========================================================================== */
+#bottomDock {
+  position: absolute;
+  left: 50%;
+  bottom: max(16px, env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  z-index: 6;
+  pointer-events: none;
+}
+#bottomDock[hidden] { display: none; }
+
+/* Enlarged Skill Bar inside Bottom-Center Dock */
+#bottomDock #skillBar {
+  position: static;
+  left: auto;
+  bottom: auto;
+  transform: none;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 8px 14px;
+  border-radius: 10px;
+  background: #0e1e23dc;
+  border: 1px solid #cce0d946;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 6px 22px #040d1177;
+  pointer-events: auto;
+}
+#bottomDock .skill-meta {
+  gap: 4px;
+  padding: 0 10px 0 2px;
+}
+#bottomDock .skill-pips {
+  gap: 6px;
+}
+#bottomDock .skill-pips i {
+  width: 11px;
+  height: 11px;
+}
+#bottomDock #skillProg {
+  font-size: 11.5px;
+  color: #cfe0da;
+}
+#bottomDock .skill-btn {
+  height: 42px;
+  padding: 0 18px;
+  border-radius: 8px;
+  font-size: 15px;
+  gap: 8px;
+  letter-spacing: .04em;
+}
+#bottomDock .skill-btn small {
+  width: auto;
+  min-width: 28px;
+  height: 22px;
+  padding: 0 6px;
+  font-size: 11px;
+  border-radius: 4px;
+}
+
+/* Enlarged Vitals Panel (HP / Shield / BAIZER) centered at bottom */
+#bottomDock #vitals {
+  position: static;
+  left: auto;
+  right: auto;
+  top: auto;
+  bottom: auto;
+  min-width: 330px;
+  padding: 12px 18px;
+  border-radius: 10px;
+  background: #0d1d22de;
+  border: 1px solid #cde0d846;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 8px 26px #040d117a;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+#bottomDock #vitals .vrow {
+  gap: 10px;
+}
+#bottomDock #vitals .vrow svg {
+  width: 19px;
+  height: 19px;
+}
+#bottomDock #vitals .vrow strong {
+  font-size: 24px;
+  line-height: 1;
+  width: 48px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+#bottomDock #vitals .vrow.shield strong,
+#bottomDock #vitals .vrow.baizer strong {
+  font-size: 19px;
+}
+#bottomDock #vitals .meter {
+  flex: 1;
+  width: auto;
+  min-width: 210px;
+  height: 12px;
+  border-radius: 6px;
+  background: #ffffff28;
+  box-shadow: inset 0 1px 3px #00000066;
+}
+#bottomDock #vitals .vrow.hp .meter i {
+  background: linear-gradient(90deg, #52e8a8, #eef5d8);
+  box-shadow: 0 0 10px #52e8a855;
+}
+#bottomDock #vitals .vrow.shield .meter {
+  height: 9px;
+}
+#bottomDock #vitals .vrow.shield .meter i {
+  background: linear-gradient(90deg, #3ac8f5, #9cf6ff);
+  box-shadow: 0 0 8px #3ac8f566;
+}
+#bottomDock #vitals .vrow.baizer .meter {
+  height: 9px;
+}
+
+/* Re-anchor left/top hints cleanly around the centered #bottomDock */
+#dfHud, #rdHud {
+  left: max(14px, env(safe-area-inset-left));
+  bottom: max(16px, env(safe-area-inset-bottom));
+}
+#startHint {
+  top: calc(max(12px, env(safe-area-inset-top)) + 64px);
+  bottom: auto;
+  font-size: 11px;
+  padding: 5px 12px;
+}
+
+/* Mobile / Touch Bottom-Center Enlarged Dock (Fits cleanly between Pad & Fire) */
+body.touch #bottomDock {
+  left: 50%;
+  bottom: max(8px, env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  gap: 5px;
+}
+body.touch #bottomDock #vitals {
+  position: static;
+  top: auto;
+  left: auto;
+  bottom: auto;
+  min-width: 176px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  gap: 4px;
+  background: #0d1d22c8;
+}
+body.touch #bottomDock #vitals .vrow { gap: 6px; }
+body.touch #bottomDock #vitals .vrow svg { width: 14px; height: 14px; }
+body.touch #bottomDock #vitals .vrow strong { font-size: 16px; width: 32px; }
+body.touch #bottomDock #vitals .vrow.shield strong,
+body.touch #bottomDock #vitals .vrow.baizer strong { font-size: 13.5px; }
+body.touch #bottomDock #vitals .meter { min-width: 106px; height: 8px; }
+body.touch #bottomDock #vitals .vrow.shield .meter,
+body.touch #bottomDock #vitals .vrow.baizer .meter { height: 6px; }
+
+body.touch #bottomDock #skillBar {
+  padding: 5px 9px;
+  gap: 7px;
+  border-radius: 8px;
+}
+body.touch #bottomDock .skill-pips i { width: 8px; height: 8px; }
+body.touch #bottomDock #skillProg { font-size: 9px; }
+body.touch #bottomDock .skill-btn {
+  height: 32px;
+  padding: 0 12px;
+  font-size: 12px;
+}
+@media (max-width: 680px) {
+  body.touch #bottomDock {
+    bottom: calc(var(--ctrl-b) + max(var(--pad-sz), var(--fire-sz)) + 68px);
+  }
+}
+@media (max-height: 580px) {
+  #bottomDock {
+    bottom: max(8px, env(safe-area-inset-bottom));
+    gap: 5px;
+  }
+  #bottomDock #vitals {
+    min-width: 256px;
+    padding: 8px 13px;
+  }
+  #bottomDock #vitals .vrow strong { font-size: 19px; width: 40px; }
+  #bottomDock #vitals .meter { min-width: 158px; height: 9px; }
+  #bottomDock .skill-btn { height: 34px; font-size: 13px; padding: 0 13px; }
+  body.touch #bottomDock {
+    bottom: max(6px, env(safe-area-inset-bottom));
+  }
+}
+body.light-mode #bottomDock #vitals,
+body.light-mode #bottomDock #skillBar {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  box-shadow: none !important;
+}
+
+
 

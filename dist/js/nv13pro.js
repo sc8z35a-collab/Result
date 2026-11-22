@@ -23,6 +23,7 @@ export const WEAPON_BAND = {
   RD30: {min: 10, ideal: 20, max: 36, burstMax: 5, cap: 40},
   RD20: {min: 11, ideal: 21, max: 38, burstMax: 4, cap: 20},
   RD40: {min: 14, ideal: 26, max: 48, burstMax: 6, cap: 65},
+  'RD 50': {min: 9, ideal: 22, max: 44, burstMax: 7, cap: 50},
   'DF40 II': {min: 12, ideal: 25, max: 48, burstMax: 6, cap: 88}
 };
 
@@ -1329,8 +1330,9 @@ export class NV13Pro extends NV12 {
     }
 
     for (const a of this.match.actors) {
-      if (!a.alive || a.human) continue;
+      if (!a.alive || a.human || (this.teamFilter != null && a.team !== this.teamFilter)) continue;
       const b = this.brains.get(a.id);
+      if (!b) continue;
 
       if (t - b.damageClock > 1.55) b.recentDamage = Math.max(0, b.recentDamage - dt * 19);
 
@@ -1359,7 +1361,7 @@ export class NV13Pro extends NV12 {
       postureStep(a, dt, p.crouch && a.onGround, p.lean, p.ads);
       const sprinting = b.state === '戦術退避' || b.state === '連携側面展開' || b.state === 'リロード狩り' || b.state === '補給確保' || b.state === '前進展開';
       a.paceFactor = b.vault ? 1.14 : sprinting ? 1.18 : 1 - a.crouch * .35 - a.aimPose * .09;
-      vertical(a, dt, floorAt);
+      vertical(a, dt, floorAt, this.match.gravityScale || 1);
 
       while (b.path.length && dist2(b.path[0][0], b.path[0][1], a.x, a.z) < .65) b.path.shift();
       const pt = b.path[0];
@@ -1443,31 +1445,40 @@ export class NV13Pro extends NV12 {
         wantYaw = Math.atan2(b.lastPos[0] - a.x, -(b.lastPos[1] - a.z));
       }
 
-      const turnRate = (b.seen ? 9.6 : 6.4) * (1 - a.aimPose * .10);
-      a.yaw += clamp(angleDiff(wantYaw, a.yaw), -turnRate * dt, turnRate * dt);
-      a.pitch += clamp(wantPitch - a.pitch, -6.5 * dt, 6.5 * dt);
+      const aa = a.aa;
+      const aaTracking = !!(aa?.locked && aa.level !== 'off' && aa.level !== '1.1');
+      const scherpFireReady = !!(aa?.locked && aa.level === '1.5' && (aa.solveMode === 'direct' || aa.solveMode === 'pen' || aa.solveMode === 'bank'));
+      if (!aaTracking) {
+        const turnRate = (b.seen ? 9.6 : 6.4) * (1 - a.aimPose * .10);
+        a.yaw += clamp(angleDiff(wantYaw, a.yaw), -turnRate * dt, turnRate * dt);
+        a.pitch += clamp(wantPitch - a.pitch, -6.5 * dt, 6.5 * dt);
+      }
 
       // Tactical Reload Discipline (reload behind cover whenever safe and magazine < 45%)
-      if (a.reload <= 0 && a.stock > 0 && (a.mag === 0 || (!b.seen && a.mag < wpn.capacity * .45 && b.state !== 'リロード狩り'))) {
+      if (a.reload <= 0 && a.stock > 0 && (a.mag === 0 || (!b.seen && !scherpFireReady && a.mag < wpn.capacity * .45 && b.state !== 'リロード狩り'))) {
         this.match.reload(a);
       }
 
-      // Trigger Discipline + Range-Controlled Bursting + Suppressive Fire!
+      // Trigger Discipline + Range-Controlled Bursting + Suppressive Fire + Scherp 1.5!
       const canShootSeen = b.seen && b.target && b.peekPhase !== 'bait';
-      if ((canShootSeen || suppressMode) && a.mag > 0 && a.reload <= 0 && a.cooldown <= 0 && !a.burstLeft && t >= b.burstPauseUntil) {
-        const d = aimTargetPos ? Math.hypot(aimTargetPos[0] - eye[0], aimTargetPos[2] - eye[2]) : 25;
+      if ((canShootSeen || suppressMode || scherpFireReady) && a.mag > 0 && a.reload <= 0 && a.cooldown <= 0 && !a.burstLeft && t >= b.burstPauseUntil) {
+        const d = aimTargetPos ? Math.hypot(aimTargetPos[0] - eye[0], aimTargetPos[2] - eye[2]) : (aa?.targetDist || 25);
         const align = Math.abs(angleDiff(wantYaw, a.yaw));
         const tol = (suppressMode ? .14 : .085 + (d < 14 ? .06 : 0)) * (1 + b.spread * .45);
         const maxEngageD = Math.max(70, band.max * 1.4);
-        if (align < tol && d < maxEngageD) {
-          // Human-like subtle aim jitter (tighter when crouching/ADS or with MS10/SW T)
-          const jitter = (.010 + b.spread * .018) * (1 - a.crouch * .32 - a.aimPose * .22) * (a.gun === 'MS10' ? .82 : 1);
+        if (scherpFireReady || ((aaTracking || align < tol) && d < maxEngageD)) {
+          // Human-like subtle aim jitter (zero jitter under Scherp 1.5!)
+          const jitter = scherpFireReady ? 0 : (.010 + b.spread * .018) * (1 - a.crouch * .32 - a.aimPose * .22) * (a.gun === 'MS10' ? .82 : 1);
           const saveY = a.yaw, saveP = a.pitch;
-          a.yaw += (b.rng() - .5) * jitter;
-          a.pitch = clamp(a.pitch + (b.rng() - .5) * jitter * .65, -1.2, 1.2);
+          if (jitter > 0) {
+            a.yaw += (b.rng() - .5) * jitter;
+            a.pitch = clamp(a.pitch + (b.rng() - .5) * jitter * .65, -1.2, 1.2);
+          }
           if (this.match.trigger(a)) {
             b.burstCount++;
-            if (suppressMode) {
+            if (scherpFireReady) {
+              b.burstPauseUntil = t;
+            } else if (suppressMode) {
               this.metrics.suppress++;
               b.burstPauseUntil = t + .32;
             } else if (a.gun === 'MS10' && d > 26 && b.burstCount >= 4) {
@@ -1482,7 +1493,7 @@ export class NV13Pro extends NV12 {
           a.yaw = saveY;
           a.pitch = saveP;
         }
-      } else if (!canShootSeen && !suppressMode) {
+      } else if (!canShootSeen && !suppressMode && !scherpFireReady) {
         b.burstCount = 0;
       }
     }

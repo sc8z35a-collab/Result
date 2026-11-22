@@ -172,7 +172,7 @@ export class NV1 {
     const match = this.match, t = match.time, eye = eyeOf(a);
     let choice = null, best = -Infinity;
     for (const e of match.actors) {
-      if (!e.alive || e.team === a.team)continue;
+      if (!e.alive || e.team === a.team || (e.shafferTimer || 0) > 0)continue;
       const dx = e.x - a.x, dz = e.z - a.z, range = Math.hypot(dx, dz), yaw = Math.atan2(dx, -dz);
       if (range > 92 || (range > 7 && Math.abs(angleDiff(yaw, a.yaw)) > (b.targetId === e.id ? 1.68 : 1.22)))continue;
       if (obstruction(eye, targetPoint(e)) < 1)continue;
@@ -266,8 +266,9 @@ export class NV1 {
       this.trafficTime = t + .55
     }
     for (const a of this.match.actors) {
-      if (!a.alive || a.human)continue;
+      if (!a.alive || a.human || (this.teamFilter != null && a.team !== this.teamFilter))continue;
       const b = this.brains.get(a.id);
+      if (!b) continue;
       if (t >= b.sightAt)this.perceive(a, b);
       if (t >= b.planAt)this.pickGoal(a, b);
       while (b.path.length && Math.hypot(b.path[0][0] - a.x, b.path[0][1] - a.z) < .63)b.path.shift();
@@ -305,6 +306,9 @@ export class NV1 {
         b.lastProgress = [a.x, a.z];
         b.progressAt = t + 1.3
       }
+      const aa = a.aa;
+      const aaTracking = !!(aa?.locked && aa.level !== 'off' && aa.level !== '1.1');
+      const scherpFireReady = !!(aa?.locked && aa.level === '1.5' && (aa.solveMode === 'direct' || aa.solveMode === 'pen' || aa.solveMode === 'bank'));
       const fresh = b.seen && t - b.seenAt < .39;
       let desiredYaw = a.yaw, desiredPitch = 0, range = 0;
       if (fresh) {
@@ -326,14 +330,17 @@ export class NV1 {
       } else {
         desiredYaw += Math.sin(t * .8 + a.id) * .38 * dt
       }
-      const turn = dt * (fresh ? 4.5 : 3.2);
-      a.yaw += clamp(angleDiff(desiredYaw, a.yaw), -turn, turn);
-      a.pitch = mix(a.pitch, desiredPitch, 1 - Math.exp(-9 * dt));
-      if (fresh && t > b.reactionAt && t > b.triggerAt && Math.abs(angleDiff(desiredYaw, a.yaw)) < .085 && Math.abs(desiredPitch - a.pitch) < .09) {
-        this.match.trigger(a);
-        b.triggerAt = t + this.match.weapon(a).interval * (1.10 + b.rng() * .62) + (b.rng() > .83 ? .24 : 0)
+      if (!aaTracking) {
+        const turn = dt * (fresh ? 4.5 : 3.2);
+        a.yaw += clamp(angleDiff(desiredYaw, a.yaw), -turn, turn);
+        a.pitch = mix(a.pitch, desiredPitch, 1 - Math.exp(-9 * dt));
       }
-      if (a.mag === 0 || (!fresh && a.mag < this.match.weapon(a).capacity * .46 && b.rng() < dt * .7))this.match.reload(a)
+      if ((scherpFireReady && t > b.triggerAt) || (fresh && t > b.reactionAt && t > b.triggerAt && (aaTracking || (Math.abs(angleDiff(desiredYaw, a.yaw)) < .085 && Math.abs(desiredPitch - a.pitch) < .09)))) {
+        this.match.trigger(a);
+        const w = this.match.weapon(a);
+        b.triggerAt = t + (scherpFireReady ? w.interval * 1.02 : w.interval * (1.10 + b.rng() * .62) + (b.rng() > .83 ? .24 : 0))
+      }
+      if (a.mag === 0 || (!fresh && !scherpFireReady && a.mag < this.match.weapon(a).capacity * .46 && b.rng() < dt * .7))this.match.reload(a)
     }
   }
 }

@@ -271,6 +271,7 @@ export class FluxGI {
           else inject(s.p[0], s.p[2], 0.56, 0.88, 1.55, 0.34, 1);
         }
         else if (s.gun === 'RD40') inject(s.p[0], s.p[2], 1.38, 0.36, 0.34, 0.32, 1);
+        else if (s.gun === 'RD 50') inject(s.p[0], s.p[2], 1.32, 0.96, 0.34, 0.24, 1);
         else if (s.gun === 'RD30') inject(s.p[0], s.p[2], 1.28, 0.78, 0.26, 0.24, 1);
         else if (s.gun === 'RD20') inject(s.p[0], s.p[2], 0.26, 1.05, 1.32, 0.24, 1);
         else if (s.source === 'p1') inject(s.p[0], s.p[2], 1.02, 0.42, 1.45, 0.36, 1);
@@ -280,16 +281,17 @@ export class FluxGI {
       for (const e of match.effects) {
         const frac = clamp(e.life / (e.max || 0.2), 0, 1);
         if (frac < 0.05) continue;
-        if (e.kind === 'kill') inject(e.p[0], e.p[2], 1.65, 0.92, 0.32, frac * 1.45, 3);
-        else if (e.kind === 'break') inject(e.p[0], e.p[2], 0.28, 1.35, 1.65, frac * 1.25, 3);
-        else if (e.kind === 'tanker') inject(e.p[0], e.p[2], 0.36, 1.35, 1.12, frac * 1.35, 3);
-        else if (e.kind === 'ricochet') inject(e.p[0], e.p[2], 1.55, 1.12, 0.44, frac * 0.95, 2);
-        else if (e.kind === 'penetrate') inject(e.p[0], e.p[2], 1.35, 0.85, 0.36, frac * 0.75, 2);
+        if (e.kind === 'kill') inject(e.p[0], e.p[2], 1.35, 0.82, 0.32, frac * 0.95, 2);
+        else if (e.kind === 'break') inject(e.p[0], e.p[2], 0.28, 1.15, 1.45, frac * 0.85, 2);
+        else if (e.kind === 'tanker') inject(e.p[0], e.p[2], 0.36, 1.35, 1.12, frac * 1.15, 3);
+        else if (e.kind === 'ricochet') inject(e.p[0], e.p[2], 1.35, 0.98, 0.40, frac * 0.72, 2);
+        else if (e.kind === 'penetrate') inject(e.p[0], e.p[2], 1.20, 0.78, 0.34, frac * 0.60, 2);
         else if (e.kind === 'muzzle') {
           const c = e.gun === 'MS10' ? [0.3, 1.2, 1.5]
             : e.gun === 'DF40 II' ? (e.aaTier === '1.4' ? [1.55, 0.76, 1.25] : [0.58, 0.92, 1.58])
-            : e.gun === 'RD40' ? [1.45, 0.45, 0.38] : [1.35, 0.88, 0.35];
-          inject(e.p[0], e.p[2], c[0], c[1], c[2], frac * 0.62, 2);
+            : e.gun === 'RD40' ? [1.45, 0.45, 0.38]
+            : e.gun === 'RD 50' ? [1.42, 1.02, 0.36] : [1.35, 0.88, 0.35];
+          inject(e.p[0], e.p[2], c[0], c[1], c[2], frac * 0.52, 2);
         }
       }
     }

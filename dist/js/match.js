@@ -1,6 +1,5 @@
 import {clamp, forward, dot, sub, add, scale, random, cross, unit} from './geometry.js';
 import {teams, tankers, baizerPickups, walkable, moveActor, floorAt, obstruction, raycastMaterial, waterCrossing} from './yard.js';
-import {NV2} from './nv2.js';
 import {eyeOf, torso, bodyCenter, postureStep, vertical} from './posture.js';
 import {DF, initialDF, scheduleDF, bulletGuidanceDF, steerGuidedShot, spendP1, updateDF} from './df1.js';
 import {RD, RD20, RD30, isRDWeapon, initialRD, updateRD, bulletGuidanceRD} from './rd40.js';
@@ -14,11 +13,23 @@ import {SpectraField} from './spectrafield.js';
 import {ResonanceCore} from './resonance.js';
 import {ChronoTrace} from './chronotrace.js';
 import {FermatCore} from './fermat.js';
+import {
+  SCHERP_VERSION, AA_SPECS, isScherpAllowed, normalizeAALevel,
+  initialUniversalAA, updateUniversalAA, bulletGuidanceUniversal, steerScherpShot
+} from './scherp.js';
+import {initShotAero, stepMagnusAero, impartRicochetSpin, machNWaveDelay} from './magnus.js';
+import {KineticFlowField} from './kineticflow.js';
+import {sweptMovingBodyHit, LabTelemetry} from './quantumtick.js';
+import {createMatchAI, normalizeAiModelId, aiVersionDisplay} from './ai-arena.js';
+import {muzzleOffset} from './models.js';
+
 const baseSpeed = 360, baseInterval = .24;
 export const BASE_SHIELD_MAX = 25;
+export const BAIZER_MAX_STACK = 100;
 export const MAX_SKILL_CHARGES = 3;
 export const KILLS_PER_SKILL_CHARGE = 5;
 export const SHAFFER_DURATION = 12.0;
+export const SKILL_POOL = ['shaffer', 'heal'];
 export const weapons = {
   'SW T': {capacity: 10, damage: 9, rate: 100, velocity: 100, speed: baseSpeed, interval: baseInterval, burst: 1, reload: 1.4},
   SRA: {capacity: 30, damage: 6, rate: 120, velocity: 80, speed: baseSpeed * .8, interval: baseInterval / 1.2, burst: 1, reload: 1.65},
@@ -28,11 +39,74 @@ export const weapons = {
   [RD20]: {capacity: 20, damage: 6, rate: 110, velocity: 70, speed: baseSpeed * .7, interval: baseInterval / 1.1, burst: 1, pellets: 1, reload: 1.55, auto: true},
   [RD30]: {capacity: 80, damage: 3, rate: 100, velocity: 100, speed: baseSpeed * 1.0, interval: baseInterval, burst: 1, pellets: 2, reload: 1.75, auto: true},
   [RD]: {capacity: 130, damage: 3, rate: 170, velocity: 140, speed: baseSpeed * 1.4, interval: baseInterval / 1.7, burst: 1, pellets: 2, reload: 1.95, auto: true, playerOnly: true},
+  'RD 50': {capacity: 50, damage: 7.2, rate: 110, velocity: 65, speed: baseSpeed * .65, interval: baseInterval / 1.1, burst: 1, pellets: 1, stockCap: 300, stockRegen: 3.2, reload: 1.70, auto: true},
   [DF40II]: {capacity: 350, damage: 2, rate: 260, velocity: 80, speed: baseSpeed * .8, interval: baseInterval / 2.6, burst: 1, pellets: 4, stockCap: 500, stockRegen: 2, reload: 2.15, auto: true, playerOnly: true}
 };
-export const modes = {'3v3': [3, 3], '1v2': [1, 2], '1v1': [1, 1]};
-const names = [['YOU', 'NAGI', 'KAI'], ['RIN', 'SORA', 'AO']];
-export const npcWeapons = ['SW T', 'SRA', 'D1', 'MS10', 'RD30', 'RD20'];
+export const modes = {'1v1': [1, 1], '3v3': [3, 3], '5v5': [5, 5], '1v2': [1, 2], lab: [3, 3]};
+export const DEFAULT_LAB_CONFIG = {
+  playerRole: 'play',   // 'play' | 'spectate'
+  teamACount: 3,        // 1..5
+  teamBCount: 3,        // 1..5
+  teamAAi: 'human',     // nv1..human (NV2.6 Force)
+  teamBAi: 'human',
+  playerAA: 'weapon',   // 'weapon' | 'off' | '1.1' | '1.2' | '1.3' | '1.4' | '1.5'
+  teamAAA: 'off',       // 'off' | '1.1' | '1.2' | '1.3' | '1.4' | '1.5'
+  teamBAA: 'off',
+  teamAGun: 'mixed',    // 'mixed' | weapon key
+  teamBGun: 'mixed',
+  skillRule: 'random',  // 'random' | 'shaffer' | 'heal' | 'none'
+  npcSkills: false,
+  startBaizer: 0,       // 0 | 40 | 100
+  hpMax: 100,           // 50 | 100 | 200
+  infiniteAmmo: false,
+  gravityScale: 1,      // 0.5 | 1 | 1.5
+  ricochetBoost: false,
+  respawnTime: 3,       // 0.2 | 1 | 3
+  simSpeed: 1,          // 0.5 | 1 | 2 | 4
+  aiLearning: true
+};
+
+export function normalizeLabConfig(raw) {
+  const src = raw && typeof raw === 'object' ? raw : {};
+  const d = DEFAULT_LAB_CONFIG;
+  const pickNum = (v, list, fb) => {
+    const n = Number(v);
+    return list.includes(n) ? n : fb;
+  };
+  const pickGun = v => (typeof v === 'string' && (v === 'mixed' || Object.hasOwn(weapons, v))) ? v : 'mixed';
+  const pickSkill = v => (v === 'shaffer' || v === 'heal' || v === 'none' || v === 'random') ? v : 'random';
+  return {
+    playerRole: src.playerRole === 'spectate' ? 'spectate' : 'play',
+    teamACount: clamp(Math.round(Number(src.teamACount) || d.teamACount), 1, 5),
+    teamBCount: clamp(Math.round(Number(src.teamBCount) || d.teamBCount), 1, 5),
+    teamAAi: normalizeAiModelId(src.teamAAi, d.teamAAi),
+    teamBAi: normalizeAiModelId(src.teamBAi, d.teamBAi),
+    playerAA: normalizeAALevel(src.playerAA ?? d.playerAA, true, true),
+    teamAAA: normalizeAALevel(src.teamAAA ?? d.teamAAA, false, true),
+    teamBAA: normalizeAALevel(src.teamBAA ?? d.teamBAA, false, true),
+    teamAGun: pickGun(src.teamAGun),
+    teamBGun: pickGun(src.teamBGun),
+    skillRule: pickSkill(src.skillRule),
+    npcSkills: !!src.npcSkills,
+    startBaizer: clamp(Math.round(Number(src.startBaizer) || 0), 0, BAIZER_MAX_STACK),
+    hpMax: pickNum(src.hpMax, [50, 100, 200], d.hpMax),
+    infiniteAmmo: !!src.infiniteAmmo,
+    gravityScale: pickNum(src.gravityScale, [0.5, 1, 1.5], d.gravityScale),
+    ricochetBoost: !!src.ricochetBoost,
+    respawnTime: pickNum(src.respawnTime, [0.2, 1, 3], d.respawnTime),
+    simSpeed: pickNum(src.simSpeed, [0.5, 1, 2, 4], d.simSpeed),
+    aiLearning: src.aiLearning !== false
+  };
+}
+
+function drawRandomSkill(rngFn) {
+  const u = rngFn ? rngFn() : Math.random();
+  return SKILL_POOL[u < 0.5 ? 0 : 1];
+}
+
+const names = [['YOU', 'NAGI', 'KAI', 'HARU', 'MIKO'], ['RIN', 'SORA', 'AO', 'YUU', 'TORA']];
+const npcLeadNames = ['REN', 'NAGI', 'KAI', 'HARU', 'MIKO'];
+export const npcWeapons = ['SW T', 'SRA', 'D1', 'MS10', 'RD30', 'RD20', 'RD 50'];
 const sphereHit = (a, d, c, r) => {
   const v = sub(a, c), A = dot(d, d), B = dot(v, d), C = dot(v, v) - r * r;
   if (C <= 0)return 0;
@@ -67,8 +141,25 @@ export class Match {
   constructor(config = {}, onEvent = () => {}) {
     const mode = Object.hasOwn(modes, config.mode) ? config.mode : '3v3';
     const loadout = Object.hasOwn(weapons, config.loadout) ? config.loadout : 'SW T';
+    this.isLab = mode === 'lab' || !!config.isLab;
+    this.lab = this.isLab ? normalizeLabConfig(config.lab || config) : null;
+    this.spectating = !!(this.isLab && this.lab.playerRole === 'spectate');
+    this.spectateActorId = 0;
+    this.gravityScale = this.lab ? this.lab.gravityScale : 1;
+    this.ricochetBoost = !!(this.lab && this.lab.ricochetBoost);
+    this.respawnDuration = this.lab ? this.lab.respawnTime : 3;
+    this.infiniteAmmo = !!(this.lab && this.lab.infiniteAmmo);
+    this.hpMax = this.lab ? this.lab.hpMax : 100;
+    this.startBaizer = this.lab ? this.lab.startBaizer : 0;
+    this.skillRule = this.lab ? this.lab.skillRule : 'random';
     this.config = {...config, mode, loadout};
-    this.autoAim = config.autoAim !== false;
+    this.autoAimMode = config.autoAimMode === '1.5'
+      ? '1.5'
+      : (config.autoAim === false || config.autoAimMode === 'off')
+        ? 'off'
+        : 'standard';
+    this.autoAim = this.autoAimMode !== 'off';
+    this.allowScherp = this.isLab || this.autoAimMode === '1.5';
     this.time = 0;
     this.tremorAt = 68;
     this.groundMotion = 0;
@@ -84,6 +175,13 @@ export class Match {
     this.tankers = tankers.map(t => ({...t, cooldown: 0, maxCooldown: 25, pulse: 0, lastTeam: -1}));
     this.baizers = baizerPickups.map(b => ({...b, cooldown: 0, maxCooldown: 24, pulse: 0}));
     this.rng = random(1939);
+    if (Number.isFinite(config.skillSeed)) {
+      let sMix = Math.imul((config.skillSeed | 0) ^ 0x9e3779b9, 0x85ebca6b) >>> 0;
+      sMix = Math.imul(sMix ^ (sMix >>> 13), 0xc2b2ae35) >>> 0;
+      this.skillRng = random(sMix ^ (sMix >>> 16));
+    } else {
+      this.skillRng = null;
+    }
     this.seq = 0;
     this.echoPulse = new EchoPulseField();
     this.synapse = new SynapseProfiler();
@@ -93,49 +191,91 @@ export class Match {
     this.resonance = new ResonanceCore();
     this.chronoTrace = new ChronoTrace();
     this.fermat = new FermatCore();
+    this.kineticFlow = new KineticFlowField();
+    this.telemetry = new LabTelemetry();
     this.smokeCooldown = 0;
     this.techStats = {ricochets: 0, ricochetHits: 0, penetrations: 0, wallbangHits: 0};
-    const counts = modes[mode], multiplier = Number(config.multiplier ?? 5);
+    const counts = this.lab ? [this.lab.teamACount, this.lab.teamBCount] : modes[mode];
+    const multiplier = Number(config.multiplier ?? 5);
     this.goals = counts.map(n => config.limit === 'unlimited' ? Infinity : n * clamp(Number.isFinite(multiplier) ? Math.round(multiplier) : 5, 1, 99));
     this.receiptId = globalThis.crypto?.randomUUID?.() || Date.now().toString(36) + Math.random().toString(36).slice(2);
-    this.aiModel = config.aiModel === 'classic'
-      ? 'classic'
-      : config.aiModel === 'nv23'
-        ? 'nv23'
-        : (config.aiModel === 'manusia' || config.aiModel === 'nv24')
-          ? 'manusia'
-          : (config.aiModel === 'humain' || config.aiModel === 'nv25')
-            ? 'humain'
-            : 'human';
-    this.teamAiModels = Array.isArray(config.teamAiModels) && config.teamAiModels.length === 2 ? [...config.teamAiModels] : null;
-    this.nv = new NV2(this);
+    this.aiModel = this.lab
+      ? this.lab.teamAAi
+      : normalizeAiModelId(config.aiModel, 'human');
+    this.teamAiModels = Array.isArray(config.teamAiModels) && config.teamAiModels.length === 2
+      ? [normalizeAiModelId(config.teamAiModels[0]), normalizeAiModelId(config.teamAiModels[1])]
+      : this.lab
+        ? [this.lab.teamAAi, this.lab.teamBAi]
+        : null;
+    this.nv = createMatchAI(this);
     const rawSpy = config.allyNv21 === true ? 1 : Number(config.allyNv21 || 0);
     this.allyNv21Slot = mode === '3v3' && (rawSpy === 1 || rawSpy === 2) ? rawSpy : 0;
-    const allNpc = !!config.allNpc;
+    const allNpc = !!config.allNpc || this.spectating;
+    this.allNpc = allNpc;
     const benchGuns = Array.isArray(config.benchGuns) ? config.benchGuns : null;
     for (let team = 0; team < 2; team++)for (let slot = 0; slot < counts[team]; slot++) {
       const human = !allNpc && team === 0 && slot === 0;
+      const labTeamGun = this.lab ? (team === 0 ? this.lab.teamAGun : this.lab.teamBGun) : 'mixed';
       const gun = human
         ? loadout
-        : benchGuns && Object.hasOwn(weapons, benchGuns[slot % benchGuns.length])
-          ? benchGuns[slot % benchGuns.length]
-          : npcWeapons[(slot + team + 1) % npcWeapons.length];
-      const isSpy = !human && team === 0 && this.allyNv21Slot > 0 && slot === this.allyNv21Slot;
+        : labTeamGun !== 'mixed' && Object.hasOwn(weapons, labTeamGun)
+          ? labTeamGun
+          : benchGuns && Object.hasOwn(weapons, benchGuns[slot % benchGuns.length])
+            ? benchGuns[slot % benchGuns.length]
+            : npcWeapons[(slot + team + 1) % npcWeapons.length];
       const teamModel = this.teamAiModels ? this.teamAiModels[team] : this.aiModel;
+      const isSpy = !human && ((team === 0 && this.allyNv21Slot > 0 && slot === this.allyNv21Slot) || teamModel === 'nv21');
       const aiVersion = human
         ? 'HUMAN'
         : isSpy
           ? 'NV2.1'
-          : teamModel === 'classic'
-            ? 'NV2'
-            : teamModel === 'nv23'
-              ? 'NV2.3 HUMAN'
-              : (teamModel === 'manusia' || teamModel === 'nv24')
-                ? 'NV 2.4 Manusia'
-                : (teamModel === 'humain' || teamModel === 'nv25')
-                  ? 'NV2.5 humain'
-                  : 'NV2.6 Force';
-      const a = {id: this.actors.length, team, slot, human, name: names[team][slot], gun, aiVersion, isSpy, kills: 0, deaths: 0, earned: 0};
+          : aiVersionDisplay(teamModel);
+
+      // Gate Auto-Aim overrides (Lab per-side AA, or explicit player 1.5 Scherp selection)
+      let aaOverride = null;
+      if (this.isLab) {
+        if (human) {
+          const pAA = this.lab.playerAA;
+          aaOverride = pAA !== 'weapon' ? normalizeAALevel(pAA, false, true) : null;
+        } else {
+          const tAA = team === 0 ? this.lab.teamAAA : this.lab.teamBAA;
+          aaOverride = tAA !== 'off' ? normalizeAALevel(tAA, false, true) : null;
+        }
+      } else if (human && this.autoAimMode === '1.5') {
+        aaOverride = '1.5';
+      }
+
+      // Randomly assign strictly ONE skill per actor (or honor explicit test/Lab override)
+      let assignedSkill = null;
+      if (this.skillRule === 'none') {
+        assignedSkill = null;
+      } else if (human && config.playerSkill && SKILL_POOL.includes(config.playerSkill)) {
+        assignedSkill = config.playerSkill;
+      } else if (this.skillRule === 'shaffer' || this.skillRule === 'heal') {
+        assignedSkill = this.skillRule;
+      } else {
+        assignedSkill = drawRandomSkill(this.skillRng);
+      }
+
+      const actorName = team === 0 && allNpc
+        ? (npcLeadNames[slot] || `A${slot + 1}`)
+        : (names[team][slot] || `${team ? 'B' : 'A'}${slot + 1}`);
+      const a = {
+        id: this.actors.length,
+        team,
+        slot,
+        human,
+        name: actorName,
+        gun,
+        aiVersion,
+        isSpy,
+        aaOverride,
+        assignedSkill,
+        maxHp: this.hpMax,
+        kills: 0,
+        deaths: 0,
+        earned: 0
+      };
       this.actors.push(a);
       this.spawn(a, true)
     }
@@ -168,17 +308,21 @@ export class Match {
       }
     }
     const w = this.weapon(a);
+    const startBz = clamp(this.startBaizer || 0, 0, BAIZER_MAX_STACK);
+    const allowSc = isScherpAllowed(this);
+    const useOverride = this.isLab || (a.human && this.autoAimMode === '1.5');
+    const aaLvl = useOverride && a.aaOverride && a.aaOverride !== 'off' ? normalizeAALevel(a.aaOverride, false, allowSc) : null;
     Object.assign(a, {
       x: p[0],
       y: 0,
       z: p[1],
       yaw: a.team ? Math.PI : 0,
       pitch: 0,
-      hp: 100,
+      hp: a.maxHp || this.hpMax || 100,
       shield: BASE_SHIELD_MAX,
       shieldClock: 0,
-      baizerShield: 0,
-      baizerMax: 0,
+      baizerShield: startBz,
+      baizerMax: startBz > 0 ? BAIZER_MAX_STACK : 0,
       baizerFlash: 0,
       shafferTimer: 0,
       skillKills: a.skillKills || 0,
@@ -226,21 +370,37 @@ export class Match {
       queue: [],
       df: a.gun === DF ? {...initialDF(), pattern: a.df?.pattern || 'central', scope: a.df?.scope || 'plastic'} : null,
       rd: isRDWeapon(a.gun) ? initialRD(a.gun) : null,
-      df40: a.gun === DF40II ? initialDF40II() : null
+      df40: a.gun === DF40II ? initialDF40II() : null,
+      aa: aaLvl ? initialUniversalAA(aaLvl) : null
     });
     if (!a.human)this.nv.attach(a);
     if (!initial)this.event('spawn', {actor: a})
   }
+  setActorAA(a, level) {
+    if (!a || !this.isLab) return false;
+    if (level === 'weapon' && a.human) {
+      a.aaOverride = null;
+      a.aa = null;
+      return true;
+    }
+    const clean = normalizeAALevel(level, false, this.isLab);
+    if (clean === '1.5' && !isScherpAllowed(this)) return false;
+    a.aaOverride = clean;
+    a.aa = clean !== 'off' ? initialUniversalAA(clean) : null;
+    return true;
+  }
   toggleAA14(a = this.player) {
     return toggleAA14(this, a);
   }
-  useSkill(a = this.player, skill = 'shaffer') {
+  useSkill(a = this.player, skill = a?.assignedSkill) {
     if (!a?.alive || this.ended) return false;
+    if (!a.assignedSkill || skill !== a.assignedSkill) return false;
     if ((a.skillCharges || 0) <= 0) return false;
     if (skill === 'shaffer') {
       if ((a.shafferTimer || 0) > 0) return false;
       a.skillCharges--;
       a.shafferTimer = SHAFFER_DURATION;
+      this.telemetry.onSkill(a);
       this.nv.onShafferCloak?.(a);
       this.effects.push({
         kind: 'shaffer',
@@ -256,10 +416,12 @@ export class Match {
       return true;
     }
     if (skill === 'heal') {
-      if (a.hp >= 100) return false;
-      const healed = Math.round((100 - a.hp) * 10) / 10;
+      const cap = a.maxHp || this.hpMax || 100;
+      if (a.hp >= cap) return false;
+      const healed = Math.round((cap - a.hp) * 10) / 10;
       a.skillCharges--;
-      a.hp = 100;
+      a.hp = cap;
+      this.telemetry.onSkill(a);
       this.effects.push({
         kind: 'heal',
         p: [a.x, a.y + 1.0, a.z],
@@ -275,10 +437,49 @@ export class Match {
     }
     return false;
   }
+  setAutoAimMode(mode) {
+    const clean = mode === '1.5' ? '1.5' : mode === 'off' ? 'off' : 'standard';
+    this.autoAimMode = clean;
+    this.autoAim = clean !== 'off';
+    this.allowScherp = this.isLab || clean === '1.5';
+    const a = this.player;
+    if (a && !this.isLab && a.human) {
+      if (clean === '1.5') {
+        a.aaOverride = '1.5';
+        if (!a.aa || a.aa.level !== '1.5') a.aa = initialUniversalAA('1.5');
+      } else {
+        a.aaOverride = null;
+        a.aa = null;
+      }
+    }
+    if (!this.autoAim) this.setAutoAim(false);
+    return this.autoAimMode;
+  }
   setAutoAim(enabled) {
     this.autoAim = !!enabled;
+    if (!this.autoAim) {
+      this.autoAimMode = 'off';
+      this.allowScherp = this.isLab;
+    } else if (this.autoAimMode === 'off') {
+      this.autoAimMode = 'standard';
+    }
     const a = this.player;
     if (!this.autoAim && a) {
+      if (a.aa) {
+        a.aa.focusId = -1;
+        a.aa.focus = 0;
+        a.aa.locked = false;
+        a.aa.occluded = false;
+        a.aa.wallActive = false;
+        a.aa.wallTimer = 0;
+        a.aa.solveMode = 'none';
+        a.aa.activeBank = null;
+        a.aa.lastAimPoint = null;
+        a.aa.targetDist = 0;
+        a.aa.trackYaw = 0;
+        a.aa.trackPitch = 0;
+        a.aa.est?.reset();
+      }
       if (a.df) {
         a.df.focusId = -1;
         a.df.focus = 0;
@@ -348,10 +549,10 @@ export class Match {
       if (!a.df || !spendP1(a, this.time)) return false
     } else {
       if (!a.mag || salvo <= 0) return false;
-      a.mag -= salvo
+      if (!this.infiniteAmmo) a.mag -= salvo
     }
     a.cooldown = w.interval;
-    a.flash = a.gun === 'MS10' ? .115 : a.gun === DF40II ? .112 : a.gun === RD ? .108 : a.gun === RD30 ? .098 : .095;
+    a.flash = a.gun === 'MS10' ? .115 : a.gun === DF40II ? .112 : a.gun === RD ? .108 : a.gun === 'RD 50' ? .102 : a.gun === RD30 ? .098 : .095;
     a.recoil = 1;
     a.recoilSide = (this.rng() - .5) * 2;
     a.shotCount = (a.shotCount || 0) + 1;
@@ -359,22 +560,42 @@ export class Match {
       a.rd.firePulse = 1;
       a.rd.barrelPhase = 1 - (a.rd.barrelPhase || 0);
     }
-    const firedAA14 = !!(a.df40?.aa14Active && !a.df40?.aa14Overheated);
+    const firedAA14 = !!(a.df40?.aa14Active && !a.df40?.aa14Overheated) || a.aa?.level === '1.4';
+    const firedScherp = !!(a.aa?.level === '1.5' && isScherpAllowed(this));
     const cloaked = (a.shafferTimer || 0) > 0;
     const p = eyeOf(a);
-    const barrelLen = a.gun === 'MS10' ? .92 : a.gun === DF40II ? .90 : a.gun === RD ? .88 : a.gun === RD30 ? .80 : a.gun === RD20 ? .68 : a.gun === 'D1' ? .78 : a.gun === 'SW T' ? .60 : .74;
+    const camFwd = forward(a.yaw, a.pitch);
+    const camRight = unit(cross(camFwd, [0, 1, 0]));
+    const camUp = cross(camRight, camFwd);
+    const [mOffX, mOffY, mOffZ] = muzzleOffset(a.gun);
+    const barrelLen3p = a.gun === 'MS10' ? .96 : a.gun === DF40II ? .94 : a.gun === RD ? .90 : a.gun === 'RD 50' ? .84 : a.gun === RD30 ? .82 : a.gun === RD20 ? .72 : a.gun === 'D1' ? .80 : a.gun === 'SW T' ? .66 : .78;
     const quadOffsets = [[-1, .65], [1, .65], [-.85, -.65], [.85, -.65]];
     let firstDir = null, firstMuzzle = null;
     for (let k = 0; k < salvo; k++) {
       const barrelSide = salvo === 4 ? quadOffsets[k][0] : salvo === 3 ? (k - 1) : salvo === 2 ? (k === 0 ? -1 : 1) : 0;
       const barrelVert = salvo === 4 ? quadOffsets[k][1] : salvo === 3 ? (k === 1 ? 1 : -0.45) : 0;
-      const guidedInfo = a.df ? bulletGuidanceDF(this, a) : a.df40 ? bulletGuidanceDF40II(this, a, barrelSide, barrelVert) : a.rd ? bulletGuidanceRD(this, a, barrelSide) : null;
-      const dir = guidedInfo ? guidedInfo.dir : forward(a.yaw, a.pitch);
+      const guidedInfo = a.aa
+        ? bulletGuidanceUniversal(this, a, barrelSide, barrelVert)
+        : a.aaOverride === 'off'
+          ? null
+          : a.df
+            ? bulletGuidanceDF(this, a)
+            : a.df40
+              ? bulletGuidanceDF40II(this, a, barrelSide, barrelVert)
+              : a.rd
+                ? bulletGuidanceRD(this, a, barrelSide)
+                : null;
+      const dir = guidedInfo ? guidedInfo.dir : camFwd;
       const right = unit(cross(dir, [0, 1, 0]));
       const up = cross(right, dir);
-      const sideOff = (a.human ? .14 : .11) + barrelSide * (a.gun === DF40II ? .038 : .048);
-      const upOff = (a.human ? -.12 : -.18) + barrelVert * .026;
-      const muzzle = add(p, add(scale(dir, barrelLen), add(scale(right, sideOff), scale(up, upOff))));
+      // Exact 1st-person barrel tip matching renderer.js viewmodel transform (bx=0.205, by=-0.205, bz=0.54 + muzzleOffset)
+      const rx1p = (a.df?.ads ? 0 : (.205 - (a.crouch || 0) * .022)) + mOffX + barrelSide * (a.gun === DF40II ? .036 : .032);
+      const uy1p = (a.df?.ads ? -.075 : -.205) + mOffY + barrelVert * .022;
+      const fz1p = .54 - mOffZ;
+      const muzzle1p = add(p, add(scale(camFwd, fz1p), add(scale(camRight, rx1p), scale(camUp, uy1p))));
+      // Exact 3rd-person character barrel tip matching models.js chest-mounted weapon rig
+      const muzzle3p = add(p, add(scale(dir, barrelLen3p), add(scale(right, .085 + barrelSide * (a.gun === DF40II ? .036 : .034)), scale(up, -.23 + barrelVert * .022))));
+      const muzzle = a.human ? muzzle1p : muzzle3p;
       if (!firstDir) { firstDir = dir; firstMuzzle = muzzle; }
       const shot = {
         id: ++this.seq,
@@ -386,6 +607,9 @@ export class Match {
         p,
         old: p,
         origin: [...p],
+        muzzle: [...muzzle],
+        muzzle1p: [...muzzle1p],
+        muzzle3p: [...muzzle3p],
         trail: [[...p]],
         trailClock: 0,
         guided: !!guidedInfo?.guided,
@@ -401,24 +625,30 @@ export class Match {
         homingAccel: guidedInfo?.accel || null,
         homingVelWeight: guidedInfo?.velWeight,
         homingAccelWeight: guidedInfo?.accelWeight,
+        scherpApn: !!guidedInfo?.scherpApn,
+        scherpBank: !!guidedInfo?.scherpBank,
+        scherpPen: !!guidedInfo?.scherpPen,
+        postRicochetHoming: !!guidedInfo?.postRicochetHoming,
+        apnNavConst: guidedInfo?.apnNavConst || 0,
         ricochets: 0,
         penetrations: 0,
         ricocheted: false,
         penetrated: false,
         shafferCloaked: cloaked,
-        fermatLocked: this.fermat.isShotFermatAligned(a, dir, this) || !!a._fermatAiShot,
+        fermatLocked: !!guidedInfo?.fermatBankLock || this.fermat.isShotFermatAligned(a, dir, this) || !!a._fermatAiShot,
         damage: w.damage,
         speed: w.speed,
         life: 1.35,
         age: 0,
         whizzed: false
       };
+      initShotAero(shot);
       this.chronoTrace.beginShot(shot, this.time);
       this.shots.push(shot);
-      // Spawn muzzle flash & drifting smoke puff in world space.
+      // Spawn muzzle flash & drifting smoke puff at exact 3rd-person barrel tip.
       this.effects.push({
         kind: 'muzzle',
-        p: muzzle,
+        p: muzzle3p,
         dir: [...dir],
         gun: a.gun,
         team: a.team,
@@ -447,6 +677,7 @@ export class Match {
       });
       if (this.casings.length > 42)this.casings.shift();
     }
+    this.telemetry.onFire(a, salvo);
     if (a.df40) onFireDF40II(this, a, salvo);
     if (!cloaked) {
       this.echoPulse.emit(this, {
@@ -463,7 +694,7 @@ export class Match {
       }
       this.nv.onShotFired?.(a, source);
     }
-    this.event('fire', {actor: a, source, gun: a.gun, p: firstMuzzle, dir: firstDir, speed: w.speed, pellets: salvo, burstIndex: a.shotCount, aa14: firedAA14, shafferCloaked: cloaked});
+    this.event('fire', {actor: a, source, gun: a.gun, p: firstMuzzle, dir: firstDir, speed: w.speed, pellets: salvo, burstIndex: a.shotCount, aa14: firedAA14, scherp: firedScherp, shafferCloaked: cloaked});
     if (a.mag <= 0 && !a.queue.length && a.stock > 0 && a.reload <= 0) {
       this.reload(a, true);
     }
@@ -506,6 +737,7 @@ export class Match {
     const anyShieldHit = baizerAbsorbed > 0 || absorbed > 0;
     const anyShieldBreak = baizerBreak || shieldBreak;
     const kill = v.hp <= 0;
+    this.telemetry.onHit(owner, v, power, {baizerAbsorbed, kill, shot: meta?.shot, time: meta?.time ?? this.time});
     if (meta?.shot) {
       const outcome = kill ? 'kill' : anyShieldBreak ? 'break' : anyShieldHit ? 'shield' : 'hit';
       this.chronoTrace.finishShot(meta.shot, meta.point, outcome, meta.time, v);
@@ -537,14 +769,15 @@ export class Match {
       damage: power,
       dir,
       ricochet: !!meta?.ricochet,
-      wallbang: !!meta?.wallbang
+      wallbang: !!meta?.wallbang,
+      scherp: meta?.shot?.aaTier === '1.5'
     });
     if (!kill) return {shield: absorbed > 0, shieldBreak, baizer: baizerAbsorbed > 0, baizerBreak, kill: false};
     this.aeroVortex.injectBurst(v.x, v.z, {smoke: 1.35, heat: 0.92, force: 4.8, radius: 3});
     this.thermoFlux.depositHeat(v.x, v.z, 1.15, 2);
     this.resonance.exciteBlast([v.x, v.y + 1.0, v.z], 1.15);
     v.alive = false;
-    v.respawn = 3;
+    v.respawn = this.respawnDuration;
     v.reload = 0;
     v.autoReloading = false;
     v.burstLeft = 0;
@@ -553,6 +786,17 @@ export class Match {
     v.baizerShield = 0;
     v.baizerMax = 0;
     v.baizerFlash = 0;
+    if (v.aa) {
+      v.aa.locked = false;
+      v.aa.wallActive = false;
+      v.aa.occluded = false;
+      v.aa.focus = 0;
+      v.aa.focusId = -1;
+      v.aa.wallTimer = 0;
+      v.aa.solveMode = 'none';
+      v.aa.activeBank = null;
+      v.aa.est?.reset();
+    }
     if (v.df) {
       v.df.ads = false;
       v.df.locked = false;
@@ -579,12 +823,12 @@ export class Match {
     }
     v.deaths++;
     owner.kills++;
-    if ((owner.skillCharges || 0) < MAX_SKILL_CHARGES) {
+    if (owner.assignedSkill && (owner.skillCharges || 0) < MAX_SKILL_CHARGES) {
       owner.skillKills = (owner.skillKills || 0) + 1;
       if (owner.skillKills >= KILLS_PER_SKILL_CHARGE) {
         owner.skillKills -= KILLS_PER_SKILL_CHARGE;
         owner.skillCharges = Math.min(MAX_SKILL_CHARGES, (owner.skillCharges || 0) + 1);
-        this.event('skill_charge', {actor: owner, charges: owner.skillCharges});
+        this.event('skill_charge', {actor: owner, skill: owner.assignedSkill, charges: owner.skillCharges});
       }
     }
     if (owner.human) owner.earned += 10;
@@ -656,7 +900,7 @@ export class Match {
       let recipient = null, best = 1.95;
       for (const a of this.actors) {
         if (!a.alive || a.y > 1.2) continue;
-        if ((a.baizerShield || 0) >= bz.amount) continue;
+        if ((a.baizerShield || 0) >= BAIZER_MAX_STACK) continue;
         const distance = Math.hypot(a.x - bz.x, a.z - bz.z);
         if (distance <= best && (!recipient || distance < best)) {
           recipient = a;
@@ -664,8 +908,11 @@ export class Match {
         }
       }
       if (recipient) {
-        recipient.baizerShield = bz.amount;
-        recipient.baizerMax = bz.amount;
+        const before = recipient.baizerShield || 0;
+        const after = Math.min(BAIZER_MAX_STACK, Math.round((before + bz.amount) * 10) / 10);
+        const gained = Math.round((after - before) * 10) / 10;
+        recipient.baizerShield = after;
+        recipient.baizerMax = BAIZER_MAX_STACK;
         recipient.baizerFlash = 1;
         bz.cooldown = bz.maxCooldown;
         bz.pulse = 1;
@@ -680,13 +927,13 @@ export class Match {
           max: .85,
           seed: ++this.seq
         });
-        this.event('baizer', {actor: recipient, pickup: bz, kind: bz.kind, amount: bz.amount});
+        this.event('baizer', {actor: recipient, pickup: bz, kind: bz.kind, amount: bz.amount, gained, total: after});
       }
     }
   }
   updatePlayer(dt, input) {
     const a = this.player;
-    if (!a.alive)return;
+    if (!a?.alive || !a.human) return;
     const u = input || {};
     postureStep(a, dt, !!u.crouch && a.onGround, 0, !!a.df?.ads);
     const cx = Math.cos(a.yaw),
@@ -705,7 +952,7 @@ export class Match {
       a.vy = 5.35;
       a.onGround = false
     }
-    vertical(a, dt, floorAt);
+    vertical(a, dt, floorAt, this.gravityScale || 1);
   }
   systems(a, dt) {
     if (!a.alive) {
@@ -750,7 +997,11 @@ export class Match {
     } else a.shieldClock = 0;
     const stockCap = w.stockCap || 100;
     const stockRegen = w.stockRegen || 1;
-    if (a.stock < stockCap) {
+    if (this.infiniteAmmo) {
+      a.stock = Math.max(a.stock, stockCap);
+      a.mag = Math.max(a.mag, w.capacity);
+      a.ammoClock = 0;
+    } else if (a.stock < stockCap) {
       a.ammoClock += dt * stockRegen * (a.ammoRate || 1);
       while (a.ammoClock + 1e-8 >= 1 && a.stock < stockCap) {
         a.stock = Math.min(stockCap, a.stock + 1);
@@ -758,9 +1009,23 @@ export class Match {
       }
       if (a.stock >= stockCap) a.ammoClock = 0;
     } else a.ammoClock = 0;
-    if (a.df)updateDF(this, a, dt);
-    if (a.rd)updateRD(this, a, dt);
-    if (a.df40)updateDF40II(this, a, dt);
+    if (a.aa) {
+      updateUniversalAA(this, a, dt);
+      // Keep DF1 P1 thermal/regen ticking even when Lab AA override is active
+      if (a.df) {
+        const d = a.df;
+        if (d.p1 < 20) {
+          d.p1Clock += dt * (a.ammoRate || 1);
+          if (d.p1Clock + 1e-8 >= 8) { d.p1++; d.p1Clock = Math.max(0, d.p1Clock - 8); }
+        } else d.p1Clock = 0;
+        if (d.cooling > 0) { d.cooling = Math.max(0, d.cooling - dt); d.heat = d.cooling * 20; }
+        else if (this.time - d.lastBoost > 1.15) d.heat = Math.max(0, d.heat - 11 * dt);
+      }
+    } else if (a.aaOverride !== 'off') {
+      if (a.df)updateDF(this, a, dt);
+      if (a.rd)updateRD(this, a, dt);
+      if (a.df40)updateDF40II(this, a, dt);
+    }
     if (a.burstLeft) {
       if (a.df && (!a.df.boost || a.df.cooling > 0 || !a.df.p1)) {
         a.queue = a.queue.filter(source => source !== 'p1');
@@ -832,13 +1097,21 @@ export class Match {
     s.damage = ball.damage;
     s.penetrations = (s.penetrations || 0) + 1;
     s.penetrated = true;
+    if (s.scherpPen && s.homingTargetId >= 0 && isScherpAllowed(this)) {
+      s.guided = true;
+      s.scherpApn = true;
+      s.scherpPen = false;
+    } else {
+      s.guided = false;
+      s.scherpApn = false;
+    }
     if (s.trail) {
       s.trail.push([...ball.entryPos], [...ball.exitPos]);
       while (s.trail.length > 10) s.trail.shift();
     }
     this.effects.push({
       kind: 'penetrate', p: [...ball.exitPos], dir: [...ball.dir], normal: ball.exitNormal, gun: s.gun, source: s.source,
-      team: s.team, metal: mat === 'steel', mat, life: .44, max: .44, actor: s.owner.id, target: false, seed: ++this.seq
+      aaTier: s.aaTier || null, team: s.team, metal: mat === 'steel', mat, life: .44, max: .44, actor: s.owner.id, target: false, seed: ++this.seq
     });
     this.scorches.push({
       p: add(ball.exitPos, scale(ball.exitNormal, .014)), normal: ball.exitNormal, mat, gun: s.gun, source: s.source,
@@ -859,35 +1132,35 @@ export class Match {
 
   projectile(s, dt) {
     if (s.materialPass) return this.advancePenetration(s, dt);
-    if (s.guided)steerGuidedShot(this, s, dt);
+    if (s.scherpApn) steerScherpShot(this, s, dt);
+    else if (s.guided) steerGuidedShot(this, s, dt);
     const a = s.p;
-    // AeroVortex 1.0 physical harbor crosswind coupling (subtle caliber-scaled aerodynamic drift)
-    if (!s.guided && s.p[1] > 0.1 && s.p[1] < 5.5) {
-      const wind = this.aeroVortex.sample(a[0], a[2]);
-      if (wind.speed > 0.35) {
-        const drag = s.gun === 'MS10' ? 0.0009 : s.gun === 'RD40' ? 0.0013 : s.gun === DF40II ? 0.0014 : 0.0019;
-        s.dir = unit([s.dir[0] + wind.vx * drag * dt, s.dir[1], s.dir[2] + wind.vz * drag * dt]);
-      }
-    }
+    // MagnusAero 1.0: transonic Mach drag polar, post-ricochet spin Magnus curve, and AeroVortex crosswind
+    const wind = (a[1] > 0.1 && a[1] < 5.5) ? this.aeroVortex.sample(a[0], a[2]) : null;
+    stepMagnusAero(s, wind, dt);
     const travel = Math.min(dt, s.life);
     const b = add(a, scale(s.dir, s.speed * travel));
     const hitInfo = raycastMaterial(a, b);
     const wet = waterCrossing(a, b);
     let at = Math.min(hitInfo?.t ?? Infinity, wet ?? Infinity), target = null;
     for (const v of this.actors) {
-      if (!v.alive || v.team === s.team)continue;
-      const t = bodyHit(a, b, v);
+      if (!v.alive || v.team === s.team) continue;
+      // QuantumTick 1.0: analytical relative-velocity swept-capsule CCD
+      const t = sweptMovingBodyHit(a, b, v, travel);
       if (t < at) {
+        if (Math.hypot(v.vx || 0, v.vz || 0) > 1.5 && bodyHit(a, b, v) > 1) {
+          this.telemetry.ccdCorrections++;
+        }
         at = t;
-        target = v
+        target = v;
       }
     }
     const point = at <= 1 ? add(a, scale(sub(b, a), at)) : b;
     const impactTime = Math.max(s.trace?.startTime ?? 0, this.time - dt + Math.min(1, at) * travel);
     this.aeroVortex.injectProjectileWake(a, point, s.speed, s.gun);
-    // Detect close bullet flyby near the human player for diverse spatial whiz/crack audio.
-    const pl = this.player;
-    if (pl && pl.alive && s.owner !== pl && !s.whizzed && target !== pl && !(s.shafferCloaked && s.team !== pl.team)) {
+    // Detect close bullet flyby near the active listener (human player or spectated actor) for spatial whiz/N-wave audio.
+    const pl = this.viewActor || this.player;
+    if (pl && pl.alive && s.owner !== pl && !s.whizzed && target !== pl && !(s.shafferCloaked && !this.spectating && s.team !== pl.team)) {
       const eye = eyeOf(pl);
       const ab = sub(b, a), ab2 = dot(ab, ab);
       if (ab2 > 1e-8) {
@@ -905,6 +1178,8 @@ export class Match {
             actor: s.owner,
             dist: d,
             speed: s.speed,
+            mach: s.mach || (s.speed / 343),
+            nWaveDelay: machNWaveDelay(s.speed, d),
             gun: s.gun,
             source: s.source,
             pan,
@@ -972,6 +1247,7 @@ export class Match {
           normal: outN,
           gun: s.gun,
           source: s.source,
+          aaTier: s.aaTier || null,
           guided: !!s.guided,
           damage: s.damage,
           team: s.team,
@@ -986,7 +1262,9 @@ export class Match {
         const mat = isWater ? 'water' : hitInfo.mat;
         const normal = isWater ? [0, 1, 0] : hitInfo.normal;
         const metal = mat === 'steel';
-        const ball = !isWater && hitInfo ? solveBallisticImpact(s, hitInfo, this.rng) : {action: 'stop'};
+        const ball = !isWater && hitInfo
+          ? solveBallisticImpact(s, hitInfo, this.rng, this.ricochetBoost ? {ricochetBoost: true} : null)
+          : {action: 'stop'};
 
         if (ball.action === 'ricochet') {
           s.life -= travel - flight;
@@ -997,7 +1275,15 @@ export class Match {
           s.dir = ball.dir;
           s.speed = ball.speed;
           s.damage = ball.damage;
-          s.guided = false;
+          impartRicochetSpin(s, normal, mat);
+          if (s.postRicochetHoming && s.homingTargetId >= 0 && isScherpAllowed(this)) {
+            s.guided = true;
+            s.scherpApn = true;
+            s.postRicochetHoming = false;
+          } else {
+            s.guided = false;
+            s.scherpApn = false;
+          }
           s.ricochets = (s.ricochets || 0) + 1;
           s.ricocheted = true;
           if (s.trail) {
@@ -1011,6 +1297,7 @@ export class Match {
             normal,
             gun: s.gun,
             source: s.source,
+            aaTier: s.aaTier || null,
             team: s.team,
             metal,
             mat,
@@ -1030,7 +1317,7 @@ export class Match {
           const resHit = this.resonance.exciteStrike(hitInfo.point, 1.05, s.owner, this);
           if (resHit) this.event('resonate', {...resHit, actor: s.owner, mat});
           this.echoPulse.emit(this, {kind: 'ricochet', pos: hitInfo.point, actor: s.owner, team: s.team, loudness: 0.92, gun: s.gun});
-          this.event('ricochet', {point: hitInfo.point, dir: ball.dir, normal, gun: s.gun, mat, actor: s.owner});
+          this.event('ricochet', {point: hitInfo.point, dir: ball.dir, normal, gun: s.gun, mat, actor: s.owner, scherp: s.aaTier === '1.5'});
           return s.life > 0;
         }
 
@@ -1048,6 +1335,7 @@ export class Match {
           normal,
           gun: s.gun,
           source: s.source,
+          aaTier: s.aaTier || null,
           guided: !!s.guided,
           team: s.team,
           metal,
@@ -1112,7 +1400,7 @@ export class Match {
     // Feed newly arrived player acoustic waves into Team 0's fair-play Bayesian wavefunction & FermatCore!
     if (this.echoPulse.playerWaves.length) {
       for (const w of this.echoPulse.playerWaves) {
-        if (!w.specFed && this.player.alive && w.team !== this.player.team && this.time >= w.arriveAt) {
+        if (!w.specFed && this.player?.alive && w.team !== this.player.team && this.time >= w.arriveAt) {
           w.specFed = true;
           const srcActor = w.actorId >= 0 ? this.actors[w.actorId] : null;
           const staleSrc = w.actorId >= 0 && (!srcActor?.alive || srcActor.spawnId !== w.actorSpawnId);
@@ -1150,6 +1438,7 @@ export class Match {
     this.aeroVortex.tick(dt);
     this.thermoFlux.tick(dt, this.tankers);
     this.spectraField.tick(dt, this);
+    this.kineticFlow.tick(this, dt);
     this.resonance.step(dt);
     this.chronoTrace.prune(this.time);
     let write = 0;

@@ -80,6 +80,7 @@ const PUBLIC_MAG_CAP = Object.freeze({
   RD20: 20,
   RD30: 80,
   RD40: 130,
+  'RD 50': 50,
   'DF40 II': 350
 });
 
