@@ -660,14 +660,15 @@ export function planSpyTactics(nv, a, b, spyState) {
     if (lookDot > 0.65) enemiesLookingAtMe++;
   }
 
-  const mustVanish = a.hp < 52
+  const recentlyHit = t - (b.underFireAt || -10) < 3.4;
+  const mustVanish = (a.hp < 52 && (a.shield < 2 || enemiesLookingAtMe >= 1 || recentlyHit))
     || (a.hp < 68 && enemiesLookingAtMe >= 2)
     || (a.mag <= Math.max(2, Math.floor(wpn.capacity * 0.16)) && a.stock > 0 && enemiesLookingAtMe >= 1)
     || t < spyState.vanishUntil;
 
   if (mustVanish) {
     spyState.mode = 'SPY_VANISH';
-    spyState.holdFire = a.hp < 44 || a.mag <= 1;
+    spyState.holdFire = (a.hp < 44 && enemiesLookingAtMe === 0) || a.mag <= 1;
     if (t >= spyState.vanishUntil) spyState.vanishUntil = t + 2.35;
 
     // Pick best occluded flank cover away from known visual threats

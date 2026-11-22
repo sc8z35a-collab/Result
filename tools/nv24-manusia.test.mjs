@@ -29,28 +29,31 @@ const {eyeOf, targetPoint} = await load('posture');
 
 const h = 1 / 360;
 
-test('NV2.4-01 | Default Match launches NV 2.4 Manusia across all NPCs including 3v3 Spy allies (NAGI/KAI) with nv23/classic A/B/C isolation', () => {
+test('NV2.4-01 | NV 2.4 Manusia & NV2.5 humain subclass inheritance across all NPCs including 3v3 Spy allies (NAGI/KAI) with tier isolation', () => {
   assert.equal(NV24_MANUSIA_VERSION, 'NV 2.4 Manusia');
+  const m24 = new Match({mode: '3v3', limit: 'unlimited', loadout: 'SW T', allyNv21: 1, aiModel: 'manusia'});
+  assert.equal(m24.nv.version, NV24_MANUSIA_VERSION);
+  assert.equal(m24.actors[2].aiVersion, NV24_MANUSIA_VERSION);
+
   const m = new Match({mode: '3v3', limit: 'unlimited', loadout: 'SW T', allyNv21: 1});
-  assert.equal(m.nv.version, NV24_MANUSIA_VERSION);
   const nagi = m.actors[1];
   const kai = m.actors[2];
   assert.equal(nagi.isSpy, true);
   assert.equal(nagi.aiVersion, 'NV2.1');
-  assert.equal(kai.aiVersion, NV24_MANUSIA_VERSION);
+  assert(kai.aiVersion === NV24_MANUSIA_VERSION || kai.aiVersion === 'NV2.5 humain');
 
   for (const a of m.actors.filter(x => !x.human)) {
     const b = m.nv.brains.get(a.id);
-    assert(b.mind instanceof ManusiaSomaPsycheV24 && b.mind instanceof HumanPsycheV23, `${a.name} must run ManusiaSomaPsycheV24`);
-    assert(b.tom instanceof ManusiaTheoryOfMindV24, `${a.name} must run ManusiaTheoryOfMindV24`);
-    assert(b.vision instanceof ManusiaPerceptionV24, `${a.name} must run ManusiaPerceptionV24`);
-    assert(b.humanAim instanceof ManusiaNeuromotorAimV24, `${a.name} must run ManusiaNeuromotorAimV24`);
-    assert(b.gaze instanceof ManusiaGazeV24, `${a.name} must run ManusiaGazeV24`);
-    assert(b.tactics instanceof ManusiaTacticsV24, `${a.name} must run ManusiaTacticsV24`);
+    assert(b.mind instanceof ManusiaSomaPsycheV24 && b.mind instanceof HumanPsycheV23, `${a.name} must inherit ManusiaSomaPsycheV24`);
+    assert(b.tom instanceof ManusiaTheoryOfMindV24, `${a.name} must inherit ManusiaTheoryOfMindV24`);
+    assert(b.vision instanceof ManusiaPerceptionV24, `${a.name} must inherit ManusiaPerceptionV24`);
+    assert(b.humanAim instanceof ManusiaNeuromotorAimV24, `${a.name} must inherit ManusiaNeuromotorAimV24`);
+    assert(b.gaze instanceof ManusiaGazeV24, `${a.name} must inherit ManusiaGazeV24`);
+    assert(b.tactics instanceof ManusiaTacticsV24, `${a.name} must inherit ManusiaTacticsV24`);
   }
 
   // A/B/C tier isolation: team 0 = manusia, team 1 = nv23
-  const mAb = new Match({mode: '3v3', limit: 'unlimited', loadout: 'SRA', allNpc: true, teamAiModels: ['human', 'nv23']});
+  const mAb = new Match({mode: '3v3', limit: 'unlimited', loadout: 'SRA', allNpc: true, teamAiModels: ['manusia', 'nv23']});
   assert(mAb.nv.brains.get(mAb.actors[0].id).tom instanceof ManusiaTheoryOfMindV24);
   assert.equal(mAb.nv.brains.get(mAb.actors[3].id).tom, null, 'NV2.3 team must not instantiate V2.4 TheoryOfMind');
   assert.equal(mAb.actors[3].aiVersion, 'NV2.3 HUMAN');

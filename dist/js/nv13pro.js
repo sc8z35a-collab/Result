@@ -1285,7 +1285,10 @@ export class NV13Pro extends NV12 {
     const lean = b.tactics?.computeAnatomicalLean
       ? b.tactics.computeAnatomicalLean(a, b, base.lean, t, this.metrics)
       : base.lean;
-    return {crouch: crouching && !b.vault && a.onGround, lean, ads};
+    const rawPose = {crouch: crouching && !b.vault && a.onGround, lean, ads};
+    return b.tactics?.refineExpressivePose
+      ? b.tactics.refineExpressivePose(a, b, rawPose, t, b.mind)
+      : rawPose;
   }
 
   tick(dt) {
