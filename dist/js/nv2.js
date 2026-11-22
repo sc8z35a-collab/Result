@@ -64,6 +64,21 @@ import {
   HumainEmbodiedTacticsV25,
   HumainSocialMindV25
 } from './nv25-humain.js';
+import {
+  NV26_FORCE_VERSION,
+  FORCE_GESTURES,
+  ForceBodyLanguageV26,
+  ForcePsycheV26,
+  ForceCounterBrainV26,
+  ForceTempoCoordV26,
+  ForceSensorimotorV26,
+  ForceTacticsV26,
+  ForceSocialVoiceV26,
+  ForceActiveInferenceV26,
+  ForceDecisionDDM_V26,
+  ForceMultisensoryV26,
+  ForceFixationGazeV26
+} from './nv26-force.js';
 
 const dist2 = (ax, az, bx, bz) => Math.hypot(ax - bx, az - bz);
 const sigmoid = x => 1 / (1 + Math.exp(-clamp(x, -12, 12)));
@@ -751,7 +766,8 @@ function normalizeAiTier(model) {
   if (model === 'classic') return 'classic';
   if (model === 'nv23') return 'nv23';
   if (model === 'manusia' || model === 'nv24') return 'manusia';
-  return 'humain';
+  if (model === 'humain' || model === 'nv25') return 'humain';
+  return 'force';
 }
 
 export class NV2 extends NV13Pro {
@@ -769,11 +785,14 @@ export class NV2 extends NV13Pro {
         ? NV23_HUMAN_VERSION
         : (match?.aiModel === 'manusia' || match?.aiModel === 'nv24')
           ? NV24_MANUSIA_VERSION
-          : NV25_HUMAIN_VERSION;
+          : (match?.aiModel === 'humain' || match?.aiModel === 'nv25')
+            ? NV25_HUMAIN_VERSION
+            : NV26_FORCE_VERSION;
     this.hasNv21 = false;
     this.neural = new NV2NeuralCore(202607);
     this.nv2Teams = [new NV2TeamState(0), new NV2TeamState(1)];
-    this.comms = new HumainSocialMindV25(random(202699));
+    this.comms = new ForceSocialVoiceV26(random(202699));
+    this.tempo = new ForceTempoCoordV26();
     this._teamAllies = [[], []];
     this.playerObsAt = 0;
     this.metrics = {
@@ -858,7 +877,16 @@ export class NV2 extends NV13Pro {
       humainSyncSwings: 0,
       humainAsymStrafes: 0,
       humainBreathResets: 0,
-      humainBuddyGlances: 0
+      humainBuddyGlances: 0,
+      forceVocalSignals: 0,
+      forceGestures: 0,
+      forceStartleVisuals: 0,
+      forceCrossfireSwings: 0,
+      forceBaitPartners: 0,
+      forceReversalLocks: 0,
+      forcePostKillSlides: 0,
+      forceSuppressPins: 0,
+      forcePlayerOrders: 0
     };
   }
 
@@ -871,7 +899,7 @@ export class NV2 extends NV13Pro {
   }
 
   getActorAiTier(actor) {
-    return actor ? this.teamAiTier[actor.team] : 'humain';
+    return actor ? this.teamAiTier[actor.team] : 'force';
   }
 
   attach(actor) {
@@ -887,7 +915,8 @@ export class NV2 extends NV13Pro {
       const isNv21 = actor.aiVersion === 'NV2.1' || !!actor.isSpy;
       const tier = this.getActorAiTier(actor);
       const actorHuman = tier !== 'classic';
-      const isHumain = tier === 'humain';
+      const isForce = tier === 'force';
+      const isHumain = tier === 'humain' || isForce;
       const isManusia = tier === 'manusia' || isHumain;
       if (isNv21) this.hasNv21 = true;
       b.isNv21 = isNv21;
@@ -895,6 +924,7 @@ export class NV2 extends NV13Pro {
       b.humanMode = actorHuman;
       b.manusiaMode = isManusia;
       b.humainMode = isHumain;
+      b.forceMode = isForce;
       b.visibleEnemies = [];
       b._incoming = [];
       b.dodgeVec = [0, 0];
@@ -918,6 +948,10 @@ export class NV2 extends NV13Pro {
       b.syncSwingAt = -10;
       b.syncSwingUntil = -10;
       b.syncSwingPos = null;
+      b.syncInitiatorPos = null;
+      b.baitPartnerUntil = -10;
+      b.baitPartnerPos = null;
+      b.baitPartnerThreat = null;
       b.coverAllyUntil = -10;
       b.coverAllyPos = null;
       b.smokeWatchUntil = -10;
@@ -929,10 +963,44 @@ export class NV2 extends NV13Pro {
       b.snagTime = 0;
       b.unstuckUntil = -10;
       b.unstuckSign = 1;
+      b.body = null;
 
-      if (isHumain) {
-        // Flagship NV2.5 humain across ALL NPCs — INCLUDING 3v3 Spy Allies (NAGI / KAI)!
-        if (prevMind instanceof HumainAffectivePsycheV25) {
+      if (isForce) {
+        // Flagship NV2.6 Force across ALL NPCs — INCLUDING 3v3 Spy Allies (NAGI / KAI)!
+        if (prevMind instanceof ForcePsycheV26) {
+          prevMind.rng = b.rng;
+          prevMind.reset();
+          b.mind = prevMind;
+        } else {
+          b.mind = new ForcePsycheV26(actor, b.rng, isNv21);
+        }
+        if (prevVision instanceof ForceMultisensoryV26) {
+          prevVision.rng = b.rng;
+          prevVision.reset();
+          b.vision = prevVision;
+        } else {
+          b.vision = new ForceMultisensoryV26(b.rng, isNv21);
+        }
+        if (prevTom instanceof ForceCounterBrainV26) {
+          prevTom.rng = b.rng;
+          prevTom.reset();
+          b.tom = prevTom;
+        } else {
+          b.tom = new ForceCounterBrainV26(b.rng, b.mind.persona, isNv21);
+        }
+        b.inference = new ForceActiveInferenceV26(b.rng, b.mind.persona);
+        b.inference.reset(this.match.time, actor.team);
+        b.ddm = new ForceDecisionDDM_V26(b.rng, b.mind.persona);
+        b.ddm.reset(this.match.time);
+        b.gaze = new ForceFixationGazeV26(b.rng, b.mind.persona, isNv21);
+        b.humanAim = new ForceSensorimotorV26(b.rng, isNv21, b.mind.persona);
+        b.tactics = new ForceTacticsV26(b.rng, b.mind.persona, isNv21);
+        b.body = new ForceBodyLanguageV26(b.rng);
+        actor.humanPersona = b.mind.persona.ja;
+        actor.humanArchetype = b.mind.persona.id;
+      } else if (tier === 'humain') {
+        // NV2.5 humain mode (preserved for 5-generation A/B/C/D/E benchmarking!)
+        if (prevMind instanceof HumainAffectivePsycheV25 && !(prevMind instanceof ForcePsycheV26)) {
           prevMind.rng = b.rng;
           prevMind.reset();
           b.mind = prevMind;
@@ -946,7 +1014,7 @@ export class NV2 extends NV13Pro {
         } else {
           b.vision = new HumainMultisensoryV25(b.rng, isNv21);
         }
-        if (prevTom instanceof HumainMetaMindV25) {
+        if (prevTom instanceof HumainMetaMindV25 && !(prevTom instanceof ForceCounterBrainV26)) {
           prevTom.rng = b.rng;
           prevTom.reset();
           b.tom = prevTom;
@@ -963,7 +1031,7 @@ export class NV2 extends NV13Pro {
         actor.humanPersona = b.mind.persona.ja;
         actor.humanArchetype = b.mind.persona.id;
       } else if (tier === 'manusia') {
-        // NV 2.4 Manusia mode (preserved for direct A/B/C/D head-to-head benchmarking!)
+        // NV 2.4 Manusia mode (preserved for direct A/B/C/D/E head-to-head benchmarking!)
         if (prevMind instanceof ManusiaSomaPsycheV24 && !(prevMind instanceof HumainAffectivePsycheV25)) {
           prevMind.rng = b.rng;
           prevMind.reset();
@@ -993,7 +1061,7 @@ export class NV2 extends NV13Pro {
         actor.humanPersona = b.mind.persona.ja;
         actor.humanArchetype = b.mind.persona.id;
       } else if (actorHuman) {
-        // NV2.3 HUMAN mode (preserved for direct A/B/C/D head-to-head benchmarking!)
+        // NV2.3 HUMAN mode (preserved for direct A/B/C/D/E head-to-head benchmarking!)
         if (prevMind) {
           prevMind.rng = b.rng;
           prevMind.reset();
@@ -1028,6 +1096,117 @@ export class NV2 extends NV13Pro {
       }
       b.spy = isNv21 ? new SpyAgentState() : null;
     }
+  }
+
+  /**
+   * NV2.6 Force Observable Signal Dispatcher:
+   * Makes NPC voice callouts, startle gasps, deep-breath exhales, bait traps, and synchronized
+   * 3-2-1 double-swings both AUDIBLE (Klatt DSP in Sound Engin 2.0) and VISIBLE (16-bone IK
+   * gestures + Shadow Flame + diegetic HUD / 3D cues) with 100% FAIR-PLAY separation!
+   */
+  emitForceSignal(actor, kind, opts = {}) {
+    if (!actor || !this.comms?.buildSignalPayload) return false;
+    const b = this.brains.get(actor.id);
+    if (!actor.human && !b?.forceMode) return false;
+    const t = this.match.time;
+    const playerTeam = this.match.player ? this.match.player.team : 0;
+    const isAlly = actor.team === playerTeam;
+
+    // Trigger matching 16-bone IK body gesture immediately (even if audio is rate-limited!)
+    let gesture = opts.gesture || 0;
+    if (!gesture) {
+      if (kind === 'SWING_NOW' || kind === 'PLAYER_ORDER_SWING') gesture = FORCE_GESTURES.WAVE_SWING;
+      else if (kind === 'BAIT_READY' || kind === 'BAIT_PARTNER' || kind === 'PLAYER_ORDER_TRAP') gesture = FORCE_GESTURES.HOLD_TRAP;
+      else if (kind === 'CONTACT' || kind === 'SHIELD_BREAK' || kind === 'TRADE_REQUEST' || kind === 'PLAYER_ORDER_COVER' || kind === 'SUPPRESS_PIN') gesture = FORCE_GESTURES.POINT_CONTACT;
+      else if (kind === 'STARTLE' || kind === 'AMBUSH') gesture = FORCE_GESTURES.STARTLE_JOLT;
+      else if (kind === 'BREATH_RESET' || kind === 'CHANGE_OF_MIND') gesture = FORCE_GESTURES.BREATH_SLUMP;
+    }
+    if (b?.body && gesture) {
+      const dur = gesture === FORCE_GESTURES.STARTLE_JOLT ? 0.34
+        : gesture === FORCE_GESTURES.WAVE_SWING ? 0.78
+        : gesture === FORCE_GESTURES.HOLD_TRAP ? 0.95
+        : 0.62;
+      const prio = gesture === FORCE_GESTURES.STARTLE_JOLT ? 4 : (gesture === FORCE_GESTURES.WAVE_SWING ? 3 : 2);
+      b.body.triggerGesture(gesture, dur, t, prio, this.metrics);
+    }
+
+    if (!opts.force && !this.comms.canEmitSignal(isAlly, kind, t)) return false;
+    if (b?.body && isAlly && kind !== 'BREATH_RESET' && kind !== 'STARTLE') {
+      b.body.onRadioSpeak(t, 1.25);
+    }
+    const prosody = b?.mind?.getVocalProsody ? b.mind.getVocalProsody(t) : null;
+    const payload = this.comms.buildSignalPayload(actor, kind, t, {
+      ...opts,
+      playerTeam,
+      prosody,
+      gesture
+    });
+    this.metrics.forceVocalSignals++;
+    this.match.event('npcSignal', payload);
+    return true;
+  }
+
+  /**
+   * Interactive Player Squad Command (1: SWING / 2: COVER / 3: TRAP):
+   * 100% Fair-Play — projects the player's crosshair ray forward and commands living NV2.6 Force
+   * allies with immediate vocal acknowledgment, IK hand gesture, and synchronized execution!
+   */
+  issuePlayerSquadOrder(kind, player = this.match.player) {
+    if (!player?.alive || !this.tempo) return null;
+    const norm = kind === 'SWING' || kind === 'COVER' || kind === 'TRAP' ? kind : 'SWING';
+    const t = this.match.time;
+    const f = forward(player.yaw, player.pitch);
+    const from = eyeOf(player);
+    const far = [clamp(from[0] + f[0] * 24, -23, 23), clamp(from[1] + f[1] * 24, 0.5, 4.5), clamp(from[2] + f[2] * 24, -96, 96)];
+    const hitT = obstruction(from, far);
+    const frac = hitT <= 1 ? Math.max(0.15, hitT - 0.08) : 1.0;
+    const targetPos = [
+      clamp(from[0] + (far[0] - from[0]) * frac, -23, 23),
+      clamp(from[2] + (far[2] - from[2]) * frac, -96, 96)
+    ];
+
+    const order = this.tempo.issuePlayerOrder(norm, player, targetPos, t);
+    this.metrics.forcePlayerOrders++;
+
+    // Find closest living NPC teammate to acknowledge & lead execution
+    const mates = this.match.actors
+      .filter(m => m.alive && !m.human && m.team === player.team)
+      .sort((u, v) => dist2(u.x, u.z, player.x, player.z) - dist2(v.x, v.z, player.x, player.z));
+    const ackKind = norm === 'SWING' ? 'PLAYER_ORDER_SWING' : norm === 'COVER' ? 'PLAYER_ORDER_COVER' : 'PLAYER_ORDER_TRAP';
+
+    for (const mate of mates) {
+      const bm = this.brains.get(mate.id);
+      if (!bm) continue;
+      bm.planAt = Math.min(bm.planAt, t + 0.03);
+      if (norm === 'SWING') {
+        bm.syncSwingAt = order.goAt;
+        bm.syncSwingUntil = order.goAt + 1.85;
+        bm.syncSwingPos = targetPos;
+        bm.syncInitiatorPos = [player.x, player.z];
+      } else if (norm === 'COVER') {
+        bm.coverAllyUntil = t + 3.2;
+        bm.coverAllyPos = targetPos;
+      } else if (norm === 'TRAP') {
+        bm.baitPartnerUntil = t + 4.2;
+        bm.baitPartnerPos = [player.x, player.z];
+        bm.baitPartnerThreat = targetPos;
+      }
+      if (bm.gaze) bm.gaze.onAcousticCue(mate, [targetPos[0], 1.5, targetPos[1]], t, true, this.metrics);
+    }
+
+    if (mates.length) {
+      const lead = mates[0];
+      this.comms.emitCallout(player.team, lead.id, -1, targetPos[0], targetPos[1], ackKind, t, this.metrics, {
+        callerX: lead.x, callerZ: lead.z, isHumanPlayer: true
+      });
+      this.emitForceSignal(lead, ackKind, {
+        refX: targetPos[0],
+        refZ: targetPos[1],
+        syncGoAt: norm === 'SWING' ? order.goAt : null,
+        force: true
+      });
+    }
+    return order;
   }
 
   getSpyStatus() {
@@ -1273,12 +1452,20 @@ export class NV2 extends NV13Pro {
         if (shieldBroken && bA.tom) bA.tom.onEnemyShieldBroken(victim.id, t);
         if (shieldBroken && bA.humanMode) {
           this.comms.emitCallout(attacker.team, attacker.id, victim.id, victim.x, victim.z, 'SHIELD_BREAK', t, this.metrics, {stress: bA.mind?.stress || 0});
-          // NV2.5 humain: synchronized squad double-swing right after breaking enemy shield!
+          // NV2.6 Force / NV2.5 humain: synchronized squad double-swing right after breaking enemy shield!
           if (bA.humainMode && bA.tactics && t - (bA.tactics.lastSyncEmitAt || -10) > 4.0) {
             bA.tactics.lastSyncEmitAt = t;
+            const syncPlan = bA.forceMode
+              ? this.tempo.scheduleSyncSwing(attacker.team, attacker.id, attacker.x, attacker.z, victim.x, victim.z, victim.id, t, 0.38)
+              : null;
             this.comms.emitCallout(attacker.team, attacker.id, victim.id, victim.x, victim.z, 'SWING_NOW', t, this.metrics, {
-              callerX: attacker.x, callerZ: attacker.z, stress: bA.mind?.stress || 0
+              callerX: attacker.x, callerZ: attacker.z, stress: bA.mind?.stress || 0, syncGoAt: syncPlan?.goAt ?? null
             });
+            if (bA.forceMode) {
+              this.emitForceSignal(attacker, 'SWING_NOW', {refX: victim.x, refZ: victim.z, syncGoAt: syncPlan?.goAt ?? null});
+            }
+          } else if (bA.forceMode) {
+            this.emitForceSignal(attacker, 'SHIELD_BREAK', {refX: victim.x, refZ: victim.z});
           }
         }
         if (bA.spy && rearAdvantage(attacker.x, attacker.z, victim.x, victim.z, victim.yaw) > 0.0) {
@@ -1293,7 +1480,7 @@ export class NV2 extends NV13Pro {
       }
     }
 
-    // Victim team observes hit taken -> negative reward + survival token + NV2.5 humain psyche/ToM/comms!
+    // Victim team observes hit taken -> negative reward + survival token + NV2.6 Force psyche/ToM/comms/gesture!
     const stV = this.nv2Teams[victim.team];
     stV.pushToken(this.buildToken(victim.team, 3, victim, seenAttacker));
     stV.lastReward -= shieldBroken ? 0.45 : 0.14;
@@ -1306,15 +1493,20 @@ export class NV2 extends NV13Pro {
       if (wasPeeking && bV.mind?.shouldHesitateRepeek(t)) {
         bV.repeekAbortPending = true;
       }
+      if (stRes?.startled && bV.forceMode) {
+        this.emitForceSignal(victim, 'STARTLE', {gesture: FORCE_GESTURES.STARTLE_JOLT});
+      }
       if (seenAttacker && bV.humanMode) {
         if (stRes?.startled) {
           this.comms.emitCallout(victim.team, victim.id, seenAttacker.id, seenAttacker.x, seenAttacker.z, 'AMBUSH', t, this.metrics, {
             callerX: victim.x, callerZ: victim.z, stress: bV.mind?.stress || 0.7
           });
+          if (bV.forceMode) this.emitForceSignal(victim, 'AMBUSH', {refX: seenAttacker.x, refZ: seenAttacker.z});
         } else if (victim.hp < 64 || shieldBroken || bV.recentDamage >= 16) {
           this.comms.emitCallout(victim.team, victim.id, seenAttacker.id, seenAttacker.x, seenAttacker.z, 'TRADE_REQUEST', t, this.metrics, {
             callerX: victim.x, callerZ: victim.z, stress: bV.mind?.stress || 0.4
           });
+          if (bV.forceMode) this.emitForceSignal(victim, 'TRADE_REQUEST', {refX: seenAttacker.x, refZ: seenAttacker.z});
         }
       }
     }
@@ -1344,12 +1536,27 @@ export class NV2 extends NV13Pro {
       if (bK) {
         bK.stepReward += 1.65;
         if (bK.mind) bK.mind.onKill(t, victim, this.metrics);
-        // NV2.5 humain Post-Kill Trade-Check Ritual: briefly verify no trade-fragger is swinging behind corpse!
+        // NV2.5/2.6 Post-Kill Trade-Check Ritual + Anti-Trade Cover Slide!
         if (bK.tom?.triggerPostKillCheck && victim) {
           bK.tom.triggerPostKillCheck(killer, [victim.x, victim.z], t, this.metrics);
         }
+        if (bK.forceMode && bK.tom?.triggerAntiTradeSlide && victim) {
+          // Check fair-play Cowan working memory for another live enemy near kill zone!
+          let otherThreat = null;
+          if (bK.vision?.workingMemory) {
+            for (const [eid, slot] of bK.vision.workingMemory) {
+              if (eid !== victim.id && t - slot.at < 5.5 && dist2(killer.x, killer.z, slot.x, slot.z) < 32) {
+                otherThreat = [slot.x, slot.z];
+                break;
+              }
+            }
+          }
+          if (otherThreat || killer.hp < 78) {
+            bK.tom.triggerAntiTradeSlide(killer, [victim.x, victim.z], otherThreat, t, this.metrics, bK.cover ? [bK.cover.x, bK.cover.z] : null);
+          }
+        }
         // Squad Cohesion bonding boost on successful Trade Swing / Sync Double-Swing refrag!
-        if ((bK.state === 'トレード突入' || bK.state === '同期ダブルスイング') && bK.mind?.onSquadBond) {
+        if ((bK.state === 'トレード突入' || bK.state === '同期ダブルスイング' || bK.state === 'プレイヤー命令突入') && bK.mind?.onSquadBond) {
           bK.mind.onSquadBond(0.16);
         }
         // After an NV2.1 Spy assassination, slip back into shadow if injured or another enemy is nearby
@@ -1408,6 +1615,9 @@ export class NV2 extends NV13Pro {
       this.comms.emitCallout(victim.team, victim.id, callTargetId, callX, callZ, 'MAN_DOWN', t, this.metrics, {
         callerX: victim.x, callerZ: victim.z, stress: 0.75
       });
+      if (bV?.forceMode) {
+        this.emitForceSignal(victim, 'MAN_DOWN', {refX: callX, refZ: callZ});
+      }
     }
 
     // Reinforce the outcome before the final match checkpoint.
@@ -1425,7 +1635,7 @@ export class NV2 extends NV13Pro {
     this.match.echoPulse.emit(this.match, {
       kind: 'reload', pos: eyeOf(actor), actor, team: actor.team, loudness: .5
     });
-    // NV2.5 humain / NV 2.4 Manusia RELOAD_COVER voice callout to nearby teammates when reloading in combat!
+    // NV2.6 Force / NV2.5 humain / NV 2.4 Manusia RELOAD_COVER voice callout to nearby teammates when reloading in combat!
     const b = this.brains.get(actor.id);
     if (b?.humanMode && (b.seen || t - (b.seenAt || -10) < 4.5 || t - (b.underFireAt || -10) < 2.2)) {
       const refX = b.lastPos ? b.lastPos[0] : actor.x;
@@ -1433,6 +1643,9 @@ export class NV2 extends NV13Pro {
       this.comms.emitCallout(actor.team, actor.id, b.targetId ?? -1, refX, refZ, 'RELOAD_COVER', t, this.metrics, {
         callerX: actor.x, callerZ: actor.z, stress: b.mind?.stress || 0.25
       });
+      if (b.forceMode) {
+        this.emitForceSignal(actor, 'RELOAD_COVER', {refX, refZ});
+      }
     }
   }
 
@@ -1784,6 +1997,9 @@ export class NV2 extends NV13Pro {
           if (b.tom.observeEnemyHabit) {
             b.tom.observeEnemyHabit(a, e, t, a.hp < 70);
           }
+          if (b.tom.observeEnemyStrafe) {
+            b.tom.observeEnemyStrafe(a, e, t);
+          }
         }
         if (b.inference) {
           const surprise = b.inference.observeEvidence(e.x, e.z, 0.88, t);
@@ -1841,6 +2057,9 @@ export class NV2 extends NV13Pro {
       if (b.mind) b.mind.onVisualContact(t, b.target);
       if (b.humanMode) {
         this.comms.emitCallout(a.team, a.id, b.target.id, b.target.x, b.target.z, 'CONTACT', t, this.metrics, {stress: b.mind?.stress || 0});
+        if (b.forceMode) {
+          this.emitForceSignal(a, 'CONTACT', {refX: b.target.x, refZ: b.target.z});
+        }
       }
     } else if (!b.seen && b.humanMode && Math.abs(a.x) > 8.5 && t - (b.lastFlankClearAt || -10) > 5.2 && t - (b.seenAt || -10) > 3.2
       && (b.state === '戦術掃討' || b.state === '連携側面展開' || b.state === '視認偵察')) {
@@ -1848,6 +2067,9 @@ export class NV2 extends NV13Pro {
       b.lastFlankClearAt = t;
       if (b.inference) b.inference.observeFlankClear(a.x, a.z, t);
       this.comms.emitCallout(a.team, a.id, -1, a.x, a.z, 'FLANK_CLEAR', t, this.metrics, {lane: a.x < 0 ? -1 : 1});
+      if (b.forceMode) {
+        this.emitForceSignal(a, 'FLANK_CLEAR', {refX: a.x, refZ: a.z});
+      }
     }
   }
 
@@ -1965,31 +2187,76 @@ export class NV2 extends NV13Pro {
       }
     }
 
-    // 0b2. NV2.5 humain Cover-Anchored Synchronized Squad Double-Swing (from SHIELD_BREAK / BAIT_READY / Player push!)
+    // 0b2. NV2.6 Force / NV2.5 humain Counted 3-2-1 Orthogonal Crossfire Synchronized Double-Swing!
     const isLongSniper = a.gun === 'MS10' || a.gun === 'SW T';
-    if (b.humainMode && b.syncSwingPos && !b.seen && !isLongSniper && t >= b.syncSwingAt && t < b.syncSwingUntil
-      && a.hp >= 68 && a.mag >= 6 && a.reload <= 0 && !b.mind?.isSuppressed()) {
+    if (b.humainMode && b.syncSwingPos && !b.seen && !isLongSniper && t < b.syncSwingUntil
+      && a.hp >= 66 && a.mag >= 6 && a.reload <= 0 && !b.mind?.isSuppressed()) {
       const dSync = dist2(a.x, a.z, b.syncSwingPos[0], b.syncSwingPos[1]);
-      if (dSync > 5.0 && dSync < 30) {
-        const cov = this.findProCover(a, b, [{x: b.syncSwingPos[0], z: b.syncSwingPos[1], gun: 'SRA'}], 'skirmish');
+      if (dSync > 5.0 && dSync < 32) {
+        const cov = this.findProCover(a, b, [{x: b.syncSwingPos[0], z: b.syncSwingPos[1], gun: 'SRA'}], 'skirmish', b.forceMode ? b.syncInitiatorPos : null);
+        if (cov) {
+          b.cover = {x: cov.x, z: cov.z, peek: cov.peek};
+          b.coverNodeId = cov.nodeId;
+          this.astarUsedThisTick = -8;
+          // NV2.6 Force: during brief pre-goAt staging, proactively move up to crossfire cover edge while waving!
+          if (b.forceMode && t < b.syncSwingAt - 0.05) {
+            b.path = dist2(a.x, a.z, cov.x, cov.z) > 1.0
+              ? this.nav.route([a.x, a.z], [cov.x, cov.z], this.tacticalWeights(a, b))
+              : [];
+            b.state = '同期待機';
+            b.peekPhase = 'hide';
+            b.planAt = Math.min(b.syncSwingAt, t + 0.12);
+            if (b.body) b.body.triggerGesture(FORCE_GESTURES.WAVE_SWING, 0.55, t, 3, this.metrics);
+            b.prevState = b.state;
+            return;
+          }
+          if (t >= b.syncSwingAt) {
+            b.path = this.nav.route([a.x, a.z], cov.peek, this.tacticalWeights(a, b));
+            const pOrder = b.forceMode ? this.tempo?.getPlayerOrder(a.team, t) : null;
+            b.state = pOrder?.kind === 'SWING' ? 'プレイヤー命令突入' : '同期ダブルスイング';
+            b.peekPhase = 'peek';
+            b.htnTask = 'SYNC_SWING';
+            b.htnUntil = t + 0.65;
+            b.planAt = t + 0.28;
+            if (b.prevState !== b.state) {
+              this.metrics.humainSyncSwings++;
+              if (b.forceMode && b.syncInitiatorPos && this.tempo.scoreCrossfireAngle(cov.peek[0], cov.peek[1], b.syncSwingPos, b.syncInitiatorPos) > 0) {
+                this.metrics.forceCrossfireSwings++;
+              }
+            }
+            b.prevState = b.state;
+            return;
+          }
+        }
+      }
+    }
+
+    // 0b2b. NV2.6 Force Bait-and-Switch Partner Overwatch: actively hold LIVE orthogonal cov.peek crossfire over baiter's threat lane!
+    if (b.forceMode && b.baitPartnerThreat && t < b.baitPartnerUntil && !b.seen
+      && a.hp >= 62 && a.mag >= 6 && a.reload <= 0 && !b.mind?.isSuppressed()) {
+      const dBait = dist2(a.x, a.z, b.baitPartnerThreat[0], b.baitPartnerThreat[1]);
+      if (dBait > 5.5 && dBait < 30) {
+        const cov = this.findProCover(a, b, [{x: b.baitPartnerThreat[0], z: b.baitPartnerThreat[1], gun: 'SRA'}], 'skirmish', b.baitPartnerPos);
         if (cov) {
           b.cover = {x: cov.x, z: cov.z, peek: cov.peek};
           b.coverNodeId = cov.nodeId;
           this.astarUsedThisTick = -8;
           b.path = this.nav.route([a.x, a.z], cov.peek, this.tacticalWeights(a, b));
-          b.state = '同期ダブルスイング';
+          const pOrder = this.tempo?.getPlayerOrder(a.team, t);
+          b.state = pOrder?.kind === 'TRAP' ? 'プレイヤー罠待機' : 'ベイト連携待機';
           b.peekPhase = 'peek';
-          b.htnTask = 'SYNC_SWING';
-          b.htnUntil = t + 0.65;
           b.planAt = t + 0.30;
-          if (b.prevState !== '同期ダブルスイング') this.metrics.humainSyncSwings++;
+          if (b.prevState !== b.state) {
+            this.metrics.forceBaitPartners++;
+            this.emitForceSignal(a, 'BAIT_PARTNER', {refX: b.baitPartnerThreat[0], refZ: b.baitPartnerThreat[1]});
+          }
           b.prevState = b.state;
           return;
         }
       }
     }
 
-    // 0b3. NV2.5 humain Wounded Bait Trap (punish greedy pursuers from cover instead of blind panic run!)
+    // 0b3. NV2.6 Force / NV2.5 humain Wounded Bait Trap (punish greedy pursuers from cover instead of blind panic run!)
     if (b.humainMode && b.tom?.tryStartWoundedBaitTrap) {
       const trap = b.tom.tryStartWoundedBaitTrap(a, b, t, this.metrics);
       if (trap && b.cover) {
@@ -2000,9 +2267,15 @@ export class NV2 extends NV13Pro {
         b.peekPhase = 'hide';
         b.planAt = t + 0.35;
         if (trap.justStarted && b.lastPos) {
+          if (b.forceMode) {
+            this.tempo.registerBaitTrap(a.team, a.id, a.x, a.z, b.lastPos[0], b.lastPos[1], b.targetId ?? -1, t);
+          }
           this.comms.emitCallout(a.team, a.id, b.targetId ?? -1, b.lastPos[0], b.lastPos[1], 'BAIT_READY', t, this.metrics, {
             callerX: a.x, callerZ: a.z, stress: b.mind?.stress || 0.4
           });
+          if (b.forceMode) {
+            this.emitForceSignal(a, 'BAIT_READY', {refX: b.lastPos[0], refZ: b.lastPos[1]});
+          }
         }
         b.prevState = b.state;
         return;
@@ -2238,22 +2511,37 @@ export class NV2 extends NV13Pro {
               }
             }
 
-            // NV2.5 humain SWING_NOW / BAIT_READY behavioral coupling: Synchronized Squad Double-Swing!
-            if ((c.kind === 'SWING_NOW' || c.kind === 'BAIT_READY') && !syncAssigned && bm.humainMode
+            // NV2.6 Force / NV2.5 humain SWING_NOW / BAIT_READY behavioral coupling!
+            if (c.kind === 'BAIT_READY' && bm.forceMode && !bm.spy && !syncAssigned && dCall < 30 && mate.hp >= 62 && mate.mag >= 6 && mate.reload <= 0) {
+              bm.baitPartnerUntil = t + 2.55;
+              bm.baitPartnerPos = [c.callerX ?? c.x, c.callerZ ?? c.z];
+              bm.baitPartnerThreat = [c.x, c.z];
+              bm.planAt = Math.min(bm.planAt, t + 0.08);
+              syncAssigned = true;
+            } else if ((c.kind === 'SWING_NOW' || c.kind === 'BAIT_READY') && !syncAssigned && !bm.spy && bm.humainMode
               && dCall < 32 && mate.hp >= 56 && mate.mag >= 4 && mate.reload <= 0 && t > (bm.syncSwingUntil || -10)) {
-              const delay = c.kind === 'SWING_NOW' ? (0.14 + bm.rng() * 0.16) : (0.28 + bm.rng() * 0.24);
-              bm.syncSwingAt = t + delay;
-              bm.syncSwingUntil = t + delay + 1.30;
+              const sharedGo = c.extra?.syncGoAt;
+              const goAt = (bm.forceMode && Number.isFinite(sharedGo) && sharedGo > t + 0.05)
+                ? sharedGo
+                : (t + (c.kind === 'SWING_NOW' ? (0.14 + bm.rng() * 0.16) : (0.28 + bm.rng() * 0.24)));
+              bm.syncSwingAt = goAt;
+              bm.syncSwingUntil = goAt + 1.45;
               bm.syncSwingPos = [c.x, c.z];
-              bm.planAt = Math.min(bm.planAt, t + delay + 0.04);
+              bm.syncInitiatorPos = [c.callerX ?? c.x, c.callerZ ?? c.z];
+              bm.planAt = Math.min(bm.planAt, t + 0.05);
               syncAssigned = true;
             }
 
-            // RELOAD_COVER behavioral coupling: nearest healthy teammate holds angle for reloading ally (including human player!)
-            if (c.kind === 'RELOAD_COVER' && !coverAssigned && dCall < 28 && mate.hp >= 58 && mate.mag >= 4 && mate.reload <= 0) {
+            // RELOAD_COVER behavioral coupling: nearest healthy teammate holds angle + NV2.6 Force cover-pinning burst!
+            if (c.kind === 'RELOAD_COVER' && !coverAssigned && !bm.spy && dCall < 28 && mate.hp >= 58 && mate.mag >= 4 && mate.reload <= 0) {
               bm.coverAllyUntil = t + 1.55;
               bm.coverAllyPos = [c.x, c.z];
               bm.planAt = Math.min(bm.planAt, t + 0.06);
+              if (bm.forceMode && bm.tactics?.scheduleSuppressPin && mate.mag >= 10) {
+                if (bm.tactics.scheduleSuppressPin([c.x, c.z], t, 0.70)) {
+                  this.emitForceSignal(mate, 'SUPPRESS_PIN', {refX: c.x, refZ: c.z});
+                }
+              }
               this.metrics.humanReloadCovers++;
               if (c.extra?.isHumanPlayer) this.metrics.manusiaPlayerAssists++;
               coverAssigned = true;
@@ -2321,9 +2609,22 @@ export class NV2 extends NV13Pro {
 
       if (t - b.damageClock > 1.45) b.recentDamage = Math.max(0, b.recentDamage - dt * 20);
       if (b.mind) b.mind.step(a, dt, t, b.seen, {aliveAllies: allies.length, aliveEnemies: enemyCount, killsToWin, metrics: this.metrics});
+      // NV2.6 Force somatic audio/gesture drain (Blind-side Startle Gasp + Deep-Breath Reset Exhale!)
+      if (b.forceMode && b.mind?.consumePendingAudioEvent) {
+        const sEv = b.mind.consumePendingAudioEvent();
+        if (sEv) {
+          this.emitForceSignal(a, sEv.kind === 'startle' ? 'STARTLE' : 'BREATH_RESET');
+        }
+      }
       if (b.inference) b.inference.step(a, dt, t, b.seen);
+      const prevComAbort = b.ddm ? t < b.ddm.comAbortUntil : false;
       const ddmOut = b.ddm ? b.ddm.step(a, b, dt, t, b.mind, b.tom, this.metrics) : null;
-      if (ddmOut?.changeOfMindAbort && b.cover) b.planAt = Math.min(b.planAt, t + 0.04);
+      if (ddmOut?.changeOfMindAbort && b.cover) {
+        b.planAt = Math.min(b.planAt, t + 0.04);
+        if (b.forceMode && !prevComAbort) {
+          this.emitForceSignal(a, 'CHANGE_OF_MIND', {gesture: FORCE_GESTURES.BREATH_SLUMP});
+        }
+      }
       if (b.vision) b.vision.decayUnseen(dt, t, a);
 
       // Active 360Hz 3D incoming-projectile trajectory dodge (walkable 6-dir + cover priority!)
@@ -2405,14 +2706,19 @@ export class NV2 extends NV13Pro {
       }
       if (L) { dx /= L; dz /= L; }
 
-      // Active 3D Projectile Dodge Override + Acoustic Footstep Feint + Non-Periodic Asymmetric Strafe Choreography!
+      // Active 3D Projectile Dodge Override + Anti-Trade Post-Kill Slide + Acoustic Feint + Asymmetric Strafe!
       const dodgingShot = t < b.dodgeUntil;
+      const closeDuelNow = !!(b.seen && b.target && dist2(a.x, a.z, b.target.x, b.target.z) < 14);
+      const postKillSliding = !!(b.forceMode && !closeDuelNow && b.tom && t < (b.tom.postKillSlideUntil || -10));
       const spyInfiltrating = isSpy && (b.spy.mode === 'SPY_INFILTRATE' || b.spy.mode === 'SPY_VANISH');
-      const acousticFeint = b.tom ? b.tom.evaluateAcousticFeint(a, b, t, this.metrics) : null;
+      const acousticFeint = b.tom && !spyInfiltrating ? b.tom.evaluateAcousticFeint(a, b, t, this.metrics) : null;
       if (dodgingShot) {
         const wD = isSpy ? 0.90 : 0.85;
         dx = dx * (1 - wD) + b.dodgeVec[0] * wD;
         dz = dz * (1 - wD) + b.dodgeVec[1] * wD;
+      } else if (postKillSliding) {
+        dx = dx * 0.25 + b.tom.postKillSlideVec[0] * 0.75;
+        dz = dz * 0.25 + b.tom.postKillSlideVec[1] * 0.75;
       } else if (t < (b.unstuckUntil || -10)) {
         // Organic corner-lip sidestep unstuck
         const rx = -dz * (b.unstuckSign || 1), rz = dx * (b.unstuckSign || 1);
@@ -2426,7 +2732,7 @@ export class NV2 extends NV13Pro {
           dx = dx * 0.25 + fx * 0.75;
           dz = dz * 0.25 + fz * 0.75;
         }
-      } else if (b.seen && b.target && !spyInfiltrating && b.state !== '戦術退避' && b.state !== '態勢立て直し' && b.state !== '予測待ち伏せ' && b.state !== '負傷ベイトトラップ') {
+      } else if (b.seen && b.target && !spyInfiltrating && b.state !== '戦術退避' && b.state !== '態勢立て直し' && b.state !== '予測待ち伏せ' && b.state !== '負傷ベイトトラップ' && b.state !== 'ベイト連携待機' && b.state !== '同期待機') {
         if (t >= b.strafeAt) {
           if (b.tactics?.nextAsymmetricStrafe) {
             const stf = b.tactics.nextAsymmetricStrafe(b.strafe || 1, b.mind, isSpy, this.metrics);
@@ -2469,8 +2775,11 @@ export class NV2 extends NV13Pro {
       const counterStrafing = t < b.counterStrafeUntil && !dodgingShot;
       const startleFreeze = !!b.mind?.isStartleFrozen?.(t) && !b.seen;
       const hesitating = !!ddmOut?.hesitating && !dodgingShot && !b.seen;
-      let speed = (b.state === '態勢立て直し' || b.state === '予測待ち伏せ' || b.state === '負傷ベイトトラップ' ? (L > 0.5 ? 2.6 : 0) : 4.64) * a.paceFactor;
+      const anchoredWait = b.state === '態勢立て直し' || b.state === '予測待ち伏せ'
+        || b.state === '負傷ベイトトラップ';
+      let speed = (anchoredWait ? (L > 0.5 ? 2.6 : 0) : 4.64) * a.paceFactor;
       if (dodgingShot) speed *= isSpy ? 1.28 : 1.18;
+      else if (postKillSliding) speed *= 1.16;
       if (counterStrafing) speed *= 0.22;
       else if (startleFreeze) speed *= 0.35;
       else if (hesitating) speed *= 0.52;
@@ -2513,9 +2822,12 @@ export class NV2 extends NV13Pro {
       let physicsAction = null;
 
       if (!(b.seen && b.target)) {
-        // NV2.5 humain / NV 2.4 Manusia 4-Way Harbor Physics Mastery + Fair-Play Anticipatory Corner Pre-Fire!
+        // NV2.6 Force / NV2.5 humain / NV 2.4 Manusia 4-Way Harbor Physics Mastery + Suppress Pin + Corner Pre-Fire!
         if (b.tactics) {
           physicsAction = b.tactics.evaluatePhysicsTactics(a, b, this.match, t, b.mind, this.metrics);
+          if (!physicsAction && !isSpy && !spyInfiltrating && b.tactics.getActiveSuppressPin) {
+            physicsAction = b.tactics.getActiveSuppressPin(a, t, this.metrics);
+          }
           if (!physicsAction && b.tactics.evaluateCornerPreFire) {
             physicsAction = b.tactics.evaluateCornerPreFire(a, b, this.match, t, b.mind, this.metrics);
           }
@@ -2544,6 +2856,10 @@ export class NV2 extends NV13Pro {
           suppressPos = b.lastSeenTargetPos;
         } else if (!suppressMode && isSpy && b.spy.prediction && dist2(a.x, a.z, b.spy.prediction.predX, b.spy.prediction.predZ) < 28) {
           fallbackYaw = Math.atan2(b.spy.prediction.predX - a.x, -(b.spy.prediction.predZ - a.z));
+        } else if (!suppressMode && (b.state === 'ベイト連携待機' || b.state === 'プレイヤー罠待機') && b.baitPartnerThreat) {
+          fallbackYaw = Math.atan2(b.baitPartnerThreat[0] - a.x, -(b.baitPartnerThreat[1] - a.z));
+        } else if (!suppressMode && b.state === '同期待機' && b.syncSwingPos) {
+          fallbackYaw = Math.atan2(b.syncSwingPos[0] - a.x, -(b.syncSwingPos[1] - a.z));
         } else if (!suppressMode && b.state === '予測待ち伏せ' && t < b.ambushUntil) {
           fallbackYaw = b.ambushYaw;
         } else if (!suppressMode && b.gaze) {
@@ -2566,6 +2882,8 @@ export class NV2 extends NV13Pro {
       );
       const holdingTrapAngle = !!(
         b.state === '負傷ベイトトラップ'
+        || b.state === 'ベイト連携待機'
+        || b.state === 'プレイヤー罠待機'
         || b.state === '予測待ち伏せ'
         || (b.tom && t < (b.tom.postKillCheckUntil || -10))
       );
@@ -2581,12 +2899,21 @@ export class NV2 extends NV13Pro {
         backstabBonus,
         primed: !!b.lastPrimed,
         mind: b.mind,
+        tom: b.tom,
         metrics: this.metrics,
         urgentRearWhip,
-        holdingTrapAngle
+        holdingTrapAngle,
+        syncStaging: b.state === '同期待機',
+        syncExecuting: b.state === '同期ダブルスイング' || b.state === 'プレイヤー命令突入',
+        baitOverwatch: b.state === 'ベイト連携待機' || b.state === 'プレイヤー罠待機'
       });
       b.lastYawRate = aimRes.yawRate ?? Math.abs(b.humanAim.velYaw || 0);
       b.lastQuietEyeShot = !!aimRes.quietEyeShot;
+
+      // NV2.6 Force 360Hz 16-Bone GPU Kinetic Embodiment Update (Head-Look + IK Hand Signals + Cardiac Breath!)
+      if (b.body) {
+        b.body.step(a, b, dt, t, b.mind, b.humanAim, b.gaze);
+      }
 
       // Tactical Reload Discipline + NV 2.4 Manusia Post-Kill Habitual Reload!
       const habitReload = !!(b.mind && t >= b.mind.postKillReloadAt && t < b.mind.postKillReloadAt + 0.55 && !b.seen && a.mag < wpn.capacity * 0.68);

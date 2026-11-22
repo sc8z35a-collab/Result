@@ -375,6 +375,7 @@ export class Renderer {
     gl.uniform2f(p.uRecoil, 0, 0);
     if (p.uAnim) gl.uniform4f(p.uAnim, 0, 0, 0, 0);
     if (p.uAnim2) gl.uniform4f(p.uAnim2, 0, 0, 0, 0);
+    if (p.uExpr) gl.uniform4f(p.uExpr, 0, 0, 0, 0);
     gl.uniform2f(p.uHitFX, 0, 0);
     gl.uniform1f(p.uGunHeat, 0);
     gl.uniform1f(p.uTime, time);
@@ -538,6 +539,10 @@ export class Renderer {
         gl.uniform2f(p.uRecoil, a.recoil || 0, a.recoilSide || 0);
         if (p.uAnim) gl.uniform4f(p.uAnim, a.fwdVel || 0, a.sideVel || 0, a.airBlend || 0, a.landCompress || 0);
         if (p.uAnim2) gl.uniform4f(p.uAnim2, a.pitch || 0, time + a.id * 1.13, a.sprintAmt || 0, a.reloadFrac || 0);
+        if (p.uExpr) {
+          const ex = a.expr;
+          gl.uniform4f(p.uExpr, ex?.headYaw || 0, ex?.gestureEncoded || 0, ex?.tension || 0, ex?.breathWave || 0);
+        }
         gl.uniform2f(p.uHitFX, a.hitFlash || 0, a.shieldFlash || 0);
         this.draw(this.actorMesh(a, lite));
       }

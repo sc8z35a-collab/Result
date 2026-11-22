@@ -30,9 +30,9 @@ const {random} = await load('geometry');
 
 const h = 1 / 360;
 
-test('NV2.5-01 | Default Match launches NV2.5 humain across all NPCs incl. 3v3 Spy allies (NAGI/KAI) with 4-tier A/B/C/D isolation', () => {
+test('NV2.5-01 | Explicit NV2.5 humain & default flagship both run all NV2.5 humain cores incl. 3v3 Spy allies (NAGI/KAI) with multi-tier isolation', () => {
   assert.equal(NV25_HUMAIN_VERSION, 'NV2.5 humain');
-  const m = new Match({mode: '3v3', limit: 'unlimited', loadout: 'SW T', allyNv21: 1});
+  const m = new Match({mode: '3v3', limit: 'unlimited', loadout: 'SW T', allyNv21: 1, aiModel: 'humain'});
   assert.equal(m.nv.version, NV25_HUMAIN_VERSION);
   assert.equal(m.actors[1].aiVersion, 'NV2.1');
   assert.equal(m.actors[2].aiVersion, NV25_HUMAIN_VERSION);
@@ -49,8 +49,8 @@ test('NV2.5-01 | Default Match launches NV2.5 humain across all NPCs incl. 3v3 S
     assert(b.tactics instanceof HumainEmbodiedTacticsV25);
   }
 
-  // 4-tier isolation: humain vs manusia
-  const m25vs24 = new Match({mode: '3v3', limit: 'unlimited', loadout: 'SRA', allNpc: true, teamAiModels: ['human', 'manusia']});
+  // Tier isolation: humain vs manusia
+  const m25vs24 = new Match({mode: '3v3', limit: 'unlimited', loadout: 'SRA', allNpc: true, teamAiModels: ['humain', 'manusia']});
   assert(m25vs24.nv.brains.get(m25vs24.actors[0].id).inference instanceof HumainActiveInferenceV25);
   assert.equal(m25vs24.nv.brains.get(m25vs24.actors[3].id).inference, null, 'NV 2.4 Manusia team must not run NV2.5 Active Inference');
   assert.equal(m25vs24.actors[0].aiVersion, 'NV2.5 humain');

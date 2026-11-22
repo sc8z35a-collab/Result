@@ -53,6 +53,7 @@ uniform vec3 uHit;
 uniform vec2 uRecoil;
 uniform vec4 uAnim;
 uniform vec4 uAnim2;
+uniform vec4 uExpr;
 out vec3 wPos,wNormal,wColor,lPos;
 out vec2 uv;
 flat out float layer;
@@ -66,7 +67,7 @@ void main(){
   if(uMode==1){
     int boneId=int(floor(aKind*.1+.001));
     cleanKind=mod(aKind,10.);
-    rigApplyCharacter(p,n,boneId,uGait,uPose,uHit,uRecoil,uAnim,uAnim2);
+    rigApplyCharacter(p,n,boneId,uGait,uPose,uHit,uRecoil,uAnim,uAnim2,uExpr);
   } else if(uMode==2){
     // First-person weapon blowback + RD40 kinetic lock-on / twin-barrel hydraulic servo / D01 SENSOR pod motion
     float rdLock=uAnim.x;
