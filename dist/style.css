@@ -2664,6 +2664,12 @@ body.touch #chronoBanner {
   font-size: 7px;
   padding: 1.5px 6px;
 }
+#app[data-flir-active="true"] #chronoBanner {
+  top: calc(max(6px, env(safe-area-inset-top)) + 52px);
+}
+body.touch #app[data-flir-active="true"] #chronoBanner {
+  top: calc(max(4px, env(safe-area-inset-top)) + 42px);
+}
 
 /* Ergonomic Touch Controls: Generous Control Stick (#pad) & Fire Button (#touchFire),
    Compact Out-of-the-Way Secondary Buttons */
