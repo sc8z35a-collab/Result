@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { setTimeout as delay } from 'node:timers/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createCanvas } from '@napi-rs/canvas';
@@ -21,6 +22,8 @@ const {SchlierenOptics} = await load('schlieren');
 const {SynapseProfiler} = await load('synapse');
 const {unit, sub, forward, STRIDE} = await load('geometry');
 const {ARV1_LOCK_ACQUIRE, steerGuidedShot} = await load('df1');
+const {computeSpyDodge} = await load('nv21-spy');
+const {computeAcousticPath} = await load('audio');
 const h = 1 / 360;
 const game = (loadout = 'SW T', options = {}, listener = () => {}) => new Match({
   mode: '1v1', limit: 'unlimited', loadout, ...options
@@ -45,7 +48,8 @@ function storage(t, database, seed = {}) {
     get length() { return data.size; },
     key: i => [...data.keys()][i] ?? null,
     getItem: key => data.get(key) ?? null,
-    setItem: (key, value) => data.set(String(key), String(value))
+    setItem: (key, value) => data.set(String(key), String(value)),
+    removeItem: key => data.delete(String(key))
   };
   t.after(() => { [globalThis.indexedDB, globalThis.localStorage] = before; });
   return data;
@@ -615,4 +619,282 @@ test('61 | Delayed audio deliveries are sorted from oldest to newest', () => {
   const reports = m.echoPulse.step(m);
   assert.equal(reports.length, 2);
   assert(reports[0].arriveAt < reports[1].arriveAt);
+});
+
+test('C09 | An aborted IndexedDB award is durably saved and reconciled by receipt', async t => {
+  storage(t, new IDBFactory());
+  const wallet = new PilotWallet(() => {}, 'aborted-award');
+  await wallet.ready;
+  t.after(() => wallet.db?.close());
+  const transact = wallet.db.transaction;
+  let failNextWrite = true;
+  t.mock.method(wallet.db, 'transaction', function (stores, mode) {
+    const tx = transact.call(this, stores, mode);
+    if (mode === 'readwrite' && failNextWrite) {
+      failNextWrite = false;
+      queueMicrotask(() => tx.abort());
+    }
+    return tx;
+  });
+  assert(await wallet.change('match/award'));
+  assert.equal(wallet.state.units, 10);
+  const reopened = new PilotWallet(() => {}, 'aborted-award');
+  await reopened.ready;
+  t.after(() => reopened.db?.close());
+  assert(reopened.db);
+  assert.equal(reopened.state.units, 10);
+  assert(!await reopened.change('match/award'));
+  assert.equal(reopened.state.units, 10);
+});
+
+test('C10 | A temporarily unavailable database preserves confirmed EVR1 and credits', async t => {
+  const db = new IDBFactory();
+  storage(t, db);
+  const original = new PilotWallet(() => {}, 'cached-account');
+  await original.ready;
+  assert(await original.change('match/1'));
+  assert(await original.change());
+  assert(await original.change('match/2'));
+  original.db.close();
+
+  globalThis.indexedDB = undefined;
+  const offline = new PilotWallet(() => {}, 'cached-account');
+  await offline.ready;
+  assert.deepEqual(offline.state, {units:15, evr:true});
+  assert(!await offline.change('match/2'));
+  assert(!await offline.change());
+  assert(await offline.change('match/3'));
+  assert.deepEqual(offline.state, {units:25, evr:true});
+
+  globalThis.indexedDB = db;
+  const online = new PilotWallet(() => {}, 'cached-account');
+  await online.ready;
+  t.after(() => online.db?.close());
+  assert.deepEqual(online.state, {units:25, evr:true});
+  assert(!await online.change('match/3'));
+});
+
+test('C11 | Another tab holding the wallet lock cannot block boot or awards', async t => {
+  storage(t, new IDBFactory(), {
+    'held-lock-fallback': '{"units":10,"evr":false,"receipts":["match/1"]}'
+  });
+  const before = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  Object.defineProperty(globalThis, 'navigator', {configurable:true, value:{locks:{
+    request: (_name, options, action) => options?.ifAvailable ? action(null) : new Promise(() => {})
+  }}});
+  t.after(() => before ? Object.defineProperty(globalThis, 'navigator', before) : delete globalThis.navigator);
+  const connected = new PilotWallet(() => {}, 'held-lock');
+  assert.equal(await Promise.race([connected.ready.then(() => 'ready'), delay(600, 'waiting')]), 'ready');
+  assert.equal(connected.state.units, 10);
+  connected.db.close();
+
+  globalThis.indexedDB = undefined;
+  const offline = new PilotWallet(() => {}, 'held-lock');
+  await offline.ready;
+  assert.equal(await Promise.race([offline.change('match/2'), delay(600, 'waiting')]), true);
+  assert.equal(offline.state.units, 20);
+});
+
+test('C12 | Ending a match immediately checkpoints the current NV2 training once', t => {
+  const data = storage(t, undefined);
+  const m = game();
+  m.nv.neural.stepCount = m.nv.neural.updates = 4;
+  m.end();
+  const key = 'result.nv2.weights.v1';
+  assert(data.has(key));
+  assert.equal(JSON.parse(data.get(key)).updates, 4);
+  m.nv.neural.updates++;
+  m.end();
+  assert.equal(game().nv.neural.updates, 4);
+});
+
+test('C13 | A damaged NV2 checkpoint cannot replace part of the model or corrupt counters', t => {
+  const data = storage(t, undefined);
+  const model = game().nv.neural;
+  const original = model.trainable[0].w[0];
+  model.saveWeights();
+  const key = 'result.nv2.weights.v1';
+  const saved = JSON.parse(data.get(key));
+  saved.w[0][0] = 2;
+  saved.w.at(-1).pop();
+  data.set(key, JSON.stringify(saved));
+  assert.equal(game().nv.neural.trainable[0].w[0], original);
+
+  saved.w.at(-1).push(0);
+  saved.step = 'broken';
+  data.set(key, JSON.stringify(saved));
+  const reloaded = game().nv.neural;
+  assert.equal(reloaded.stepCount, 0);
+  assert.equal(reloaded.trainable[0].w[0], original);
+});
+
+test('C14 | Taking a hit through cover reveals the impact bearing without the attacker location', () => {
+  const m = game(), [p, e] = m.actors;
+  place(p, -7.8, 2); place(e, -7.8, 13, Math.PI);
+  assert(obstruction(eyeOf(e), targetPoint(p)) <= 1);
+  const brain = m.nv.brains.get(e.id);
+  m.damage(e, p, 6, [0, 0, 1], {ricochet:true});
+  assert(!brain.contacts.has(p.id));
+  assert(!m.nv.intel[e.team].has(p.id));
+  assert(!m.nv.teams[e.team].beliefs.has(p.id));
+  assert.equal(brain.threatDir[1], -1);
+  assert(brain.mind.startleUntil > m.time);
+
+  place(p, 2, 80); place(e, 2, 90);
+  assert(obstruction(eyeOf(e), targetPoint(p)) > 1);
+  m.damage(e, p, 3, [0, 0, 1]);
+  assert.equal(brain.contacts.get(p.id)?.z, p.z);
+});
+
+test('C15 | NPCs only react to reloads once an audible cue reaches them', () => {
+  const m = game(), [p, e] = m.actors;
+  const team = m.nv.teams[e.team];
+  place(p, 2, 75); place(e, 2, 90);
+  const delaySeconds = computeAcousticPath(eyeOf(p), eyeOf(e)).delay;
+  p.mag--;
+  const greedy = m.synapse.fp.reloadGreed;
+  assert(m.reload(p));
+  assert((team.profiles.get(p.id)?.reloadUntil ?? -1) <= m.time);
+  assert.equal(m.synapse.fp.reloadGreed, greedy);
+  m.time = delaySeconds - .001;
+  assert.equal(m.echoPulse.step(m).length, 0);
+  m.time = delaySeconds + .001;
+  for (const cue of m.echoPulse.step(m)) m.nv.onEchoArrival(cue);
+  assert(team.profiles.get(p.id).reloadUntil > m.time);
+  assert(m.synapse.fp.reloadGreed > greedy);
+
+  place(p, -7.8, -6); place(e, -7.8, 16);
+  const muffled = computeAcousticPath(eyeOf(p), eyeOf(e));
+  assert(muffled.occluded);
+  const before = team.profiles.get(p.id).reloadUntil;
+  m.time = 3;
+  p.reload = 0;
+  assert(m.reload(p));
+  m.time += muffled.delay + .002;
+  for (const cue of m.echoPulse.step(m)) m.nv.onEchoArrival(cue);
+  assert.equal(team.profiles.get(p.id).reloadUntil, before);
+});
+
+test('C16 | Both NPC dodge solvers ignore bullets stopped by cover or expired by arrival', () => {
+  const m = game(), [, e] = m.actors;
+  const brain = m.nv.brains.get(e.id);
+  const spy = {dodgeUrgency:0};
+  place(e, -7.8, 16);
+  const shot = {p:[-7.8, 1.02, -10], dir:[0, 0, 1], team:0, speed:234, life:.5};
+  assert(obstruction(shot.p, [e.x, 1.02, e.z]) <= 1);
+  m.shots = [shot];
+  m.time = 1;
+  m.nv.dodgeIncomingShots(e, brain);
+  assert(brain.dodgeUntil <= m.time);
+  assert.equal(computeSpyDodge(m.nv, e, brain, spy), false);
+
+  place(e, 2, 90);
+  shot.p = [2, 1.02, 67];
+  assert(obstruction(shot.p, [e.x, 1.02, e.z]) > 1);
+  shot.life = .02;
+  m.nv.dodgeIncomingShots(e, brain);
+  assert(brain.dodgeUntil <= m.time);
+  assert.equal(computeSpyDodge(m.nv, e, brain, spy), false);
+  shot.life = .5;
+  m.nv.dodgeIncomingShots(e, brain);
+  assert(brain.dodgeUntil > m.time);
+  assert.equal(computeSpyDodge(m.nv, e, brain, spy), true);
+});
+
+test('C17 | High and outgoing rounds do not put an NPC under imaginary suppression', () => {
+  const m = game(), [, e] = m.actors;
+  const brain = m.nv.brains.get(e.id);
+  place(e, 2, 90);
+  m.time = 2;
+  const shot = {p:[2, 10, 80], dir:[0, 0, 1], team:0, speed:234, life:.5};
+  m.shots = [shot];
+  m.nv.detectIncoming(e, brain);
+  assert(brain.underFireAt < m.time);
+  shot.p = [2, 1.02, 91];
+  m.nv.detectIncoming(e, brain);
+  assert(brain.underFireAt < m.time);
+  shot.p = [2, 1.02, 80];
+  m.nv.detectIncoming(e, brain);
+  assert.equal(brain.underFireAt, m.time);
+});
+
+function setSmoke(m, thick) {
+  m.aeroVortex.stats.totalSmoke = thick ? 6 : 0;
+  m.aeroVortex.smokeOcclusion = () => thick ? 1 : 0;
+}
+
+test('C18 | Smoke prevents standard optical lock acquisition and immediate guided launch', () => {
+  for (const gun of ['DF1 OUT', 'RD20', 'RD30']) {
+    const m = game(gun), [p, e] = m.actors;
+    place(p, 2, 75); place(e, 2, 90);
+    aim(p, e);
+    const lock = p.df || p.rd;
+    setSmoke(m, true);
+    tickActor(m, p, 200);
+    assert.equal(lock.focusId, -1, gun);
+    setSmoke(m, false);
+    tickActor(m, p, 200);
+    assert.equal(lock.locked, true, gun);
+    setSmoke(m, true);
+    assert(m.trigger(p));
+    assert(m.shots.length > 0 && m.shots.every(shot => !shot.guided), gun);
+  }
+  const m = game('DF1 OUT'), [p, e] = m.actors;
+  place(p, 2, 75); place(e, 2, 90);
+  aim(p, e);
+  Object.assign(p.df, {scope:'thermal', ads:true});
+  setSmoke(m, true);
+  tickActor(m, p, 200);
+  assert(p.df.locked, 'EVR1 retains its thermal lock');
+});
+
+test('C19 | Moving behind smoke stops new midflight corrections from standard optics', () => {
+  const m = game('DF1 OUT'), [p, e] = m.actors;
+  place(p, 2, 75); place(e, 2, 90);
+  aim(p, e);
+  tickActor(m, p, 200);
+  assert(m.trigger(p));
+  const [shot] = m.shots;
+  assert(shot.guided);
+  const direction = [...shot.dir], budget = shot.homingBudget;
+  e.x += 1;
+  setSmoke(m, true);
+  steerGuidedShot(m, shot, h);
+  assert.deepEqual(shot.dir, direction);
+  assert.equal(shot.homingBudget, budget);
+  setSmoke(m, false);
+  steerGuidedShot(m, shot, h);
+  assert(shot.homingBudget < budget);
+});
+
+test('C20 | Cover takes flight time to penetrate and cannot be exited by an expired shot', () => {
+  const m = game('MS10'), [p, e] = m.actors;
+  place(e, 2.6, 58);
+  m.aeroVortex.sample = () => ({speed:0});
+  const shot = life => {
+    const s = {p:[2.6, 1.3, 62.7], dir:[0, 0, -1], speed:648, damage:9, gun:'MS10', owner:p, team:p.team, life};
+    m.chronoTrace.beginShot(s, m.time);
+    return s;
+  };
+  const short = shot(.002);
+  m.time += h;
+  assert.equal(m.projectile(short, h), false);
+  assert.equal(m.techStats.penetrations, 0);
+  assert.equal(short.trace.outcome, 'wall');
+  assert(!m.effects.some(effect => effect.kind === 'penetrate'));
+
+  const long = shot(.1);
+  m.time += h;
+  assert(m.projectile(long, h));
+  assert.equal(m.techStats.penetrations, 0);
+  m.time += h;
+  assert(m.projectile(long, h));
+  assert.equal(m.techStats.penetrations, 1);
+  const [, enter, exit] = long.trace.pts;
+  assert(exit[3] > enter[3]);
+  for (let i = 0; i < 10 && !long.trace.closed; i++) {
+    m.time += h;
+    m.projectile(long, h);
+  }
+  assert.equal(m.techStats.wallbangHits, 1);
 });

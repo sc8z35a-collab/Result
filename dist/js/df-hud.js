@@ -11,13 +11,17 @@ export class PilotEquipment {
     this.thermal = new ThermalOptic($('thermal'));
     this.wallet = new PilotWallet(() => this.accountView());
     this.buying = false;
-    this.pendingAwards = new Map();
+    this.pendingAwards = new Map(this.wallet.stagedAwards().map(receipt => [receipt, receipt.split('/')[0]]));
     this.failedAwards = new Set();
     this.savingAwards = false;
     $('retryCredits').onclick = () => this.saveAwards();
     for (const id of ['buyLobby', 'buyPause'])$(id).onclick = () => this.buy();
-    for (const [id, code] of [['mobileADS', 'ads'], ['mobilePattern', 'pattern'], ['mobileBoost', 'boost'], ['mobileOptic', 'scope']])$(id).onclick = () => this.action(code);
-    this.wasThermal = false
+    for (const [id, code] of [['mobileADS', 'ads'], ['mobilePattern', 'pattern'], ['mobileBoost', 'boost'], ['mobileOptic', 'scope'], ['mobileAA14', 'aa14']]) {
+      const el = $(id);
+      if (el) el.onclick = () => this.action(code);
+    }
+    this.wasThermal = false;
+    if (this.pendingAwards.size) this.saveAwards();
   }
   accountView() {
     if (!this.wallet)return;
@@ -58,26 +62,41 @@ export class PilotEquipment {
   }
   award(e) {
     if (!e.actor.human)return;
+    this.wallet.stageAward(e.receipt);
     this.pendingAwards.set(e.receipt, this.getMatch()?.receiptId);
     this.notice('＋1 POINT　/　＋0.10 CR');
     this.saveAwards(e.receipt);
   }
 
   async saveAwards(newReceipt) {
-    if (this.savingAwards) return;
+    if (!newReceipt) this.retryAllAwards = true;
+    if (this.savingAwards) {
+      this.rescanAwards = true;
+      return;
+    }
     this.savingAwards = true;
     this.accountView();
-    for (const receipt of this.pendingAwards.keys()) {
-      if (newReceipt && this.failedAwards.has(receipt)) continue;
-      try {
-        await this.wallet.change(receipt);
-        this.pendingAwards.delete(receipt);
-        this.failedAwards.delete(receipt);
-      } catch {
-        this.failedAwards.add(receipt);
-      }
+    try {
+      do {
+        this.rescanAwards = false;
+        const retryFailed = !!this.retryAllAwards || !newReceipt;
+        this.retryAllAwards = false;
+        for (const receipt of [...this.pendingAwards.keys()]) {
+          if (!retryFailed && this.failedAwards.has(receipt)) continue;
+          try {
+            await this.wallet.change(receipt);
+            this.pendingAwards.delete(receipt);
+            this.failedAwards.delete(receipt);
+            this.accountView();
+          } catch {
+            this.failedAwards.add(receipt);
+          }
+        }
+        newReceipt = null;
+      } while (this.rescanAwards || this.retryAllAwards);
+    } finally {
+      this.savingAwards = false;
     }
-    this.savingAwards = false;
     if (this.failedAwards.size) this.notice('未保存のクレジットがあります。試合結果から保存を再試行できます');
     this.accountView();
   }
@@ -87,8 +106,18 @@ export class PilotEquipment {
     $('creditResult').innerHTML = `<span>今回の獲得 <strong>＋${money(match.player.earned)} CR</strong>${status}</span><span>所持 ${money(this.wallet.state.units)} CR</span>`
   }
   action(code) {
-    const m = this.getMatch(), a = m?.player, d = a?.df;
-    if (!d || !a.alive || m.ended)return;
+    const m = this.getMatch(), a = m?.player;
+    if (!a?.alive || m.ended) return;
+    if ((code === 'boost' || code === 'aa14') && a.df40) {
+      const res = m.toggleAA14(a);
+      if (res.state === 'on') this.notice('AUTO-AIM 1.4 OVERDRIVE 起動 · 過熱に注意（X / E で解除）');
+      else if (res.state === 'off') this.notice('AUTO-AIM 1.4 解除 · ARV1.3 / AA1.3 へ復帰');
+      else if (res.reason === 'overheated') this.notice(`AUTO-AIM 1.4 オーバーヒート冷却中（残り ${res.cooldown.toFixed(1)}s）`);
+      else if (res.reason === 'hot') this.notice(`AUTO-AIM 1.4 高温待機中（${Math.round(res.heat)}%）`);
+      return;
+    }
+    const d = a.df;
+    if (!d) return;
     if (code === 'ads')d.ads = !d.ads;
     if (code === 'pattern') {
       d.pattern = d.pattern === 'central' ? 'spread' : 'central';
@@ -115,16 +144,18 @@ export class PilotEquipment {
     $('dfSetup').hidden = loadout !== 'DF1 OUT';
     const rdEl = $('rdSetup');
     if (rdEl) {
-      const isRD = loadout === 'RD20' || loadout === 'RD30' || loadout === 'RD40';
+      const isRD = loadout === 'RD20' || loadout === 'RD30' || loadout === 'RD40' || loadout === 'DF40 II';
       rdEl.hidden = !isRD;
       rdEl.classList.toggle('is-rd20', loadout === 'RD20');
       rdEl.classList.toggle('is-rd30', loadout === 'RD30');
       rdEl.classList.toggle('is-rd40', loadout === 'RD40');
+      rdEl.classList.toggle('is-df40ii', loadout === 'DF40 II');
       if (isRD) {
         const specs = {
           RD20: ['ARV1.1', 'オートエイム 1.1（1.76×弾道誘導＋予測射撃） · 20発 1発同時フルオート', 'CLASS', '軽量スマートカービン · プレイヤー / NPC 開放'],
           RD30: ['ARV1.1 mini', '軽量オートエイム 1.1 mini 搭載 · 80発 2発同時フルオート', 'CLASS', '標準ツインバレル · プレイヤー / NPC 開放'],
-          RD40: ['ARV1.2', '強化オートエイム 1.2（1.92×） · ロック範囲 1.4倍 · 広域追従＆立体モーション', 'D01 SENSOR', '壁裏に隠れた敵にも最大 4.0秒間ロック＆エイムを追従']
+          RD40: ['ARV1.2', '強化オートエイム 1.2（1.92×） · ロック範囲 1.4倍 · 広域追従＆立体モーション', 'D01 SENSOR', '壁裏に隠れた敵にも最大 4.0秒間ロック＆エイムを追従'],
+          'DF40 II': ['ARV1.3 · AA1.3', '進化オートエイム 1.3（2.08×・2次加速度予測・3発収束誘導・壁裏 4.5s 追従）', 'AUTO-AIM 1.4', 'X / E で一時強化（2.80×超誘導・0.06s即ロック） · 100%でオーバーヒート（6.0s冷却）']
         }[loadout];
         if ($('rdSpec1Title')) $('rdSpec1Title').textContent = specs[0];
         if ($('rdSpec1Desc')) $('rdSpec1Desc').textContent = specs[1];
@@ -149,11 +180,15 @@ export class PilotEquipment {
     const a = match?.player,
       d = a?.df,
       rd = a?.rd,
+      df40 = a?.df40,
       on = !!(play && d && a.alive),
       rdOn = !!(play && rd && a.alive),
+      df40On = !!(play && df40 && a.alive),
       isRD40 = rdOn && a.gun === 'RD40',
       isRD30 = rdOn && a.gun === 'RD30',
       isRD20 = rdOn && a.gun === 'RD20',
+      aa14On = !!(df40On && df40.aa14Active && !df40.aa14Overheated),
+      aa14Hot = !!(df40On && df40.aa14Overheated),
       ads = !!(on && d.ads),
       thermal = ads && d.scope === 'thermal' && this.wallet.state.evr;
 
@@ -182,23 +217,47 @@ export class PilotEquipment {
 
     $('dfHud').hidden = !on;
     const rdHud = $('rdHud');
+    const heatWrap = $('aa14HeatWrap');
     if (rdHud) {
-      rdHud.hidden = !rdOn;
+      rdHud.hidden = !(rdOn || df40On);
       rdHud.classList.toggle('is-rd20', isRD20);
       rdHud.classList.toggle('is-rd30', isRD30);
       rdHud.classList.toggle('is-rd40', isRD40);
-      rdHud.classList.toggle('is-locked', !!(rdOn && rd.locked));
+      rdHud.classList.toggle('is-df40ii', df40On);
+      rdHud.classList.toggle('is-aa14', aa14On);
+      rdHud.classList.toggle('is-overheat', aa14Hot);
+      rdHud.classList.toggle('is-locked', !!(rdOn && rd.locked) || !!(df40On && df40.locked));
     }
+    if (heatWrap) heatWrap.hidden = !df40On;
     $('touchDF').hidden = !on;
+    const touchDF40 = $('touchDF40');
+    if (touchDF40) {
+      touchDF40.hidden = !df40On;
+      const btn = $('mobileAA14');
+      if (btn && df40On) {
+        btn.classList.toggle('is-active', aa14On);
+        btn.classList.toggle('is-overheat', aa14Hot);
+        btn.textContent = aa14Hot
+          ? `過熱 ${Math.ceil(df40.aa14Cooldown)}s`
+          : aa14On
+            ? `AA1.4 ${Math.round(df40.aa14Heat)}%`
+            : df40.aa14Heat > 1
+              ? `AA1.4 · ${Math.round(df40.aa14Heat)}%`
+              : 'AA1.4';
+      }
+    }
     $('optics').hidden = !ads;
     $('optics').classList.toggle('thermal-on', thermal);
     $('thermal').hidden = !thermal;
 
     const reticle = $('reticle');
     if (reticle) {
-      reticle.classList.toggle('is-rd-locked', !!(isRD40 && rd.locked));
-      reticle.classList.toggle('is-rd-d01', !!(isRD40 && rd.d01Active));
-      reticle.classList.toggle('is-rd-fire', !!(isRD40 && (rd.firePulse || 0) > .18));
+      const smartObj = isRD40 ? rd : df40On ? df40 : null;
+      reticle.classList.toggle('is-rd-locked', !!(smartObj && smartObj.locked));
+      reticle.classList.toggle('is-rd-d01', !!(smartObj && smartObj.d01Active));
+      reticle.classList.toggle('is-rd-fire', !!(smartObj && (smartObj.firePulse || 0) > .18));
+      reticle.classList.toggle('is-aa14', aa14On);
+      reticle.classList.toggle('is-overheat', aa14Hot);
     }
 
     const lock = $('lockDot');
@@ -207,11 +266,11 @@ export class PilotEquipment {
     const rdTether = $('rdTether');
     const rdTetherGlow = $('rdTetherGlow');
     lock.hidden = true;
-    lock.classList.remove('is-rd40', 'is-rd30', 'is-rd20', 'is-d01', 'is-acquiring', 'is-firing');
+    lock.classList.remove('is-rd40', 'is-rd30', 'is-rd20', 'is-df40ii', 'is-aa14', 'is-d01', 'is-acquiring', 'is-firing');
     if (lockTag) lockTag.hidden = true;
     if (rdOverlay) {
       setSvgHidden(rdOverlay, true);
-      rdOverlay.classList.remove('is-d01', 'is-fire', 'is-acquiring');
+      rdOverlay.classList.remove('is-df40ii', 'is-aa14', 'is-d01', 'is-fire', 'is-acquiring');
     }
 
     let lockTargetId = -1, lockStyle = 'df', isD01 = false, isAcquiring = false;
@@ -229,6 +288,36 @@ export class PilotEquipment {
       if (d.locked && !thermal) {
         lockTargetId = d.focusId;
         lockStyle = 'df';
+      }
+    } else if (df40On && rdHud) {
+      const pct = Math.round((df40.focus || 0) * 100);
+      const heatPct = Math.round(df40.aa14Heat || 0);
+      if (aa14On) {
+        $('rdFocusText').textContent = df40.locked
+          ? (df40.d01Active ? `ARV1.3 · AA1.4  •  壁裏超LOCK ${df40.d01Timer.toFixed(1)}s` : 'ARV1.3 · AA1.4  •  超LOCK (2.80×収束)')
+          : df40.focus > 0 ? `ARV1.3 · AA1.4  ·  即焦点 ${pct}%` : 'ARV1.3 · AA1.4 OVERDRIVE  ·  超広域';
+      } else {
+        $('rdFocusText').textContent = df40.locked
+          ? (df40.d01Active ? `ARV1.3 · AA1.3  •  壁裏LOCK ${df40.d01Timer.toFixed(1)}s` : 'ARV1.3 · AA1.3  •  LOCK (2.08×収束)')
+          : df40.focus > 0 ? `ARV1.3 · AA1.3  ·  焦点 ${pct}%` : 'ARV1.3 · AA1.3  ·  待機 (1.65×広域)';
+      }
+      $('rdSensorText').hidden = false;
+      $('rdSensorText').textContent = aa14Hot
+        ? `AA1.4 OVERHEAT  ·  冷却 ${df40.aa14Cooldown.toFixed(1)}s (${heatPct}%)`
+        : aa14On
+          ? `AA1.4 OVERDRIVE  ·  熱量 ${heatPct}%  [X/E 解除]`
+          : heatPct > 0
+            ? `AA1.4 放熱中 ${heatPct}%  ·  [X/E 再起動]`
+            : 'AA1.4 READY  ·  X / E で一時強化起動';
+      rdHud.classList.toggle('is-d01', !!df40.d01Active && !aa14Hot);
+      const barPct = df40.d01Active ? (df40.d01Timer / (df40.d01Max || 4.5)) * 100 : df40.locked ? 100 : (df40.focus || 0) * 100;
+      $('d01Bar').style.width = Math.max(0, Math.min(100, barPct)).toFixed(1) + '%';
+      if ($('aa14HeatBar')) $('aa14HeatBar').style.width = Math.max(0, Math.min(100, df40.aa14Heat || 0)).toFixed(1) + '%';
+      if (df40.focusId >= 0 && (df40.locked || df40.focus > .04)) {
+        lockTargetId = df40.focusId;
+        lockStyle = 'df40ii';
+        isD01 = !!df40.d01Active;
+        isAcquiring = !df40.locked;
       }
     } else if (rdOn && rdHud) {
       const pct = Math.round((rd.focus || 0) * 100);
@@ -281,25 +370,29 @@ export class PilotEquipment {
     lock.style.left = sx.toFixed(2) + '%';
     lock.style.top = sy.toFixed(2) + '%';
 
-    if (lockStyle === 'rd40') {
-      const lp = rd.lockPulse || 0;
-      const fp = rd.firePulse || 0;
-      const dp = rd.d01Pulse || 0;
-      const foc = rd.focus || 0;
-      const distM = Math.max(1, Math.round(rd.targetDist || z));
+    if (lockStyle === 'rd40' || lockStyle === 'df40ii') {
+      const src = lockStyle === 'df40ii' ? df40 : rd;
+      const isDF40 = lockStyle === 'df40ii';
+      const isAA14Lock = isDF40 && aa14On;
+      const lp = src.lockPulse || 0;
+      const fp = src.firePulse || 0;
+      const dp = src.d01Pulse || 0;
+      const foc = src.focus || 0;
+      const distM = Math.max(1, Math.round(src.targetDist || z));
       const rotDeg = isAcquiring
         ? (1 - foc) * 52
         : isD01
           ? 45 + Math.sin(t * 2.8) * 12
-          : Math.sin(t * 3.1) * 3.5 + (rd.barrelPhase ? 1 : -1) * fp * 11;
+          : Math.sin(t * (isAA14Lock ? 5.2 : 3.1)) * (isAA14Lock ? 6.0 : 3.5) + ((src.barrelPhase || 0) - (isDF40 ? 1 : .5)) * fp * 11;
       const scaleVal = isAcquiring
         ? 1.78 - 0.72 * foc
-        : 1.0 + fp * 0.24 - lp * 0.16 + (isD01 ? Math.sin(t * 6.0) * 0.045 : 0);
+        : (isAA14Lock ? 0.94 : 1.0) + fp * 0.22 - lp * 0.16 + (isD01 ? Math.sin(t * 6.0) * 0.045 : 0);
       const wavePulse = isD01 ? Math.max(dp, (t * 0.95) % 1) : lp;
       const ringScale = isD01 ? 0.75 + wavePulse * 1.95 : 0.72 + (1 - lp) * 2.15;
       const ringOp = isD01 ? Math.max(0, (1 - wavePulse) * 0.85) : lp * 0.95;
 
-      lock.classList.add(isD01 ? 'is-d01' : 'is-rd40');
+      lock.classList.add(isD01 ? 'is-d01' : isDF40 ? 'is-df40ii' : 'is-rd40');
+      lock.classList.toggle('is-aa14', isAA14Lock);
       lock.classList.toggle('is-acquiring', isAcquiring);
       lock.classList.toggle('is-firing', fp > .15 && !isAcquiring);
       lock.style.setProperty('--lock-rot', rotDeg.toFixed(1) + 'deg');
@@ -310,16 +403,22 @@ export class PilotEquipment {
       if (lockTag) {
         lockTag.hidden = false;
         lockTag.textContent = isD01
-          ? `D01 ${rd.d01Timer.toFixed(1)}s · ${distM}m`
+          ? `${isDF40 ? 'D01-II' : 'D01'} ${src.d01Timer.toFixed(1)}s · ${distM}m`
           : isAcquiring
-            ? `SCAN ${Math.round(foc * 100)}%`
-            : `ARV1.2 · ${distM}m`;
+            ? `${isAA14Lock ? 'AA1.4' : isDF40 ? 'ARV1.3' : 'SCAN'} ${Math.round(foc * 100)}%`
+            : isAA14Lock
+              ? `AA1.4 OVERDRIVE · ${distM}m`
+              : isDF40
+                ? `ARV1.3 · AA1.3 · ${distM}m`
+                : `ARV1.2 · ${distM}m`;
       }
 
       // Live vector tracking tether laser from reticle center (50, 50) to tracked target (sx, sy)
-      if (rdOverlay && rdTether && (rd.locked || foc > .32)) {
+      if (rdOverlay && rdTether && (src.locked || foc > .32)) {
         const sxs = sx.toFixed(2), sys = sy.toFixed(2);
         setSvgHidden(rdOverlay, false);
+        rdOverlay.classList.toggle('is-df40ii', isDF40);
+        rdOverlay.classList.toggle('is-aa14', isAA14Lock);
         rdOverlay.classList.toggle('is-d01', isD01);
         rdOverlay.classList.toggle('is-fire', fp > .15 && !isAcquiring);
         rdOverlay.classList.toggle('is-acquiring', isAcquiring);

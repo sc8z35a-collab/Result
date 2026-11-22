@@ -264,7 +264,12 @@ export class FluxGI {
       }
       // 2. Flying high-energy projectiles paint moving indirect bounce light down container alleys!
       for (const s of match.shots) {
+        if (s.materialPass) continue;
         if (s.gun === 'MS10') inject(s.p[0], s.p[2], 0.22, 1.15, 1.45, 0.42, 1);
+        else if (s.gun === 'DF40 II') {
+          if (s.aaTier === '1.4') inject(s.p[0], s.p[2], 1.52, 0.72, 1.24, 0.38, 1);
+          else inject(s.p[0], s.p[2], 0.56, 0.88, 1.55, 0.34, 1);
+        }
         else if (s.gun === 'RD40') inject(s.p[0], s.p[2], 1.38, 0.36, 0.34, 0.32, 1);
         else if (s.gun === 'RD30') inject(s.p[0], s.p[2], 1.28, 0.78, 0.26, 0.24, 1);
         else if (s.gun === 'RD20') inject(s.p[0], s.p[2], 0.26, 1.05, 1.32, 0.24, 1);
@@ -281,7 +286,9 @@ export class FluxGI {
         else if (e.kind === 'ricochet') inject(e.p[0], e.p[2], 1.55, 1.12, 0.44, frac * 0.95, 2);
         else if (e.kind === 'penetrate') inject(e.p[0], e.p[2], 1.35, 0.85, 0.36, frac * 0.75, 2);
         else if (e.kind === 'muzzle') {
-          const c = e.gun === 'MS10' ? [0.3, 1.2, 1.5] : e.gun === 'RD40' ? [1.45, 0.45, 0.38] : [1.35, 0.88, 0.35];
+          const c = e.gun === 'MS10' ? [0.3, 1.2, 1.5]
+            : e.gun === 'DF40 II' ? (e.aaTier === '1.4' ? [1.55, 0.76, 1.25] : [0.58, 0.92, 1.58])
+            : e.gun === 'RD40' ? [1.45, 0.45, 0.38] : [1.35, 0.88, 0.35];
           inject(e.p[0], e.p[2], c[0], c[1], c[2], frac * 0.62, 2);
         }
       }

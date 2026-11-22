@@ -28,3 +28,5 @@ node tools/verify.mjs
 Node.js 24 を使用して、`npm install --prefix tools` の後に `npm test --prefix tools` を実行します。Linux で OpenGL ES 3 の環境があれば、`python tools/test_gpu.py` でシェーダーも検証できます。
 
 [重大度順の不具合修正一覧](docs/BUGFIX_AUDIT.md)
+
+[追加20件の重大度順の修正一覧](docs/CRITICAL_BUGFIX_AUDIT.md)

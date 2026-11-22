@@ -79,7 +79,8 @@ const PUBLIC_MAG_CAP = Object.freeze({
   'DF1 OUT': 95,
   RD20: 20,
   RD30: 80,
-  RD40: 130
+  RD40: 130,
+  'DF40 II': 260
 });
 
 // 14-Dimensional Callsign Personalities (extends NV2.3 12-dim profiles with Somatic/ToM/Social traits!)
@@ -182,7 +183,7 @@ export class ManusiaSomaPsycheV24 extends HumanPsycheV23 {
     const base = super.getFlowFactor();
     // Subtle cohesion & match-point poise bonus, offset slightly by severe somatic fatigue or post-fight shake
     const cohesionBoost = (this.cohesion - 0.5) * 0.04;
-    const stakesBoost = this.matchPointIntensity * (this.persona.clutchPoise || 0.75) * 0.035;
+    const stakesBoost = this.matchPointIntensity * (this.persona.clutchComposure ?? 0.75) * 0.035;
     const fatiguePenalty = this.stamina < 0.30 ? (0.30 - this.stamina) * 0.14 : 0;
     return clamp(base + cohesionBoost + stakesBoost - fatiguePenalty, 0.72, 1.24);
   }
@@ -233,8 +234,8 @@ export class ManusiaSomaPsycheV24 extends HumanPsycheV23 {
     else if (this.matchPointIntensity > 0.65 && this.isInFlow()) this.stateTag = '決着集中フロー';
   }
 
-  onDamaged(actor, attacker, power, t, metrics) {
-    const res = super.onDamaged(actor, attacker, power, t, metrics);
+  onDamaged(actor, attacker, power, t, metrics, impactDir) {
+    const res = super.onDamaged(actor, attacker, power, t, metrics, impactDir);
     // Heavy hit causes somatic breath hitch (breaks breath-hold & spikes heart rate!)
     if (power >= 12 || actor.shield <= 0) {
       this.releaseBreathHold();
@@ -418,15 +419,19 @@ export class ManusiaTheoryOfMindV24 {
   }
 
   /** Fair-Play Mental Ammo Counter: ONLY called on visibly seen muzzle fire or arrived EchoPulse fire! */
-  onObservedEnemyShot(enemyId, gun, t) {
+  onObservedEnemyShot(enemyId, gun, t, shotSeq = null) {
     if (enemyId < 0) return;
     let rec = this.enemyAmmo.get(enemyId);
     if (!rec || rec.gun !== gun || t - rec.lastShotAt > 12.0 || t < rec.reloadAt) {
-      rec = {gun: gun || 'SRA', shots: 0, lastShotAt: t, reloadAt: -10};
+      rec = {gun: gun || 'SRA', shots: 0, lastShotAt: t, reloadAt: -10, lastShotSeq: -1, countedRead: false};
       this.enemyAmmo.set(enemyId, rec);
     }
-    const burstStep = gun === 'DF1 OUT' ? 3 : gun === 'D1' || gun === 'RD30' || gun === 'RD40' ? 2 : 1;
-    rec.shots += burstStep;
+    if (shotSeq != null && Number.isFinite(shotSeq)) {
+      if (shotSeq <= rec.lastShotSeq) return;
+      rec.lastShotSeq = shotSeq;
+    }
+    const salvoStep = gun === 'DF40 II' ? 3 : (gun === 'RD30' || gun === 'RD40') ? 2 : 1;
+    rec.shots += salvoStep;
     rec.lastShotAt = t;
   }
 
@@ -435,6 +440,8 @@ export class ManusiaTheoryOfMindV24 {
     if (rec) {
       rec.shots = 0;
       rec.reloadAt = t + 1.6;
+      rec.countedRead = false;
+      rec.lastShotSeq = -1;
     }
   }
 
@@ -525,20 +532,25 @@ export class ManusiaPerceptionV24 extends HumanPerceptionV23 {
   constructor(rng, isNv21 = false) {
     super(rng, isNv21);
     this.tunnelFocus = 0;         // 0..0.85 selective attention depth during 1v1 duel
+    this._tunnelUpdatedAt = -1;
     this._projEnd = [0, 0, 0];
   }
 
   reset() {
     super.reset();
     this.tunnelFocus = 0;
+    this._tunnelUpdatedAt = -1;
   }
 
   evaluateSighting(actor, enemy, dt, t, mind, currentlyDuelingId = -1, metrics = null, extra = null) {
-    // Update Cocktail-Party selective attention tunneling
-    if (currentlyDuelingId >= 0) {
-      this.tunnelFocus = clamp(this.tunnelFocus + dt * 1.4, 0, 0.85);
-    } else {
-      this.tunnelFocus = Math.max(0, this.tunnelFocus - dt * 3.4);
+    // Update Cocktail-Party selective attention tunneling once per perception tick (independent of candidate count)
+    if (t !== this._tunnelUpdatedAt) {
+      this._tunnelUpdatedAt = t;
+      if (currentlyDuelingId >= 0) {
+        this.tunnelFocus = clamp(this.tunnelFocus + dt * 1.4, 0, 0.85);
+      } else {
+        this.tunnelFocus = Math.max(0, this.tunnelFocus - dt * 3.4);
+      }
     }
 
     // Smoke-Emergence surprise beat: emerging from dense smoke without smoke-edge priming adds slight recognition lag!

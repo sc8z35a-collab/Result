@@ -5,7 +5,7 @@ import {character, viewModel, movingDetails, muzzleFlashMesh} from './models.js'
 import {weapons, npcWeapons} from './match.js';
 import {effectiveSize} from './renderer.js';
 import {layers, unit, sub, cross, add, scale, dot, clamp} from './geometry.js';
-import {imageFrom, labelNames, makeLabel} from './materials.js';
+import {loadAtlas, loadScenery, resetMaterialLayers, labelNames, makeLabel} from './materials.js';
 const STR = 13, SUN = unit([-.66, .28, -.70]);
 const pack = (r, g, b) => ((255 << 24) | (b << 16) | (g << 8) | r) >>> 0;
 function canvas(w, h) {
@@ -95,17 +95,20 @@ export class SoftwareRenderer {
     this.canvas = input;
     this.ctx = input.getContext('2d', {alpha: false});
     if (!this.ctx) {
-      this.canvas = canvas(1, 1);
+      const existing = input.parentNode?.querySelector?.('#software-surface');
+      this.canvas = existing || canvas(1, 1);
       this.canvas.id = 'software-surface';
-      input.after(this.canvas);
+      if (!existing) input.after(this.canvas);
       this.ctx = this.canvas.getContext('2d', {alpha: false})
     }
     this.hdrDisplay = {active: false};
     this.bgStamp = '';
-    this.tones = {sdr: lut('sdr'), hdr: lut('hdr'), khdr: lut('khdr')}
+    this.tones = {sdr: lut('sdr'), hdr: lut('hdr'), khdr: lut('khdr')};
+    this.tone = this.tones.sdr
   }
   async init() {
-    const [manifest, img, sky, waves] = await Promise.all([fetch('./assets/materials.json').then(r => r.json()), imageFrom('./assets/materials.webp'), imageFrom('./assets/marine-sky.webp'), imageFrom('./assets/waves.webp')]);
+    const [{manifest, sheet}, sky, waves] = await Promise.all([loadAtlas(), loadScenery(true), loadScenery(false)]);
+    resetMaterialLayers();
     const s = manifest.tile, c = canvas(s, s), ctx = c.getContext('2d', {willReadFrequently: true});
     this.mats = [];
     ctx.fillStyle = 'white';
@@ -113,7 +116,7 @@ export class SoftwareRenderer {
     this.mats.push(tex(c));
     manifest.layers.forEach((a, i) => {
       layers[a.name] = i + 1;
-      ctx.drawImage(img, i % manifest.columns * s, Math.floor(i / manifest.columns) * s, s, s, 0, 0, s, s);
+      ctx.drawImage(sheet, i % manifest.columns * s, Math.floor(i / manifest.columns) * s, s, s, 0, 0, s, s);
       this.mats.push(tex(c))
     });
     for (const a of labelNames) {
@@ -147,6 +150,16 @@ export class SoftwareRenderer {
       this.actorsLite[team + g] = chunk(character(team, g, 'standard', 'lite'));
       this.actorsLite['spy_' + team + g] = chunk(character(team, g, 'spy', 'lite'));
     }
+  }
+  actorMesh(a, lite) {
+    const map = lite ? this.actorsLite : this.actors;
+    const team = a.team ? 1 : 0;
+    const gun = Object.hasOwn(weapons, a.gun) ? a.gun : 'SW T';
+    const key = (a.isSpy ? 'spy_' : '') + team + gun;
+    if (!map[key]) {
+      map[key] = chunk(character(team, gun, a.isSpy ? 'spy' : 'standard', lite ? 'lite' : 'low'));
+    }
+    return map[key];
   }
   settings(config) {
     this.config = {...config};
@@ -451,11 +464,11 @@ export class SoftwareRenderer {
     }
   }
   render(cam, time, match, view = {}) {
+    if (!this.pix || !this.depth) this.settings(this.config || {resolution: 'SD', lightMode: false});
     const lite = !!this.config?.lightMode;
     if (lite) this.ensureLiteMeshes();
     const extra = !lite && this.config?.graphics === 'extra';
     const activeTerrain = lite ? this.terrainLite : this.terrain;
-    const activeActors = lite ? this.actorsLite : this.actors;
     this.tanY = Math.tan(cam.fov * Math.PI / 360);
     this.tanX = this.tanY * this.aspect;
     this.fy = this.h * .5 / this.tanY;
@@ -469,7 +482,7 @@ export class SoftwareRenderer {
       for (const a of match.actors) {
         if (a.human || !a.alive)continue;
         const cy = Math.cos(a.yaw), sy = Math.sin(a.yaw);
-        this.mesh(activeActors[(a.isSpy ? 'spy_' : '') + a.team + a.gun] || activeActors[a.team + a.gun], {pose: a, p: [a.x, a.y, a.z], r: [cy, 0, sy], u: [0, 1, 0], b: [-sy, 0, cy]}, Math.sin(a.stride * 2.75) * Math.min(1, Math.hypot(a.vx, a.vz) / 4))
+        this.mesh(this.actorMesh(a, lite), {pose: a, p: [a.x, a.y, a.z], r: [cy, 0, sy], u: [0, 1, 0], b: [-sy, 0, cy]}, Math.sin(a.stride * 2.75) * Math.min(1, Math.hypot(a.vx, a.vz) / 4))
       }
     }
     const deathTrace = (this.config?.chronoTrace !== false && match?.player && !match.player.alive) ? (match.chronoTrace?.lastPlayerDeathTrace || null) : null;

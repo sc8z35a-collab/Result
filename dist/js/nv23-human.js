@@ -262,6 +262,7 @@ export const WEAPON_RECOIL_PROFILE = Object.freeze({
   RD30:   {kickP: 0.0058, kickY: 0.0042, pullSkill: 0.88, driftBias: -0.12, quietReq: 0.040, arvWait: true,  bloomPerShot: 0.0030},
   RD20:   {kickP: 0.0060, kickY: 0.0040, pullSkill: 0.89, driftBias: 0.10, quietReq: 0.042, arvWait: true,  bloomPerShot: 0.0029},
   RD40:   {kickP: 0.0052, kickY: 0.0036, pullSkill: 0.92, driftBias: 0.08, quietReq: 0.036, arvWait: true,  bloomPerShot: 0.0025},
+  'DF40 II': {kickP: 0.0048, kickY: 0.0034, pullSkill: 0.93, driftBias: 0.06, quietReq: 0.032, arvWait: true,  bloomPerShot: 0.0022},
   'DF1 OUT': {kickP: 0.0056, kickY: 0.0042, pullSkill: 0.88, driftBias: 0.10, quietReq: 0.038, arvWait: true, bloomPerShot: 0.0028}
 });
 
@@ -605,7 +606,8 @@ export class HumanPsycheV23 {
     this.adrenaline = clamp(this.adrenaline + 0.35, 0, 1);
   }
 
-  onDamaged(actor, attacker, power, t, metrics) {
+  onDamaged(actor, attacker, power, t, metrics, impactDir) {
+    const quietFor = t - this.lastCombatAt;
     this.lastCombatAt = t;
     this.lastDamageBurst += power;
     const res = this.persona.stressResilience * (this.isNv21 ? 1.22 : 1.0) * (1 + this.clutchLevel * 0.24);
@@ -630,17 +632,18 @@ export class HumanPsycheV23 {
     }
 
     // Rear / blind-flank ambush -> Authentic Human Startle Reflex!
-    if (attacker) {
-      const dx = attacker.x - actor.x, dz = attacker.z - actor.z;
+    if (attacker || impactDir) {
+      const dx = attacker ? attacker.x - actor.x : -impactDir[0];
+      const dz = attacker ? attacker.z - actor.z : -impactDir[2];
       const threatYaw = Math.atan2(dx, -dz);
       const angOff = Math.abs(angleDiff(threatYaw, actor.yaw));
-      const surprise = angOff > 0.90 || (t - this.lastCombatAt > 3.2 && angOff > 0.45);
+      const surprise = angOff > 0.90 || (quietFor > 3.2 && angOff > 0.45);
       if (surprise && t > this.startleUntil + 0.65) {
         const freezeDur = (this.isNv21 ? 0.075 : 0.122) + this.rng() * (this.isNv21 ? 0.042 : 0.078);
         this.startle = clamp(0.60 + (angOff / Math.PI) * 0.38, 0.5, 1.0);
         this.startleUntil = t + freezeDur;
         this.startleYaw = threatYaw;
-        this.recordTraumaAngle(actor.x, actor.z, attacker.x, attacker.z, 0.72, t);
+        if (attacker) this.recordTraumaAngle(actor.x, actor.z, attacker.x, attacker.z, 0.72, t);
         if (metrics) metrics.humanStartles++;
         return {startled: true, freezeDur, threatYaw};
       }
@@ -648,7 +651,7 @@ export class HumanPsycheV23 {
     return {startled: false, freezeDur: 0, threatYaw: actor.yaw};
   }
 
-  onDeath(actor, killer, t) {
+  onDeath(actor, killer, t, traumaPos = undefined) {
     if (killer && killer.team !== actor.team) {
       let rec = this.nemesisMap.get(killer.id);
       if (!rec) { rec = {killedBy: 0, killedThem: 0, dmgTaken: 0, lastAt: t}; this.nemesisMap.set(killer.id, rec); }
@@ -658,7 +661,11 @@ export class HumanPsycheV23 {
       if (rec.killedBy >= 2 && rec.killedBy > rec.killedThem) {
         this.nemesisId = killer.id;
       }
-      this.recordTraumaAngle(actor.x, actor.z, killer.x, killer.z, 1.0, t);
+      if (traumaPos === undefined) {
+        this.recordTraumaAngle(actor.x, actor.z, killer.x, killer.z, 1.0, t);
+      } else if (traumaPos) {
+        this.recordTraumaAngle(actor.x, actor.z, traumaPos[0], traumaPos[1], 1.0, t);
+      }
     }
   }
 
@@ -1575,6 +1582,10 @@ export class HumanOFC_AimV23 {
       this.velYaw = dYaw * ds * 0.42;
       this.velPitch = dPitch * ds * 0.42;
       if (u >= 1) this.motorPhase = 'SETTLE';
+    } else if (this.motorPhase === 'SUBMOVE') {
+      // Meyer Phase-2 corrective submovement angles are driven by ManusiaNeuromotorAimV24.step().
+      this.velYaw *= 0.85;
+      this.velPitch *= 0.85;
     } else {
       if (this.motorPhase === 'SETTLE' && t >= this.settleUntil) {
         this.motorPhase = this.quietEyeReady ? 'QUIET_EYE' : 'PURSUIT';
@@ -1973,7 +1984,7 @@ export class HumanTacticsV23 {
   selectPeekStyle(actor, b, target, t, mind, metrics = null) {
     const agg = this.persona.aggression || 0.6;
     const pat = this.persona.patience || 0.6;
-    const vsLockGun = target && (target.gun === 'DF1 OUT' || target.gun === 'RD40' || target.gun === 'RD30' || target.gun === 'RD20');
+    const vsLockGun = target && (target.gun === 'DF1 OUT' || target.gun === 'DF40 II' || target.gun === 'RD40' || target.gun === 'RD30' || target.gun === 'RD20');
     const vsSniper = target && (target.gun === 'MS10' || target.gun === 'SW T');
     const isNemesis = target && mind && target.id === mind.nemesisId;
     const lowEnemy = target && (target.hp + target.shield < 50 || target.reload > 0.15);

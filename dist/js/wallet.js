@@ -44,6 +44,8 @@ export class PilotWallet {
     this.backupKey = profile + '-fallback';
     this.awardPrefix = this.backupKey + '/award/';
     this.unlockKey = this.backupKey + '/evr';
+    this.pendingPrefix = this.backupKey + '/pending/';
+    this.confirmedKey = profile + '-confirmed';
     this.state = blank();
     this.db = null;
     this.channel = null;
@@ -65,23 +67,21 @@ export class PilotWallet {
       }
     } catch {}
     globalThis.window?.addEventListener?.('storage', e => {
-      if (e.key === null || e.key === this.backupKey || e.key.startsWith(this.backupKey + '/')) {
-        this.ready.then(async () => {
-          if (this.db) await this.importBackup();
-          await this.read();
-        }).catch(() => {});
+      if (e.key === null || e.key === this.backupKey || e.key === this.unlockKey || e.key.startsWith(this.awardPrefix)) {
+        this.ready.then(() => this.read()).catch(() => {});
       }
     });
     try {
       await this.read();
     } catch {
-      this.state = account(this.readBackup());
+      this.state = this.backupAccount(this.readBackup());
       this.changed(this.state);
     }
   }
 
   async connect() {
     const db = await openDatabase(this.profile);
+    this.imported = null;
     this.db = db;
     db.onversionchange = db.onclose = () => {
       db.close();
@@ -100,7 +100,10 @@ export class PilotWallet {
     try {
       for (let i = 0; i < localStorage.length; i++) {
         const key = localStorage.key(i);
-        if (key?.startsWith(this.awardPrefix)) receipts.add(key.slice(this.awardPrefix.length));
+        if (key?.startsWith(this.awardPrefix)) {
+          const receipt = key.slice(this.awardPrefix.length);
+          if (validReceipt(receipt)) receipts.add(receipt);
+        }
       }
       unlocked = localStorage.getItem(this.unlockKey) === '1';
     } catch {}
@@ -108,28 +111,104 @@ export class PilotWallet {
     return {units: validUnits(units) ? units : 0, evr: legacy.evr || unlocked, receipts};
   }
 
+  stageAward(receipt) {
+    if (!validReceipt(receipt)) return;
+    try { localStorage.setItem(this.pendingPrefix + receipt, '1'); } catch {}
+  }
+
+  stagedAwards() {
+    const receipts = [];
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key?.startsWith(this.pendingPrefix)) {
+          const receipt = key.slice(this.pendingPrefix.length);
+          if (validReceipt(receipt)) receipts.push(receipt);
+        }
+      }
+    } catch {}
+    return receipts;
+  }
+
+  readConfirmed() {
+    let confirmed;
+    try { confirmed = JSON.parse(localStorage.getItem(this.confirmedKey)); } catch {}
+    return validUnits(confirmed?.units) && Array.isArray(confirmed.receipts) ? confirmed : null;
+  }
+
+  backupAccount(saved, confirmed = this.readConfirmed()) {
+    if (!confirmed) return account(saved);
+    const imported = new Set(confirmed.receipts);
+    let units = confirmed.units;
+    for (const receipt of saved.receipts) {
+      if (!imported.has(receipt)) units += 10;
+    }
+    if (saved.evr && !confirmed.evr) units -= 5;
+    return {units: validUnits(units) ? units : 0, evr: confirmed.evr === true || saved.evr};
+  }
+
+  rememberConfirmed(receipt = null) {
+    const previous = this.readConfirmed();
+    const receipts = new Set(previous?.receipts || []);
+    for (const imported of this.imported?.receipts || []) receipts.add(imported);
+    if (receipt !== null) receipts.add(receipt);
+    // Confirmations can complete out of order. Gross credits only increase
+    // and an already applied unlock is retained at the same gross amount.
+    const gross = a => a.units + (a.evr ? 5 : 0);
+    const latest = previous && (gross(previous) > gross(this.state) ||
+      (gross(previous) === gross(this.state) && previous.evr)) ? account(previous) : this.state;
+    try {
+      localStorage.setItem(this.confirmedKey, JSON.stringify({...latest, receipts: [...receipts]}));
+    } catch {}
+  }
+
+  async ensureConnected() {
+    if (this.db) return true;
+    this.reconnect ??= this.connect().catch(() => {
+      this.db?.close();
+      this.db = null;
+    }).finally(() => { this.reconnect = null; });
+    await this.reconnect;
+    return !!this.db;
+  }
+
   async read() {
+    if (!this.db && this._booted) {
+      await this.ensureConnected();
+    }
+    this._booted = true;
     if (this.db) {
-      this.state = await this.transaction('readonly', () => false);
+      try {
+        await this.importBackup();
+        this.state = await this.transaction('readonly', () => {});
+        this.rememberConfirmed();
+      } catch (error) {
+        if (error?.name === 'InvalidStateError') {
+          this.db?.close();
+          this.db = null;
+        }
+        this.state = this.backupAccount(this.readBackup());
+      }
     } else {
-      this.state = account(this.readBackup());
+      this.state = this.backupAccount(this.readBackup());
     }
     this.changed(this.state);
     return this.state;
   }
 
   changeBackup(receipt) {
-    const {receipts, ...before} = this.readBackup();
-    if (receipt ? receipts.has(receipt) : before.evr || before.units < 5) {
+    const saved = this.readBackup();
+    const confirmed = this.readConfirmed();
+    const before = this.backupAccount(saved, confirmed);
+    if (receipt ? saved.receipts.has(receipt) || confirmed?.receipts.includes(receipt) : before.evr || before.units < 5) {
       this.state = before;
       return false;
     }
     const units = before.units + (receipt ? 10 : -5);
     if (!validUnits(units)) throw new RangeError('Invalid wallet balance');
-    // Separate keys prevent two independent awards from overwriting each other
-    // even in browsers that lack the Web Locks API.
+    // Separate keys prevent different awards from overwriting each other.
     localStorage.setItem(receipt ? this.awardPrefix + receipt : this.unlockKey, '1');
-    this.state = account(this.readBackup());
+    this.state = this.backupAccount(this.readBackup());
     return true;
   }
 
@@ -138,7 +217,7 @@ export class PilotWallet {
     if (!locks) return action();
     let result;
     try {
-      result = await locks.request(this.profile + '-update', async () => {
+      result = await locks.request(this.profile + '-update', {ifAvailable: true}, async () => {
         try { return {value: await action()}; } catch (error) { return {error}; }
       });
     } catch (error) {
@@ -150,12 +229,14 @@ export class PilotWallet {
   }
 
   async importBackup() {
-    await this.withBackupLock(async () => {
-      const saved = this.readBackup();
-      if (!saved.receipts.size && !saved.evr && !saved.units) return;
-      // A second tab can repeat the import. Each existing fallback receipt and
-      // the EVR1 unlock are checked again in the IndexedDB transaction.
-      this.state = await this.transaction('readwrite', (before, awards, store) => {
+    const saved = this.readBackup();
+    const imported = this.imported;
+    if (imported && imported.units === saved.units && imported.evr === saved.evr &&
+        imported.receipts.size === saved.receipts.size && [...saved.receipts].every(receipt => imported.receipts.has(receipt))) return;
+    if (saved.receipts.size || saved.evr || saved.units) {
+      // The transaction deduplicates receipts even while another tab imports
+      // its own snapshot of the fallback account.
+      await this.transaction('readwrite', (before, awards, store) => {
         let added = 0, remaining = saved.receipts.size;
         const legacyExtra = Math.max(0, saved.units + (saved.evr ? 5 : 0) - remaining * 10);
         const legacyMarker = [this.backupKey, 'legacy-balance'];
@@ -186,25 +267,46 @@ export class PilotWallet {
           };
         }
       });
-    });
+    }
+    this.imported = saved;
   }
 
   async change(receipt = null) {
     if (receipt !== null && !validReceipt(receipt)) throw new TypeError('Invalid award receipt');
     await this.ready;
     // Reopen after an IndexedDB version change or a temporary open failure.
-    if (!this.db) {
-      this.reconnect ??= this.connect().catch(() => {
-        this.db?.close();
-        this.db = null;
-      }).finally(() => { this.reconnect = null; });
-      await this.reconnect;
-    }
+    await this.ensureConnected();
     let changed;
     if (this.db) {
-      changed = await this.commit(receipt);
+      try {
+        await this.importBackup();
+        changed = await this.commit(receipt);
+        this.rememberConfirmed(receipt);
+      } catch (error) {
+        if (error?.name === 'InvalidStateError') {
+          this.db?.close();
+          this.db = null;
+          if (receipt === null && await this.ensureConnected()) {
+            await this.importBackup();
+            changed = await this.commit(receipt);
+            this.rememberConfirmed(receipt);
+          } else if (receipt === null) {
+            throw error;
+          } else {
+            changed = await this.withBackupLock(() => this.changeBackup(receipt));
+          }
+        } else {
+          // Each award is additive and reconciled by receipt. Purchases must
+          // wait for the IndexedDB transaction if the active database fails.
+          if (receipt === null) throw error;
+          changed = await this.withBackupLock(() => this.changeBackup(receipt));
+        }
+      }
     } else {
       changed = await this.withBackupLock(() => this.changeBackup(receipt));
+    }
+    if (receipt !== null) {
+      try { localStorage.removeItem(this.pendingPrefix + receipt); } catch {}
     }
     this.changed(this.state);
     if (changed) {

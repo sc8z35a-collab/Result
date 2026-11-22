@@ -451,8 +451,8 @@ export class HumainAffectivePsycheV25 extends ManusiaSomaPsycheV24 {
     }
   }
 
-  onDamaged(actor, attacker, power, t, metrics = null) {
-    const res = super.onDamaged(actor, attacker, power, t, metrics);
+  onDamaged(actor, attacker, power, t, metrics = null, impactDir = null) {
+    const res = super.onDamaged(actor, attacker, power, t, metrics, impactDir);
     this.allostaticLoad = clamp(this.allostaticLoad + power * 0.0045, 0, 1);
     this.challengeBalance = clamp(this.challengeBalance - power * 0.006, -1, 1);
     this.calmLullAccum = 0;
@@ -471,8 +471,8 @@ export class HumainAffectivePsycheV25 extends ManusiaSomaPsycheV24 {
     this.allostaticLoad = Math.max(0, this.allostaticLoad - 0.14);
   }
 
-  onDeath(actor, killer, t) {
-    super.onDeath(actor, killer, t);
+  onDeath(actor, killer, t, traumaPos = undefined) {
+    super.onDeath(actor, killer, t, traumaPos);
     this.killStreak = 0;
     this.deathStreak++;
     this.hotHand = 0;

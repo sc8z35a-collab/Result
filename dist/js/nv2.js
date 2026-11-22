@@ -20,9 +20,10 @@
 //       shield-break / low-HP coordinated EXECUTE collapse, and time-normalized 360Hz Bayesian belief maintenance.
 
 import {NV13Pro, getTacticalGraph, canSeeNode, WEAPON_BAND, cellOf, CELLS, lowCover} from './nv13pro.js';
-import {clamp, mix, angleDiff, random} from './geometry.js';
-import {walkable, obstruction, rayBox, moveActor, floorAt} from './yard.js';
+import {clamp, mix, angleDiff, random, dot, forward, sub, unit} from './geometry.js';
+import {walkable, obstruction, clearOpticalPath, rayBox, moveActor, floorAt} from './yard.js';
 import {eyeOf, targetPoint, postureStep, vertical} from './posture.js';
+import {incomingPathClear} from './ballistics.js';
 import {
   HumanAimController,
   SpyAgentState,
@@ -696,15 +697,14 @@ export class NV2NeuralCore {
       if (!raw) return;
       const obj = JSON.parse(raw);
       if (obj?.v !== 1 || !Array.isArray(obj.w) || obj.w.length !== this.trainable.length) return;
+      if (!Number.isSafeInteger(obj.step) || obj.step < 0 || !Number.isSafeInteger(obj.updates) || obj.updates < 0 ||
+          obj.w.some((src, i) => !Array.isArray(src) || src.length !== this.trainable[i].w.length || src.some(n => !Number.isFinite(n)))) return;
       for (let k = 0; k < this.trainable.length; k++) {
         const src = obj.w[k], dst = this.trainable[k].w;
-        if (!Array.isArray(src) || src.length !== dst.length) return;
-        for (let i = 0; i < dst.length; i++) {
-          if (Number.isFinite(src[i])) dst[i] = clamp(src[i], -3.5, 3.5);
-        }
+        for (let i = 0; i < dst.length; i++) dst[i] = clamp(src[i], -3.5, 3.5);
       }
-      this.stepCount = obj.step || 0;
-      this.updates = obj.updates || 0;
+      this.stepCount = obj.step;
+      this.updates = obj.updates;
     } catch {}
   }
 }
@@ -1234,7 +1234,7 @@ export class NV2 extends NV13Pro {
     }
   }
 
-  onHit(victim, attacker, dir, power) {
+  onHit(victim, attacker, dir, power, shieldBreak = undefined) {
     const t = this.match.time;
     const bVPre = this.brains.get(victim.id);
     // Capture whether victim was actively peeking BEFORE nv12/nv13pro onHit clears peekPhase!
@@ -1243,9 +1243,17 @@ export class NV2 extends NV13Pro {
       || bVPre.state === 'ピーク射撃'
       || (bVPre.exposedSince > 0 && t - bVPre.exposedSince < 2.6)
     ));
-
-    super.onHit(victim, attacker, dir, power);
-    const shieldBroken = victim.shield <= 0 && power > 0 && (victim.hp < 100 && victim.hp >= 100 - power - 0.5 || victim.shieldFlash > 0.9);
+    const from = eyeOf(victim);
+    const to = attacker?.alive ? targetPoint(attacker) : null;
+    const bearing = to && sub(to, from);
+    const visible = bearing && Math.hypot(...bearing) <= 85 &&
+      dot(forward(victim.yaw, victim.pitch), unit(bearing)) > .12 &&
+      clearOpticalPath(from, to, this.match.aeroVortex);
+    const seenAttacker = visible ? attacker : null;
+    super.onHit(victim, seenAttacker, dir, power);
+    const shieldBroken = typeof shieldBreak === 'boolean'
+      ? shieldBreak
+      : (victim.shield <= 0 && power > 0 && (victim.hp < 100 && victim.hp >= 100 - power - 0.5 || victim.shieldFlash > 0.9));
     const lowHp = victim.hp <= 46;
 
     // Attacker team observes hit dealt / shield break -> positive reward + EXECUTE window + SHIELD_BREAK callout + ToM 5s Shield Clock!
@@ -1287,24 +1295,24 @@ export class NV2 extends NV13Pro {
 
     // Victim team observes hit taken -> negative reward + survival token + NV2.5 humain psyche/ToM/comms!
     const stV = this.nv2Teams[victim.team];
-    stV.pushToken(this.buildToken(victim.team, 3, victim, attacker));
+    stV.pushToken(this.buildToken(victim.team, 3, victim, seenAttacker));
     stV.lastReward -= shieldBroken ? 0.45 : 0.14;
     const bV = this.brains.get(victim.id);
     if (bV) {
       bV.stepReward -= shieldBroken ? 0.55 : 0.18;
-      const stRes = bV.mind ? bV.mind.onDamaged(victim, attacker, power, t, this.metrics) : null;
-      if (bV.tom && attacker) bV.tom.recordSelfExposed(victim.x, victim.z, attacker.id, t);
+      const stRes = bV.mind ? bV.mind.onDamaged(victim, seenAttacker, power, t, this.metrics, dir) : null;
+      if (bV.tom && seenAttacker) bV.tom.recordSelfExposed(victim.x, victim.z, seenAttacker.id, t);
       if (bV.humanAim) bV.humanAim.onHitShock(power, !!stRes?.startled);
       if (wasPeeking && bV.mind?.shouldHesitateRepeek(t)) {
         bV.repeekAbortPending = true;
       }
-      if (attacker && bV.humanMode) {
+      if (seenAttacker && bV.humanMode) {
         if (stRes?.startled) {
-          this.comms.emitCallout(victim.team, victim.id, attacker.id, attacker.x, attacker.z, 'AMBUSH', t, this.metrics, {
+          this.comms.emitCallout(victim.team, victim.id, seenAttacker.id, seenAttacker.x, seenAttacker.z, 'AMBUSH', t, this.metrics, {
             callerX: victim.x, callerZ: victim.z, stress: bV.mind?.stress || 0.7
           });
         } else if (victim.hp < 64 || shieldBroken || bV.recentDamage >= 16) {
-          this.comms.emitCallout(victim.team, victim.id, attacker.id, attacker.x, attacker.z, 'TRADE_REQUEST', t, this.metrics, {
+          this.comms.emitCallout(victim.team, victim.id, seenAttacker.id, seenAttacker.x, seenAttacker.z, 'TRADE_REQUEST', t, this.metrics, {
             callerX: victim.x, callerZ: victim.z, stress: bV.mind?.stress || 0.4
           });
         }
@@ -1315,6 +1323,19 @@ export class NV2 extends NV13Pro {
   onKill(killer, victim) {
     super.onKill(killer, victim);
     const t = this.match.time;
+    const bV = this.brains.get(victim.id);
+    let victimSawKiller = false;
+    if (killer) {
+      if (bV && (bV.contacts?.get(killer.id)?.seen || (bV.targetId === killer.id && bV.seen))) {
+        victimSawKiller = true;
+      } else if (killer.alive) {
+        const vEye = eyeOf(victim), kTp = targetPoint(killer), rel = sub(kTp, vEye);
+        const dist = Math.hypot(rel[0], rel[1], rel[2]);
+        victimSawKiller = dist <= 85 &&
+          dot(forward(victim.yaw, victim.pitch), unit(rel)) > .12 &&
+          clearOpticalPath(vEye, kTp, this.match.aeroVortex);
+      }
+    }
     if (killer) {
       const stK = this.nv2Teams[killer.team];
       stK.pushToken(this.buildToken(killer.team, 4, killer, victim));
@@ -1359,10 +1380,16 @@ export class NV2 extends NV13Pro {
     }
     const stV = this.nv2Teams[victim.team];
     stV.lastReward -= 1.25;
-    const bV = this.brains.get(victim.id);
     if (bV) {
       bV.stepReward -= 1.35;
-      if (bV.mind) bV.mind.onDeath(victim, killer, t);
+      if (bV.mind) {
+        const traumaPos = victimSawKiller && killer
+          ? [killer.x, killer.z]
+          : victim.hitDir
+            ? [victim.x - victim.hitDir[0] * 12, victim.z - victim.hitDir[2] * 12]
+            : null;
+        bV.mind.onDeath(victim, killer, t, traumaPos);
+      }
     }
     // Team Morale + Emotional Contagion + MAN_DOWN Trade-Swing callout for victim's surviving teammates!
     for (const mate of this.match.actors) {
@@ -1375,34 +1402,29 @@ export class NV2 extends NV13Pro {
       }
     }
     if (killer && this.isTeamHumanMode(victim.team)) {
-      this.comms.emitCallout(victim.team, victim.id, killer.id, killer.x, killer.z, 'MAN_DOWN', t, this.metrics, {callerX: victim.x, callerZ: victim.z, stress: 0.75});
+      const callTargetId = victimSawKiller ? killer.id : -1;
+      const callX = victimSawKiller ? killer.x : victim.x;
+      const callZ = victimSawKiller ? killer.z : victim.z;
+      this.comms.emitCallout(victim.team, victim.id, callTargetId, callX, callZ, 'MAN_DOWN', t, this.metrics, {
+        callerX: victim.x, callerZ: victim.z, stress: 0.75
+      });
     }
 
-    // Immediately trigger online Adam update + save on match end
+    // Reinforce the outcome before the final match checkpoint.
     if (this.neural.trainMiniBatch(10, 0.0032)) {
       this.metrics.neuralUpdates = this.neural.updates;
     }
-    if (this.match.ended) this.neural.saveWeights();
+  }
+
+  onMatchEnd() {
+    this.neural.saveWeights();
   }
 
   onReload(actor) {
-    super.onReload(actor);
     const t = this.match.time;
-    const enemyTeam = 1 - actor.team;
-    const hears = this.match.actors.some(m => m.alive && m.team === enemyTeam && dist2(m.x, m.z, actor.x, actor.z) < 34);
-    if (hears) {
-      const stE = this.nv2Teams[enemyTeam];
-      stE.pushToken(this.buildToken(enemyTeam, 5, null, actor));
-      stE.executeTargetId = actor.id;
-      stE.executeUntil = t + 2.2;
-      // Fair-play mental ammo reset for enemies within acoustic reload range!
-      for (const m of this.match.actors) {
-        if (!m.alive || m.human || m.team !== enemyTeam) continue;
-        if (dist2(m.x, m.z, actor.x, actor.z) < 34) {
-          this.brains.get(m.id)?.tom?.onObservedEnemyReload(actor.id, t);
-        }
-      }
-    }
+    this.match.echoPulse.emit(this.match, {
+      kind: 'reload', pos: eyeOf(actor), actor, team: actor.team, loudness: .5
+    });
     // NV2.5 humain / NV 2.4 Manusia RELOAD_COVER voice callout to nearby teammates when reloading in combat!
     const b = this.brains.get(actor.id);
     if (b?.humanMode && (b.seen || t - (b.seenAt || -10) < 4.5 || t - (b.underFireAt || -10) < 2.2)) {
@@ -1636,7 +1658,7 @@ export class NV2 extends NV13Pro {
       const cpy = s.p[1] + s.dir[1] * along;
       const cpz = s.p[2] + s.dir[2] * along;
       const missH = Math.hypot(cpx - ax, cpz - az);
-      if (missH < 0.86 && Math.abs(cpy - ay) < 0.94) {
+      if (missH < 0.86 && Math.abs(cpy - ay) < 0.94 && incomingPathClear(s, along, [cpx, cpy, cpz])) {
         incoming.push({cpx, cpy, cpz, dx: s.dir[0], dz: s.dir[2], tImp, missH});
         if (tImp < bestImp) bestImp = tImp;
         if (missH < 0.78 && cpy > a.y + 1.15 && a.onGround) duckHigh = true;
@@ -1757,7 +1779,7 @@ export class NV2 extends NV13Pro {
             b.tom.recordSelfExposed(a.x, a.z, e.id, t);
           }
           if ((e.flash || 0) > 0.008) {
-            b.tom.onObservedEnemyShot(e.id, e.gun, t);
+            b.tom.onObservedEnemyShot(e.id, e.gun, t, e.shotCount);
           }
           if (b.tom.observeEnemyHabit) {
             b.tom.observeEnemyHabit(a, e, t, a.hp < 70);
@@ -1841,6 +1863,29 @@ export class NV2 extends NV13Pro {
     const cog = this.teams[listener.team];
     const t = this.match.time;
     const px = rep.perceivedPos[0], pz = rep.perceivedPos[2];
+    if (rep.kind === 'reload') {
+      const source = rep.sourceActor;
+      if (!source?.alive || source.spawnId !== rep.sourceSpawnId || rep.reloadUntil <= t) return;
+      b?.tom?.onObservedEnemyReload(source.id, t);
+      const {pr} = cog.ensureEnemy(source.id);
+      if (pr.lastReloadCue === rep.emittedAt) return;
+      pr.lastReloadCue = rep.emittedAt;
+      pr.reloadUntil = Math.max(pr.reloadUntil, rep.reloadUntil);
+      pr.shotsSinceReload = 0;
+      const team = this.nv2Teams[listener.team];
+      team.pushToken(this.buildToken(listener.team, 5, null, {x: px, z: pz}));
+      if (cog.beliefs.get(source.id)?.conf > .34) {
+        team.executeTargetId = source.id;
+        team.executeUntil = pr.reloadUntil;
+      }
+      if (source.human) this.match.synapse?.observeReload();
+      return;
+    }
+
+    if (rep.sourceActor && (!rep.sourceActor.alive || (rep.sourceSpawnId !== undefined && rep.sourceActor.spawnId !== rep.sourceSpawnId))) {
+      return;
+    }
+
     if (b) {
       const cue = b.vision ? b.vision.onEchoArrival(listener, rep, t, b.mind, this.metrics) : null;
       if (b.inference && !cue?.discountedEcho) {
@@ -1852,7 +1897,7 @@ export class NV2 extends NV13Pro {
         }
       }
       if (b.tom && rep.kind === 'fire' && rep.sourceActor && rep.sourceActor.team !== listener.team && rep.sourceActor.spawnId === rep.sourceSpawnId) {
-        b.tom.onObservedEnemyShot(rep.sourceActor.id, rep.gun || rep.sourceActor.gun, t);
+        b.tom.onObservedEnemyShot(rep.sourceActor.id, rep.gun || rep.sourceActor.gun, t, rep.shotSeq ?? null);
       }
       if (!b.seen) {
         if (!cue?.discountedEcho) {
@@ -2066,8 +2111,8 @@ export class NV2 extends NV13Pro {
       }
     }
 
-    // 3. Upgrade peek rhythm against DF1 OUT to razor-sharp <0.27s jiggle peeks
-    if (b.seen && b.target && b.target.gun === 'DF1 OUT' && b.cover) {
+    // 3. Upgrade peek rhythm against DF1 OUT / DF40 II to razor-sharp <0.27s jiggle peeks
+    if (b.seen && b.target && (b.target.gun === 'DF1 OUT' || b.target.gun === 'DF40 II') && b.cover) {
       if (b.exposedSince > 0 && t - b.exposedSince >= 0.26 && b.peekPhase === 'peek') {
         b.peekPhase = 'hide';
         b.peekSwitchAt = t + 0.34 + b.rng() * 0.16;
@@ -2411,6 +2456,7 @@ export class NV2 extends NV13Pro {
         const sx = a.x - mate.x, sz = a.z - mate.z, d = Math.hypot(sx, sz);
         const minSep = mate.team === a.team ? 2.4 : 1.4;
         if (d > 0.005 && d < minSep) {
+          if (mate.team !== a.team && obstruction(eyeOf(a), eyeOf(mate)) <= 1) continue;
           const v = (minSep - d) * 1.45;
           dx += sx / d * v;
           dz += sz / d * v;

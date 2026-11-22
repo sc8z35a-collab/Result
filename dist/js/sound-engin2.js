@@ -1162,6 +1162,15 @@ export class SoundEngin2 {
         }
         const ctx = new AudioCtx({latencyHint: 'interactive'});
         this.ctx = ctx;
+        this.lastWhizAt = -Infinity;
+        this.lastImpactAt = -Infinity;
+        this.lastCasingAt = -Infinity;
+        this.lastRdLockAt = -Infinity;
+        this.lastD01At = -Infinity;
+        this.lastFermatLockAt = -Infinity;
+        this.lastResonateAt = -Infinity;
+        this.lastWaterAt = -Infinity;
+        this.lastFootstepAt.clear();
         try {
           this._buildGraph();
           this._buildProceduralBuffers();
@@ -1976,6 +1985,9 @@ export class SoundEngin2 {
         st.wasAlive = true;
         st.strideMark = a.stride || 0;
         st.wasOnGround = !!a.onGround;
+        st.prevCrouch = (a.crouch || 0) > 0.45;
+        st.prevAds = !!(a.df?.ads);
+        st.prevLean = Math.abs(a.lean || 0) > 0.35 ? Math.sign(a.lean) : 0;
         st.reloadStage = 0;
       }
 
@@ -2147,7 +2159,7 @@ export class SoundEngin2 {
 
     if (vol > 0.20) this._duckAmbience(vol * (isPlayer ? 0.92 : 0.65), start);
     if (isPlayer) {
-      this.barrelHeat = clamp(this.barrelHeat + (gun === 'RD40' || gun === 'DF1 OUT' ? 0.065 : 0.095), 0, 1);
+      this.barrelHeat = clamp(this.barrelHeat + (gun === 'RD40' || gun === 'DF1 OUT' || gun === 'DF40 II' ? 0.055 : 0.095), 0, 1);
       if (gun === 'SW T' || gun === 'MS10') this._triggerStapediusReflex(0.24);
     } else if (d < 4.5 && !path.occluded) {
       this._triggerStapediusReflex(0.32 * (1 - d / 4.5));
@@ -2155,6 +2167,7 @@ export class SoundEngin2 {
 
     // LAYER 1: Friedlander Shockwave Pressure Transient
     const blastRate = gun === 'MS10' ? 1.48 * j
+      : gun === 'DF40 II' ? (e.aa14 ? 1.42 : 1.28) * j
       : gun === 'RD40' ? 1.36 * j
       : gun === 'RD30' ? 1.15 * j
       : gun === 'RD20' ? 1.05 * j
@@ -2166,7 +2179,7 @@ export class SoundEngin2 {
       buffer: this.blastBuf,
       rate: blastRate,
       dur: 0.145,
-      gain: (gun === 'SW T' ? 0.38 : gun === 'MS10' ? 0.34 : gun === 'RD40' ? 0.32 : gun === 'RD30' ? 0.29 : 0.28) * vol,
+      gain: (gun === 'SW T' ? 0.38 : gun === 'MS10' ? 0.34 : gun === 'DF40 II' ? 0.31 : gun === 'RD40' ? 0.32 : gun === 'RD30' ? 0.29 : 0.28) * vol,
       lpf,
       pos,
       pan: muzzlePan,
@@ -2178,7 +2191,7 @@ export class SoundEngin2 {
     });
 
     // LAYER 2: 300Hz-Class Chest-Impact Sub-Harmonic Punch (diffracts around steel containers via lowBandVol!)
-    const subRate = gun === 'SW T' ? 0.86 : gun === 'D1' ? 0.92 : gun === 'MS10' ? 1.14 : gun === 'RD40' ? 1.08 : 1.0;
+    const subRate = gun === 'SW T' ? 0.86 : gun === 'D1' ? 0.92 : gun === 'MS10' ? 1.14 : gun === 'DF40 II' ? 1.12 : gun === 'RD40' ? 1.08 : 1.0;
     this._playBuffer({
       buffer: this.sub300Buf,
       rate: subRate * j,
@@ -2198,6 +2211,37 @@ export class SoundEngin2 {
       this._playBuffer({buffer: this.crackBuf, rate: 1.28 * j, dur: 0.048, gain: 0.34 * vol * (1 - distNorm * 0.42), filterType: 'bandpass', f0: 6400 * j, f1: 1550 * j, q: 1.2, lpf, pos, pan: muzzlePan, bus: this.weaponsBus, priority: prio, start});
       if (isPlayer) {
         this._playTone({f0: (3650 + this.barrelHeat * 420) * j, f1: 5280 * j, dur: 0.056, gain: 0.044, type: 'sine', pan: boltPan, bus: this.foleyBus, priority: 3, start: start + 0.020});
+      }
+    } else if (gun === 'DF40 II') {
+      // Tri-barrel staggered harmonic cascade (3 simultaneous smart rounds + ARV1.3 / AA1.4 overdrive shimmer)
+      const pellets = Math.min(3, Math.max(1, e.pellets || 3));
+      const offsets = pellets === 3 ? [0, 0.0045, 0.009] : pellets === 2 ? [0, 0.006] : [0];
+      const pans = pellets === 3 ? [-0.07, 0.04, 0.15] : pellets === 2 ? [-0.04, 0.14] : [muzzlePan];
+      for (let bi = 0; bi < offsets.length; bi++) {
+        this._playBuffer({
+          buffer: this.crackBuf,
+          rate: (1.06 + bi * 0.06 + (e.aa14 ? 0.08 : 0)) * j,
+          dur: 0.042,
+          gain: (bi === 1 ? 0.24 : 0.19) * vol * (1 - distNorm * 0.40),
+          filterType: 'bandpass',
+          f0: ((e.aa14 ? 5200 : 4150) + bi * 420) * j,
+          f1: 960 * j,
+          q: 1.45,
+          lpf,
+          pos,
+          pan: isPlayer ? pans[bi] : muzzlePan,
+          bus: this.weaponsBus,
+          reverbSend: revSend * 0.66,
+          priority: prio,
+          ...elevOpts,
+          start: start + offsets[bi]
+        });
+      }
+      this._playBuffer({buffer: this.railBuf, rate: (e.aa14 ? 1.04 : 0.90) * j, dur: 0.068, gain: (e.aa14 ? 0.20 : 0.14) * vol, lpf, pos, pan: muzzlePan, bus: this.weaponsBus, priority: prio, start});
+      this._playTone({f0: (e.aa14 ? 1240 : 880) * j, f1: 185 * j, dur: 0.074, gain: 0.15 * vol, type: 'triangle', lpf, pos, pan: muzzlePan, bus: this.weaponsBus, priority: prio, start});
+      if (isPlayer) {
+        const fOver = e.aa14 ? 3680 : 2840;
+        this._playTone({f0: (fOver + this.barrelHeat * 340) * j, f1: (fOver * 1.32) * j, dur: e.aa14 ? 0.042 : 0.030, gain: e.aa14 ? 0.048 : 0.034, type: e.aa14 ? 'sine' : 'triangle', pan: boltPan, bus: this.foleyBus, priority: 3, start: start + 0.011});
       }
     } else if (gun === 'RD40') {
       const twinOffset = (e.pellets || 2) >= 2 ? 0.0065 : 0;
@@ -2279,8 +2323,8 @@ export class SoundEngin2 {
     // LAYER 4: Karplus-Strong Waveguide Bolt Carrier & Mechanical Action Clack (close range)
     if (isPlayer || d < 20) {
       const mGain = isPlayer ? 0.088 : 0.044 * (1 - d / 20);
-      const boltDelay = gun === 'MS10' ? 0.013 : gun === 'RD40' ? 0.012 : gun === 'RD30' ? 0.014 : 0.018;
-      const boltRate = gun === 'MS10' ? 1.38 : gun === 'RD40' ? 1.28 : gun === 'RD30' ? 1.12 : gun === 'SW T' ? 0.88 : 1.04;
+      const boltDelay = gun === 'MS10' ? 0.013 : gun === 'DF40 II' ? 0.010 : gun === 'RD40' ? 0.012 : gun === 'RD30' ? 0.014 : 0.018;
+      const boltRate = gun === 'MS10' ? 1.38 : gun === 'DF40 II' ? 1.32 : gun === 'RD40' ? 1.28 : gun === 'RD30' ? 1.12 : gun === 'SW T' ? 0.88 : 1.04;
       this._playBuffer({
         buffer: this.boltBuf,
         rate: boltRate * j * (1 + (isPlayer ? this.barrelHeat * 0.06 : 0)),
@@ -2629,17 +2673,20 @@ export class SoundEngin2 {
   _playStanceFoley(actor, isPlayer, kind, now) {
     this.stats.foleyCues++;
     const p = isPlayer ? null : eyeOf(actor);
-    const vol = isPlayer ? 0.075 : 0.032;
+    const path = isPlayer ? {delay: 0, cutoffHz: 18800, directGain: 1, dist: 0} : computeMultiBandAcousticPath(p, this.listenerPos);
+    if (!isPlayer && path.dist > 14) return;
+    const vol = isPlayer ? 0.075 : clamp(path.directGain * 0.048, 0.004, 0.036);
     this._playBuffer({
       buffer: this.clothBuf,
       rate: kind === 'crouch' ? 0.88 : kind === 'stand' ? 1.12 : 1.02,
       dur: 0.11,
       gain: vol,
+      lpf: path.cutoffHz,
       pos: p,
       pan: isPlayer ? (kind === 'lean' ? 0.14 : -0.06) : 0,
       bus: this.foleyBus,
       priority: 1,
-      start: now
+      start: now + path.delay
     });
   }
 
@@ -2709,16 +2756,16 @@ export class SoundEngin2 {
     const pan = isPlayer ? 0.15 : 0;
     const lpf = path.cutoffHz;
     const gun = actor?.gun || 'SW T';
-    const fRack = gun === 'MS10' ? 1860 : gun === 'RD40' ? 1700 : gun === 'RD30' ? 1420 : gun === 'RD20' ? 1320 : gun === 'DF1 OUT' ? 1480 : 960;
+    const fRack = gun === 'MS10' ? 1860 : gun === 'DF40 II' ? 1780 : gun === 'RD40' ? 1700 : gun === 'RD30' ? 1420 : gun === 'RD20' ? 1320 : gun === 'DF1 OUT' ? 1480 : 960;
     this._playBuffer({buffer: this.boltBuf, rate: fRack / 1400, dur: 0.068, gain: 0.145 * vol, lpf, pos: p, pan, bus: this.foleyBus, priority: 3, start});
     this._playTone({f0: fRack * 1.18, f1: fRack * 0.76, dur: 0.068, attack: 0.002, gain: 0.105 * vol, type: 'triangle', lpf, pos: p, pan, bus: this.foleyBus, priority: 3, start: start + 0.056});
-    if ((gun === 'MS10' || gun === 'RD40') && isPlayer) {
-      this._playTone({f0: gun === 'RD40' ? 1980 : 2200, f1: gun === 'RD40' ? 2980 : 3340, dur: 0.095, gain: 0.050, type: 'sine', pan: 0.12, bus: this.foleyBus, priority: 3, start: start + 0.068});
+    if ((gun === 'MS10' || gun === 'RD40' || gun === 'DF40 II') && isPlayer) {
+      this._playTone({f0: gun === 'DF40 II' ? 2080 : gun === 'RD40' ? 1980 : 2200, f1: gun === 'DF40 II' ? 3160 : gun === 'RD40' ? 2980 : 3340, dur: 0.095, gain: 0.050, type: 'sine', pan: 0.12, bus: this.foleyBus, priority: 3, start: start + 0.068});
     }
   }
 
   // --------------------------------------------------------------------------
-  // System Acoustic Cues (FermatCore, RD40/D01, FLIR, ChronoTrace, ResonanceCore)
+  // System Acoustic Cues (FermatCore, RD40/D01, DF40 II AA1.4, FLIR, ChronoTrace, ResonanceCore)
   // --------------------------------------------------------------------------
   _playFermatLock(isDouble, now) {
     this.stats.systemCues++;
@@ -2740,13 +2787,34 @@ export class SoundEngin2 {
     this._playTone({f0: on ? 560 : 880, f1: on ? 1960 : 440, dur: 0.14, attack: 0.006, gain: 0.044, type: 'sine', bus: this.uiBus, priority: 3, start: now + 0.03});
   }
 
-  _playRdLock(d01, now) {
-    if (now - this.lastRdLockAt < 0.15) return;
+  _playRdLock(d01, now, aa14 = false) {
+    if (now - this.lastRdLockAt < 0.12) return;
     this.lastRdLockAt = now;
     this.stats.systemCues++;
-    const base = d01 ? 1380 : 1560;
-    this._playTone({f0: base, f1: base * 1.48, dur: 0.052, attack: 0.002, gain: 0.064, type: 'triangle', pan: 0.05, bus: this.uiBus, priority: 3, start: now});
-    this._playTone({f0: base * 1.5, f1: base * 2.0, dur: 0.072, attack: 0.002, gain: 0.054, type: 'sine', pan: -0.05, bus: this.uiBus, priority: 3, start: now + 0.026});
+    const base = aa14 ? 1820 : d01 ? 1380 : 1560;
+    this._playTone({f0: base, f1: base * 1.48, dur: 0.052, attack: 0.002, gain: aa14 ? 0.072 : 0.064, type: 'triangle', pan: 0.05, bus: this.uiBus, priority: 3, start: now});
+    this._playTone({f0: base * 1.5, f1: base * (aa14 ? 2.15 : 2.0), dur: 0.072, attack: 0.002, gain: aa14 ? 0.062 : 0.054, type: 'sine', pan: -0.05, bus: this.uiBus, priority: 3, start: now + 0.024});
+  }
+
+  _playAA14(state, now) {
+    this.stats.systemCues++;
+    if (state === 'on') {
+      // Rising harmonic overdrive surge
+      this._playTone({f0: 540, f1: 1480, dur: 0.14, attack: 0.005, gain: 0.078, type: 'triangle', pan: -0.06, bus: this.uiBus, priority: 4, start: now});
+      this._playTone({f0: 880, f1: 2420, dur: 0.16, attack: 0.005, gain: 0.064, type: 'sine', pan: 0.06, bus: this.uiBus, priority: 4, start: now + 0.024});
+    } else if (state === 'off') {
+      this._playTone({f0: 1120, f1: 420, dur: 0.12, attack: 0.004, gain: 0.060, type: 'triangle', bus: this.uiBus, priority: 3, start: now});
+    } else if (state === 'overheat') {
+      // Pressurized thermal steam vent hiss + descending alarm tone
+      this._playBuffer({buffer: this.whiteNoiseBuf, loop: true, dur: 0.42, attack: 0.008, gain: 0.125, filterType: 'bandpass', f0: 4200, f1: 1150, q: 1.5, bus: this.uiBus, priority: 4, start: now});
+      this._playTone({f0: 1440, f1: 310, dur: 0.28, attack: 0.003, gain: 0.088, type: 'sawtooth', bus: this.uiBus, priority: 4, start: now});
+      this._playTone({f0: 760, f1: 260, dur: 0.22, attack: 0.003, gain: 0.072, type: 'triangle', bus: this.uiBus, priority: 4, start: now + 0.11});
+    } else if (state === 'ready') {
+      this._playTone({f0: 1180, f1: 1760, dur: 0.075, attack: 0.002, gain: 0.056, type: 'sine', pan: -0.05, bus: this.uiBus, priority: 3, start: now});
+      this._playTone({f0: 1760, f1: 2349, dur: 0.095, attack: 0.002, gain: 0.058, type: 'sine', pan: 0.05, bus: this.uiBus, priority: 3, start: now + 0.045});
+    } else if (state === 'blocked') {
+      this._playTone({f0: 360, f1: 240, dur: 0.075, attack: 0.002, gain: 0.060, type: 'square', bus: this.uiBus, priority: 3, start: now});
+    }
   }
 
   _playD01Ping(now) {
@@ -2828,8 +2896,9 @@ export class SoundEngin2 {
     if (e.type === 'whiz') { this.playWhiz(e); return; }
     if (e.type === 'impact') { this.playImpact(e); return; }
     if (e.type === 'casing') { this.playCasing(e); return; }
-    if (e.type === 'rdlock' && a === player) { this._playRdLock(!!e.d01, now); return; }
+    if (e.type === 'rdlock' && a === player) { this._playRdLock(!!e.d01, now, !!e.aa14); return; }
     if (e.type === 'd01' && a === player) { this._playD01Ping(now); return; }
+    if (e.type === 'aa14' && a === player) { this._playAA14(e.state, now); return; }
     if (e.type === 'fermatLock') { this._playFermatLock(!!e.doubleBounce, now); return; }
     if (e.type === 'flir') { this._playFlirToggle(!!e.on, now); return; }
     if (e.type === 'chrono') { this._playChronoToggle(!!e.on, now); return; }
@@ -2837,9 +2906,14 @@ export class SoundEngin2 {
     if (e.type === 'penetrate' && e.point) { this._playPenetrate(e, now); return; }
     if (e.type === 'resonate' && e.point) { this._playContainerResonance(e, now, player); return; }
     if (e.type === 'smoke' && e.point) {
+      const path = computeMultiBandAcousticPath(e.point, this.listenerPos);
+      if (path.dist > 62) return;
       this.stats.systemCues++;
-      this._playBuffer({buffer: this.sub300Buf, rate: 1.15, dur: 0.11, gain: 0.16, pos: e.point, bus: this.foleyBus, priority: 3, start: now});
-      this._playBuffer({buffer: this.whiteNoiseBuf, loop: true, dur: 0.96, attack: 0.012, gain: 0.17, filterType: 'bandpass', f0: 3250, f1: 720, q: 1.4, pos: e.point, bus: this.foleyBus, reverbSend: 0.25, priority: 2, start: now + 0.014});
+      const vol = clamp(path.directGain * 1.15, 0.03, 1.0);
+      const start = now + path.delay;
+      const lpf = path.cutoffHz;
+      this._playBuffer({buffer: this.sub300Buf, rate: 1.15, dur: 0.11, gain: 0.16 * vol, lpf, pos: e.point, bus: this.foleyBus, priority: 3, start});
+      this._playBuffer({buffer: this.whiteNoiseBuf, loop: true, dur: 0.96, attack: 0.012, gain: 0.17 * vol, filterType: 'bandpass', f0: 3250, f1: 720, q: 1.4, lpf, pos: e.point, bus: this.foleyBus, reverbSend: clamp(0.25 + path.reverbBoost, 0.18, 0.72), priority: 2, start: start + 0.014});
       return;
     }
     if (e.type === 'reload' && a) {
@@ -2905,7 +2979,22 @@ export class SoundEngin2 {
   }
 
   _playIncomingHit(e, player, now) {
-    const srcPos = e.actor && e.actor !== player ? eyeOf(e.actor) : null;
+    let srcPos = null;
+    if (e.ricochet && e.dir) {
+      srcPos = [
+        this.listenerPos[0] - e.dir[0] * 10,
+        this.listenerPos[1] - e.dir[1] * 10,
+        this.listenerPos[2] - e.dir[2] * 10
+      ];
+    } else if (e.actor && e.actor !== player) {
+      srcPos = eyeOf(e.actor);
+    } else if (e.dir) {
+      srcPos = [
+        this.listenerPos[0] - e.dir[0] * 10,
+        this.listenerPos[1] - e.dir[1] * 10,
+        this.listenerPos[2] - e.dir[2] * 10
+      ];
+    }
     const pan = srcPos ? this._computeStereoPan(srcPos) : 0;
     this._duckAmbience(e.shieldBreak ? 0.88 : 0.48, now);
 

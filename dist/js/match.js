@@ -4,6 +4,7 @@ import {NV2} from './nv2.js';
 import {eyeOf, torso, bodyCenter, postureStep, vertical} from './posture.js';
 import {DF, initialDF, scheduleDF, bulletGuidanceDF, steerGuidedShot, spendP1, updateDF} from './df1.js';
 import {RD, RD20, RD30, isRDWeapon, initialRD, updateRD, bulletGuidanceRD} from './rd40.js';
+import {DF40II, initialDF40II, updateDF40II, bulletGuidanceDF40II, onFireDF40II, toggleAA14} from './df40ii.js';
 import {solveBallisticImpact} from './ballistics.js';
 import {EchoPulseField} from './echopulse.js';
 import {SynapseProfiler} from './synapse.js';
@@ -22,7 +23,8 @@ export const weapons = {
   [DF]: {capacity: 95, damage: 2.8, rate: 300, velocity: 65, speed: baseSpeed * .65, interval: baseInterval / 3, burst: 3, reload: 1.85, auto: true, playerOnly: true},
   [RD20]: {capacity: 20, damage: 6, rate: 110, velocity: 70, speed: baseSpeed * .7, interval: baseInterval / 1.1, burst: 1, pellets: 1, reload: 1.55, auto: true},
   [RD30]: {capacity: 80, damage: 3, rate: 100, velocity: 100, speed: baseSpeed * 1.0, interval: baseInterval, burst: 1, pellets: 2, reload: 1.75, auto: true},
-  [RD]: {capacity: 130, damage: 3, rate: 170, velocity: 140, speed: baseSpeed * 1.4, interval: baseInterval / 1.7, burst: 1, pellets: 2, reload: 1.95, auto: true, playerOnly: true}
+  [RD]: {capacity: 130, damage: 3, rate: 170, velocity: 140, speed: baseSpeed * 1.4, interval: baseInterval / 1.7, burst: 1, pellets: 2, reload: 1.95, auto: true, playerOnly: true},
+  [DF40II]: {capacity: 260, damage: 2, rate: 225, velocity: 80, speed: baseSpeed * .8, interval: baseInterval / 2.25, burst: 1, pellets: 3, reload: 2.15, auto: true, playerOnly: true}
 };
 export const modes = {'3v3': [3, 3], '1v2': [1, 2], '1v1': [1, 1]};
 const names = [['YOU', 'NAGI', 'KAI'], ['RIN', 'SORA', 'AO']];
@@ -204,19 +206,19 @@ export class Match {
       reloadFrac: 0,
       queue: [],
       df: a.gun === DF ? {...initialDF(), pattern: a.df?.pattern || 'central', scope: a.df?.scope || 'plastic'} : null,
-      rd: isRDWeapon(a.gun) ? initialRD(a.gun) : null
+      rd: isRDWeapon(a.gun) ? initialRD(a.gun) : null,
+      df40: a.gun === DF40II ? initialDF40II() : null
     });
     if (!a.human)this.nv.attach(a);
     if (!initial)this.event('spawn', {actor: a})
+  }
+  toggleAA14(a = this.player) {
+    return toggleAA14(this, a);
   }
   reload(a) {
     if (!a.alive || this.ended || a.reload > 0 || a.burstLeft || a.mag >= this.weapon(a).capacity || a.stock <= 0)return false;
     a.reload = this.weapon(a).reload;
     this.nv.onReload?.(a);
-    if (a.human && this.synapse) {
-      const heard = this.actors.some(e => e.alive && e.team !== a.team && Math.hypot(e.x - a.x, e.z - a.z) <= 28);
-      if (heard) this.synapse.observeReload();
-    }
     this.event('reload', {actor: a});
     return true;
   }
@@ -234,7 +236,7 @@ export class Match {
     this.fire(a, a.queue.shift());
     a.burstLeft = a.queue.length;
     a.nextBurst = w.interval;
-    return true
+    return true;
   }
   fire(a, source = 'main') {
     if (!a.alive || this.ended || a.reload > 0) return false;
@@ -247,7 +249,7 @@ export class Match {
       a.mag -= salvo
     }
     a.cooldown = w.interval;
-    a.flash = a.gun === 'MS10' ? .115 : a.gun === RD ? .108 : a.gun === RD30 ? .098 : .095;
+    a.flash = a.gun === 'MS10' ? .115 : a.gun === DF40II ? .112 : a.gun === RD ? .108 : a.gun === RD30 ? .098 : .095;
     a.recoil = 1;
     a.recoilSide = (this.rng() - .5) * 2;
     a.shotCount = (a.shotCount || 0) + 1;
@@ -255,17 +257,20 @@ export class Match {
       a.rd.firePulse = 1;
       a.rd.barrelPhase = 1 - (a.rd.barrelPhase || 0);
     }
+    const firedAA14 = !!(a.df40?.aa14Active && !a.df40?.aa14Overheated);
     const p = eyeOf(a);
-    const barrelLen = a.gun === 'MS10' ? .92 : a.gun === RD ? .88 : a.gun === RD30 ? .80 : a.gun === RD20 ? .68 : a.gun === 'D1' ? .78 : a.gun === 'SW T' ? .60 : .74;
+    const barrelLen = a.gun === 'MS10' ? .92 : a.gun === DF40II ? .90 : a.gun === RD ? .88 : a.gun === RD30 ? .80 : a.gun === RD20 ? .68 : a.gun === 'D1' ? .78 : a.gun === 'SW T' ? .60 : .74;
     let firstDir = null, firstMuzzle = null;
     for (let k = 0; k < salvo; k++) {
-      const barrelSide = salvo === 2 ? (k === 0 ? -1 : 1) : 0;
-      const guidedInfo = a.df ? bulletGuidanceDF(this, a) : a.rd ? bulletGuidanceRD(this, a, barrelSide) : null;
+      const barrelSide = salvo === 3 ? (k - 1) : salvo === 2 ? (k === 0 ? -1 : 1) : 0;
+      const barrelVert = salvo === 3 ? (k === 1 ? 1 : -0.45) : 0;
+      const guidedInfo = a.df ? bulletGuidanceDF(this, a) : a.df40 ? bulletGuidanceDF40II(this, a, barrelSide, barrelVert) : a.rd ? bulletGuidanceRD(this, a, barrelSide) : null;
       const dir = guidedInfo ? guidedInfo.dir : forward(a.yaw, a.pitch);
       const right = unit(cross(dir, [0, 1, 0]));
       const up = cross(right, dir);
-      const sideOff = (a.human ? .14 : .11) + barrelSide * .048;
-      const muzzle = add(p, add(scale(dir, barrelLen), add(scale(right, sideOff), scale(up, a.human ? -.12 : -.18))));
+      const sideOff = (a.human ? .14 : .11) + barrelSide * (a.gun === DF40II ? .042 : .048);
+      const upOff = (a.human ? -.12 : -.18) + barrelVert * .026;
+      const muzzle = add(p, add(scale(dir, barrelLen), add(scale(right, sideOff), scale(up, upOff))));
       if (!firstDir) { firstDir = dir; firstMuzzle = muzzle; }
       const shot = {
         id: ++this.seq,
@@ -280,12 +285,18 @@ export class Match {
         trail: [[...p]],
         trailClock: 0,
         guided: !!guidedInfo?.guided,
+        thermalGuidance: !!(a.df?.ads && a.df.scope === 'thermal'),
         homingTargetId: guidedInfo?.targetId ?? -1,
         homingSpawnId: this.actors[guidedInfo?.targetId]?.spawnId,
         homingBudget: guidedInfo ? guidedInfo.homingBudget : 0,
         homingRate: guidedInfo ? guidedInfo.homingRate : 0,
         homingCos: guidedInfo?.homingCos || 0,
         homingTurned: 0,
+        aaTier: guidedInfo?.aaTier || null,
+        arvOrder: guidedInfo?.arvOrder || 1,
+        homingAccel: guidedInfo?.accel || null,
+        homingVelWeight: guidedInfo?.velWeight,
+        homingAccelWeight: guidedInfo?.accelWeight,
         ricochets: 0,
         penetrations: 0,
         ricocheted: false,
@@ -307,6 +318,7 @@ export class Match {
         gun: a.gun,
         team: a.team,
         source,
+        aaTier: guidedInfo?.aaTier || null,
         actor: a.id,
         human: a.human,
         life: a.gun === 'MS10' ? .15 : .12,
@@ -327,12 +339,13 @@ export class Match {
       });
       if (this.casings.length > 42)this.casings.shift();
     }
+    if (a.df40) onFireDF40II(this, a, salvo);
     this.echoPulse.emit(this, {
       kind: 'fire',
       pos: firstMuzzle || p,
       actor: a,
       team: a.team,
-      loudness: a.gun === 'MS10' ? 1.25 : a.gun === RD ? 1.12 : 1.0,
+      loudness: a.gun === 'MS10' ? 1.25 : a.gun === DF40II ? 1.18 : a.gun === RD ? 1.12 : 1.0,
       gun: a.gun
     });
     if (firstMuzzle && firstDir) {
@@ -340,7 +353,7 @@ export class Match {
       this.thermoFlux.depositHeat(a.x, a.z, 0.14, 0);
     }
     this.nv.onShotFired?.(a, source);
-    this.event('fire', {actor: a, source, gun: a.gun, p: firstMuzzle, dir: firstDir, speed: w.speed, pellets: salvo, burstIndex: a.shotCount});
+    this.event('fire', {actor: a, source, gun: a.gun, p: firstMuzzle, dir: firstDir, speed: w.speed, pellets: salvo, burstIndex: a.shotCount, aa14: firedAA14});
     return true;
   }
   deploySmokeVent(a = this.player) {
@@ -355,7 +368,7 @@ export class Match {
     this.thermoFlux.depositHeat(sx, sz, 0.45, 2);
     if (a.human) this.smokeCooldown = 10.0;
     else a.smokeCooldown = 14.0;
-    this.echoPulse.emit(this, {kind: 'tanker', pos: [sx, 1.2, sz], actor: a, team: a.team, loudness: 0.72});
+    this.echoPulse.emit(this, {kind: 'smoke', pos: [sx, 1.2, sz], actor: a, team: a.team, loudness: 0.72});
     this.event('smoke', {actor: a, point: [sx, 1.0, sz]});
     return true;
   }
@@ -385,7 +398,7 @@ export class Match {
       this.resonance.exciteBlast([v.x, v.y + 1.0, v.z], 0.78);
     }
     this.nv.learn(v, false);
-    this.nv.onHit?.(v, owner, dir, power);
+    this.nv.onHit?.(v, owner, dir, power, shieldBreak);
     this.event('hit', {victim: v, actor: owner, shield: absorbed > 0, shieldBreak, kill, damage: power, dir, ricochet: !!meta?.ricochet, wallbang: !!meta?.wallbang});
     if (!kill)return {shield: absorbed > 0, shieldBreak, kill: false};
     this.aeroVortex.injectBurst(v.x, v.z, {smoke: 1.35, heat: 0.92, force: 4.8, radius: 3});
@@ -396,6 +409,30 @@ export class Match {
     v.reload = 0;
     v.burstLeft = 0;
     v.queue.length = 0;
+    if (v.df) {
+      v.df.ads = false;
+      v.df.locked = false;
+      v.df.focus = 0;
+      v.df.focusId = -1;
+      v.df.boost = false;
+    }
+    if (v.rd) {
+      v.rd.locked = false;
+      v.rd.d01Active = false;
+      v.rd.occluded = false;
+      v.rd.focus = 0;
+      v.rd.focusId = -1;
+      v.rd.d01Timer = 0;
+    }
+    if (v.df40) {
+      v.df40.aa14Active = false;
+      v.df40.locked = false;
+      v.df40.d01Active = false;
+      v.df40.occluded = false;
+      v.df40.focus = 0;
+      v.df40.focusId = -1;
+      v.df40.d01Timer = 0;
+    }
     v.deaths++;
     owner.kills++;
     if (owner.human) owner.earned += 10;
@@ -412,6 +449,7 @@ export class Match {
     this.ended = true;
     this.shots.length = 0;
     this.synapse?.save();
+    this.nv.onMatchEnd?.();
     this.event('end', {winner});
   }
 
@@ -526,6 +564,7 @@ export class Match {
     } else a.ammoClock = 0;
     if (a.df)updateDF(this, a, dt);
     if (a.rd)updateRD(this, a, dt);
+    if (a.df40)updateDF40II(this, a, dt);
     if (a.burstLeft) {
       if (a.df && (!a.df.boost || a.df.cooling > 0 || !a.df.p1)) {
         a.queue = a.queue.filter(source => source !== 'p1');
@@ -549,14 +588,83 @@ export class Match {
       }
     }
   }
+  beginPenetration(s, ball, normal, mat, time) {
+    const entry = ball.entryPos;
+    s.materialPass = {ball, normal, mat, time, remaining: ball.thickness / ((s.speed + ball.speed) * .5)};
+    s.guided = false;
+    this.effects.push({
+      kind: 'wall', p: [...entry], dir: [...s.dir], normal, gun: s.gun, source: s.source,
+      team: s.team, metal: mat === 'steel', mat, life: .34, max: .34, actor: s.owner.id, target: false, seed: ++this.seq
+    });
+    this.scorches.push({
+      p: add(entry, scale(normal, .014)), normal, mat, gun: s.gun, source: s.source,
+      life: 1.85, max: 1.85, seed: this.seq
+    });
+    if (this.scorches.length > 26) this.scorches.shift();
+    if (mat === 'steel') {
+      const resHit = this.resonance.exciteStrike(entry, 0.9, s.owner, this);
+      if (resHit) this.event('resonate', {...resHit, actor: s.owner, mat});
+    }
+  }
+
+  advancePenetration(s, dt) {
+    const pass = s.materialPass;
+    const elapsed = Math.min(pass.remaining, s.life, dt);
+    pass.remaining -= elapsed;
+    s.life -= elapsed;
+    s.age += elapsed;
+    const time = Math.max(pass.time, this.time - dt + elapsed);
+    if (pass.remaining > 0) {
+      if (s.life > 0) return true;
+      this.chronoTrace.finishShot(s, pass.ball.entryPos, 'wall', time);
+      return false;
+    }
+
+    const {ball, normal, mat} = pass;
+    s.materialPass = null;
+    this.techStats.penetrations++;
+    this.chronoTrace.recordPenetration(s, ball.entryPos, ball.exitPos, normal, ball.thickness, mat, pass.time, time, ball.exitNormal);
+    s.old = [...ball.entryPos];
+    s.p = ball.exitPos;
+    s.dir = ball.dir;
+    s.speed = ball.speed;
+    s.damage = ball.damage;
+    s.penetrations = (s.penetrations || 0) + 1;
+    s.penetrated = true;
+    if (s.trail) {
+      s.trail.push([...ball.entryPos], [...ball.exitPos]);
+      while (s.trail.length > 10) s.trail.shift();
+    }
+    this.effects.push({
+      kind: 'penetrate', p: [...ball.exitPos], dir: [...ball.dir], normal: ball.exitNormal, gun: s.gun, source: s.source,
+      team: s.team, metal: mat === 'steel', mat, life: .44, max: .44, actor: s.owner.id, target: false, seed: ++this.seq
+    });
+    this.scorches.push({
+      p: add(ball.exitPos, scale(ball.exitNormal, .014)), normal: ball.exitNormal, mat, gun: s.gun, source: s.source,
+      life: 1.85, max: 1.85, seed: ++this.seq
+    });
+    if (this.scorches.length > 26) this.scorches.shift();
+    this.aeroVortex.injectSmoke(ball.exitPos[0], ball.exitPos[2], 0.52, 0.55, 1, ball.dir[0] * 2.2, ball.dir[2] * 2.2);
+    this.thermoFlux.depositHeat(ball.exitPos[0], ball.exitPos[2], 0.78, 1);
+    this.echoPulse.emit(this, {kind: 'penetrate', pos: ball.exitPos, actor: s.owner, team: s.team, loudness: 0.76, gun: s.gun});
+    this.event('penetrate', {point: ball.exitPos, entry: ball.entryPos, dir: ball.dir, mat, thickness: ball.thickness, gun: s.gun, actor: s.owner});
+    if (s.life <= 0) {
+      this.chronoTrace.finishShot(s, s.p, 'miss', time);
+      return false;
+    }
+    const left = dt - elapsed;
+    return left <= 1e-8 || this.projectile(s, left);
+  }
+
   projectile(s, dt) {
+    if (s.materialPass) return this.advancePenetration(s, dt);
     if (s.guided)steerGuidedShot(this, s, dt);
     const a = s.p;
     // AeroVortex 1.0 physical harbor crosswind coupling (subtle caliber-scaled aerodynamic drift)
     if (!s.guided && s.p[1] > 0.1 && s.p[1] < 5.5) {
       const wind = this.aeroVortex.sample(a[0], a[2]);
       if (wind.speed > 0.35) {
-        const drag = s.gun === 'MS10' ? 0.0009 : s.gun === 'RD40' ? 0.0013 : 0.0019;
+        const drag = s.gun === 'MS10' ? 0.0009 : s.gun === 'RD40' ? 0.0013 : s.gun === DF40II ? 0.0014 : 0.0019;
         s.dir = unit([s.dir[0] + wind.vx * drag * dt, s.dir[1], s.dir[2] + wind.vz * drag * dt]);
       }
     }
@@ -633,8 +741,9 @@ export class Match {
     }
     s.old = a;
     s.p = point;
-    s.life -= dt;
-    s.age = (s.age || 0) + travel * Math.min(1, at);
+    const flight = travel * Math.min(1, at);
+    s.life -= flight;
+    s.age = (s.age || 0) + flight;
     // Supersonic Mach shockwave aero-acoustic coupling to nearby hollow steel shipping containers
     if (s.speed >= 340 && s.age >= (s._nextMachAt || 0.008)) {
       s._nextMachAt = s.age + 0.045;
@@ -679,6 +788,7 @@ export class Match {
         const ball = !isWater && hitInfo ? solveBallisticImpact(s, hitInfo, this.rng) : {action: 'stop'};
 
         if (ball.action === 'ricochet') {
+          s.life -= travel - flight;
           this.techStats.ricochets++;
           this.chronoTrace.recordRicochet(s, hitInfo.point, normal, ball.grazingSin, impactTime);
           s.old = [...hitInfo.point];
@@ -724,49 +834,8 @@ export class Match {
         }
 
         if (ball.action === 'penetrate') {
-          this.techStats.penetrations++;
-          this.chronoTrace.recordPenetration(s, ball.entryPos, ball.exitPos, normal, ball.thickness, mat, impactTime);
-          s.old = [...ball.entryPos];
-          s.p = ball.exitPos;
-          s.dir = ball.dir;
-          s.speed = ball.speed;
-          s.damage = ball.damage;
-          s.guided = false;
-          s.penetrations = (s.penetrations || 0) + 1;
-          s.penetrated = true;
-          if (s.trail) {
-            s.trail.push([...ball.entryPos], [...ball.exitPos]);
-            while (s.trail.length > 10) s.trail.shift();
-          }
-          // Entry crater + far-side exit splinter/ember plume!
-          this.effects.push({
-            kind: 'wall',
-            p: [...ball.entryPos], dir: [...s.dir], normal, gun: s.gun, source: s.source,
-            team: s.team, metal, mat, life: .34, max: .34, actor: s.owner.id, target: false, seed: ++this.seq
-          });
-          this.effects.push({
-            kind: 'penetrate',
-            p: [...ball.exitPos], dir: [...ball.dir], normal: ball.exitNormal, gun: s.gun, source: s.source,
-            team: s.team, metal, mat, life: .44, max: .44, actor: s.owner.id, target: false, seed: ++this.seq
-          });
-          this.scorches.push({
-            p: [ball.entryPos[0] + normal[0] * .014, ball.entryPos[1] + normal[1] * .014, ball.entryPos[2] + normal[2] * .014],
-            normal, mat, gun: s.gun, source: s.source, life: 1.85, max: 1.85, seed: this.seq
-          });
-          this.scorches.push({
-            p: [ball.exitPos[0] + ball.exitNormal[0] * .014, ball.exitPos[1] + ball.exitNormal[1] * .014, ball.exitPos[2] + ball.exitNormal[2] * .014],
-            normal: ball.exitNormal, mat, gun: s.gun, source: s.source, life: 1.85, max: 1.85, seed: ++this.seq
-          });
-          while (this.scorches.length > 26) this.scorches.shift();
-          this.aeroVortex.injectSmoke(ball.exitPos[0], ball.exitPos[2], 0.52, 0.55, 1, ball.dir[0] * 2.2, ball.dir[2] * 2.2);
-          this.thermoFlux.depositHeat(ball.exitPos[0], ball.exitPos[2], 0.78, 1);
-          if (mat === 'steel') {
-            const resHit = this.resonance.exciteStrike(ball.entryPos, 0.9, s.owner, this);
-            if (resHit) this.event('resonate', {...resHit, actor: s.owner, mat});
-          }
-          this.echoPulse.emit(this, {kind: 'penetrate', pos: ball.exitPos, actor: s.owner, team: s.team, loudness: 0.76, gun: s.gun});
-          this.event('penetrate', {point: ball.exitPos, entry: ball.entryPos, dir: ball.dir, mat, thickness: ball.thickness, gun: s.gun, actor: s.owner});
-          return s.life > 0;
+          this.beginPenetration(s, ball, normal, mat, impactTime);
+          return this.advancePenetration(s, dt - flight);
         }
 
         this.chronoTrace.finishShot(s, p, isWater ? 'miss' : 'wall', impactTime);
@@ -829,7 +898,9 @@ export class Match {
     for (const rep of arrivedEchoes) {
       this.nv.onEchoArrival?.(rep);
       const listener = this.actors[rep.listenerId];
-      if (listener?.alive) {
+      const src = rep.sourceActor;
+      const staleSource = src && (!src.alive || (rep.sourceSpawnId !== undefined && src.spawnId !== rep.sourceSpawnId));
+      if (listener?.alive && !staleSource) {
         this.spectraField.observe(listener.team, rep.perceivedPos[0], rep.perceivedPos[2], {
           sigma: rep.occluded ? 7.2 : 4.5,
           weight: rep.isDecoy ? 0.35 : 0.62
@@ -841,10 +912,11 @@ export class Match {
       for (const w of this.echoPulse.playerWaves) {
         if (!w.specFed && this.player.alive && w.team !== this.player.team && this.time >= w.arriveAt) {
           w.specFed = true;
-          this.spectraField.observe(0, w.pos[0], w.pos[2], {sigma: w.occluded ? 7.2 : 4.6, weight: 0.58});
-          if (w.actorId >= 0) {
-            const srcActor = this.actors[w.actorId];
-            if (srcActor?.alive && srcActor.team === 1 && srcActor.spawnId === w.actorSpawnId) {
+          const srcActor = w.actorId >= 0 ? this.actors[w.actorId] : null;
+          const staleSrc = w.actorId >= 0 && (!srcActor?.alive || srcActor.spawnId !== w.actorSpawnId);
+          if (!staleSrc) {
+            this.spectraField.observe(0, w.pos[0], w.pos[2], {sigma: w.occluded ? 7.2 : 4.6, weight: 0.58});
+            if (srcActor && srcActor.team === 1 && w.kind !== 'smoke') {
               this.fermat.recordIntel(0, srcActor, this.time, 'echo', [w.pos[0], Math.max(1.15, w.pos[1]), w.pos[2]]);
             }
           }

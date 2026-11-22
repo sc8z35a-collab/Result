@@ -22,7 +22,8 @@ export const WEAPON_BAND = {
   'DF1 OUT': {min: 14, ideal: 26, max: 46, burstMax: 3, cap: 95},
   RD30: {min: 10, ideal: 20, max: 36, burstMax: 5, cap: 40},
   RD20: {min: 11, ideal: 21, max: 38, burstMax: 4, cap: 20},
-  RD40: {min: 14, ideal: 26, max: 48, burstMax: 6, cap: 65}
+  RD40: {min: 14, ideal: 26, max: 48, burstMax: 6, cap: 65},
+  'DF40 II': {min: 12, ideal: 25, max: 48, burstMax: 6, cap: 87}
 };
 
 // Module-cached Prebaked Tactical Cover & Visibility Graph (computed once per harbor map, ~18 KB total).
@@ -498,10 +499,6 @@ export class NV13Pro extends NV12 {
     vTeam.lastCombatAt = t;
     // Record killbox danger memory so squad stops feeding into the same death zone!
     vTeam.stampField(vTeam.deathHeat, victim.x, victim.z, 12, 2.4, 7.0);
-    if (owner && owner.team !== victim.team) {
-      vTeam.stampField(vTeam.threat, owner.x, owner.z, 14, 1.8, 6.0);
-      vTeam.collapseBelief(owner.id, owner.x, owner.z, owner.vx || 0, owner.vz || 0, .86, t, 3.6);
-    }
     const oTeam = this.teams[owner.team];
     oTeam.lastCombatAt = t;
     const {bf} = oTeam.ensureEnemy(victim.id);

@@ -15,6 +15,7 @@
 //        D01 SENSOR behind-cover tracking!
 
 import {clamp, dot, add, scale, unit} from './geometry.js';
+import {obstruction} from './yard.js';
 
 export const BALLISTICS_VERSION = 'BallisticCore-X 1.0';
 
@@ -23,6 +24,7 @@ export const WEAPON_PENETRATION = {
   MS10: {wood: 3.6, steel: 0.44, concrete: 0.22, maxPen: 2, maxRic: 2},
   'SW T': {wood: 3.0, steel: 0.32, concrete: 0.16, maxPen: 1, maxRic: 2},
   RD40: {wood: 2.9, steel: 0.30, concrete: 0.14, maxPen: 2, maxRic: 2},
+  'DF40 II': {wood: 2.3, steel: 0.20, concrete: 0.09, maxPen: 1, maxRic: 2},
   RD30: {wood: 2.4, steel: 0.22, concrete: 0.10, maxPen: 1, maxRic: 2},
   SRA: {wood: 2.2, steel: 0.18, concrete: 0.08, maxPen: 1, maxRic: 1},
   RD20: {wood: 1.9, steel: 0.14, concrete: 0.06, maxPen: 1, maxRic: 1},
@@ -33,6 +35,11 @@ export const WEAPON_PENETRATION = {
 // Critical grazing incidence sine thresholds: sin(24°) ≈ 0.407 (steel), sin(16°) ≈ 0.276 (concrete)
 export const RICOCHET_SIN_STEEL = 0.41;
 export const RICOCHET_SIN_CONCRETE = 0.28;
+
+export function incomingPathClear(shot, distance, point) {
+  return !shot.materialPass && distance > 0 && distance <= shot.speed * (shot.life ?? Infinity) &&
+    obstruction(shot.p, point) > 1;
+}
 
 /**
  * Evaluates a physical surface strike for BallisticCore-X:
@@ -100,6 +107,9 @@ export function solveBallisticImpact(shot, hit, rng = null) {
     const j3 = rng ? (rng() - 0.5) * 2 * tumble : 0;
     const exitDir = unit([dir[0] + j1, dir[1] + j2, dir[2] + j3]);
     const exitPos = add(hit.exitPoint, scale(exitDir, 0.06));
+    if (exitPos[1] <= 0.01 && Math.abs(exitPos[0]) <= 25 && Math.abs(exitPos[2]) <= 100) {
+      return {action: 'stop'};
+    }
     return {
       action: 'penetrate',
       entryPos: hit.point,

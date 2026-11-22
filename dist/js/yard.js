@@ -215,13 +215,81 @@ export function obstruction(a, b) {
   return nearest;
 }
 
+export function clearOpticalPath(a, b, aero) {
+  return obstruction(a, b) > 1 &&
+    !(aero?.stats.totalSmoke > 1.8 && aero.smokeOcclusion(a, b) > .86);
+}
+
+function penetrationDepth(x, z, r, feet) {
+  let depth = 0;
+  if (Math.abs(x) > 25 - r) depth += Math.abs(x) - (25 - r);
+  if (Math.abs(z) > 100 - r) depth += Math.abs(z) - (100 - r);
+  for (const i of nearby(x - r, z - r, x + r, z + r)) {
+    const o = obstacles[i];
+    if (feet >= o.y1 - .018 || feet + 1.7 <= o.y0) continue;
+    const dx = x - clamp(x, o.x0, o.x1), dz = z - clamp(z, o.z0, o.z1);
+    const dist = Math.hypot(dx, dz);
+    if (dist < r) depth += r - dist;
+  }
+  return depth;
+}
+
+function depenetrate(a, r = .4) {
+  const feet = a.y;
+  for (let pass = 0; pass < 3; pass++) {
+    const curPen = penetrationDepth(a.x, a.z, r, feet);
+    if (curPen <= 1e-6) return;
+    let bestPen = curPen, bestX = a.x, bestZ = a.z;
+    for (const i of nearby(a.x - r, a.z - r, a.x + r, a.z + r)) {
+      const o = obstacles[i];
+      if (feet >= o.y1 - .018 || feet + 1.7 <= o.y0) continue;
+      const cx = clamp(a.x, o.x0, o.x1), cz = clamp(a.z, o.z0, o.z1);
+      let dx = a.x - cx, dz = a.z - cz;
+      const dist = Math.hypot(dx, dz);
+      if (dist >= r) continue;
+      let nx, nz;
+      if (dist > 1e-6) {
+        const push = (r - dist) + .003;
+        nx = clamp(a.x + (dx / dist) * push, -24.58, 24.58);
+        nz = clamp(a.z + (dz / dist) * push, -99.58, 99.58);
+      } else {
+        const dL = a.x - o.x0, dR = o.x1 - a.x, dF = a.z - o.z0, dB = o.z1 - a.z;
+        const m = Math.min(dL, dR, dF, dB);
+        nx = a.x;
+        nz = a.z;
+        if (m === dL) nx = o.x0 - r - .003;
+        else if (m === dR) nx = o.x1 + r + .003;
+        else if (m === dF) nz = o.z0 - r - .003;
+        else nz = o.z1 + r + .003;
+        nx = clamp(nx, -24.58, 24.58);
+        nz = clamp(nz, -99.58, 99.58);
+      }
+      const p = penetrationDepth(nx, nz, r, feet);
+      if (p < bestPen - 1e-6) {
+        bestPen = p;
+        bestX = nx;
+        bestZ = nz;
+      }
+    }
+    if (bestPen < curPen - 1e-6) {
+      a.x = bestX;
+      a.z = bestZ;
+    } else break;
+  }
+}
+
 export function moveActor(a, dx, dz) {
+  if (!walkable(a.x, a.z, .4, a.y)) depenetrate(a, .4);
   const tx = clamp(a.x + dx, -24.58, 24.58), tz = clamp(a.z + dz, -99.58, 99.58);
-  if (walkable(tx, a.z, .4, a.y)) {
+  const penX = walkable(tx, a.z, .4, a.y) ? 0 : penetrationDepth(tx, a.z, .4, a.y);
+  const curPenX = penX > 0 ? penetrationDepth(a.x, a.z, .4, a.y) : 0;
+  if (penX === 0 || (curPenX > 0 && penX < curPenX - 1e-6)) {
     if (a.x === tx && dx) a.vx = 0;
     a.x = tx;
   } else a.vx = 0;
-  if (walkable(a.x, tz, .4, a.y)) {
+  const penZ = walkable(a.x, tz, .4, a.y) ? 0 : penetrationDepth(a.x, tz, .4, a.y);
+  const curPenZ = penZ > 0 ? penetrationDepth(a.x, a.z, .4, a.y) : 0;
+  if (penZ === 0 || (curPenZ > 0 && penZ < curPenZ - 1e-6)) {
     if (a.z === tz && dz) a.vz = 0;
     a.z = tz;
   } else a.vz = 0;

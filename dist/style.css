@@ -1299,6 +1299,223 @@ body.touch #rdHud {
 }
 
 /* ==========================================================================
+   DF40 II Flagship (ARV1.3 · Auto-Aim 1.3 · Auto-Aim 1.4 Overdrive & Overheat)
+   ========================================================================== */
+#loadout button[data-value="DF40 II"] {
+  grid-column: 1 / -1;
+  border-color: #8f7bff66;
+  background: linear-gradient(135deg, #251f46aa, #122a34aa);
+  color: #e6e2ff;
+  letter-spacing: .06em;
+}
+#loadout button[data-value="DF40 II"][aria-pressed="true"] {
+  border-color: #8c7bff;
+  background: linear-gradient(135deg, #745dff4a, #42ecff2a, #ffba5224);
+  color: #f4f2ff;
+  box-shadow: inset 0 -3px #64f4ff, 0 0 18px #7c68ff52;
+}
+.rd-setup.is-df40ii {
+  border-left-color: #8c7bff;
+  background: linear-gradient(135deg, #1f1938a8, #10263094);
+}
+.rd-setup.is-df40ii strong {
+  color: #a89cff;
+  min-width: 96px;
+}
+
+/* DF40 II Smart-Aperture Reticle (ARV1.3 violet-cyan -> AA1.4 gold-magenta overdrive -> overheat pulse) */
+#reticle.is-df40ii i, #reticle.is-df40ii em {
+  background: #f0eeff;
+  box-shadow: 0 0 6px #8674ffbb, 0 0 1px #140e2a;
+  transition: background .12s ease, box-shadow .12s ease;
+}
+#reticle.is-df40ii:before {
+  content: '';
+  position: absolute;
+  left: -38px;
+  top: -38px;
+  width: 76px;
+  height: 76px;
+  border-radius: 50%;
+  border: 1px dashed #8a7aff72;
+  box-shadow: inset 0 0 12px #58ecff1e;
+  pointer-events: none;
+  transition: transform .14s ease, border-color .14s ease, box-shadow .14s ease;
+}
+#reticle.is-df40ii.is-rd-locked:before {
+  transform: scale(.86) rotate(24deg);
+  border-style: solid;
+  border-color: #6af4ffca;
+  box-shadow: 0 0 14px #7c6aff52, inset 0 0 12px #6af4ff2c;
+}
+#reticle.is-df40ii.is-aa14 i, #reticle.is-df40ii.is-aa14 em {
+  background: #fff5d6;
+  box-shadow: 0 0 8px #ff70dca8, 0 0 2px #2c0c22;
+}
+#reticle.is-df40ii.is-aa14:before {
+  transform: scale(1.08) rotate(-32deg);
+  border-style: solid;
+  border-width: 1.5px;
+  border-color: #ff7ee2dc;
+  box-shadow: 0 0 18px #ff6ad866, inset 0 0 16px #ffd87038;
+}
+#reticle.is-df40ii.is-aa14.is-rd-locked:before {
+  transform: scale(.94) rotate(45deg);
+  border-color: #ffe278ee;
+  box-shadow: 0 0 22px #ff78dc88, inset 0 0 16px #ffe07842;
+}
+#reticle.is-df40ii.is-overheat:before {
+  border-style: dotted;
+  border-color: #ff5c6ecc;
+  box-shadow: 0 0 12px #ff405844;
+}
+#reticle.is-df40ii.is-rd-d01:before {
+  transform: scale(.92) rotate(-38deg);
+  border-style: dashed;
+  border-color: #5ffae0d4;
+  box-shadow: 0 0 14px #4ef2d852, inset 0 0 12px #5ffae02c;
+}
+#reticle.is-df40ii.is-rd-fire:before {
+  transform: scale(.99);
+  border-color: #a6f8ffe8;
+  box-shadow: 0 0 16px #8674ff74;
+}
+
+/* DF40 II HUD Card + Auto-Aim 1.4 Thermal / Overheat Meter */
+#rdHud.is-df40ii {
+  border-color: #8c7bff4c;
+  border-left-color: #8c7bff;
+  background: #16182cd8;
+  color: #eceaff;
+}
+#rdHud.is-df40ii.is-locked {
+  border-color: #68f4ff88;
+  box-shadow: 0 4px 18px #07101470, 0 0 16px #7866ff44;
+}
+#rdHud.is-df40ii .d01-line i {
+  background: linear-gradient(90deg, #8672ff, #58f4ff);
+}
+#rdHud.is-df40ii.is-aa14 {
+  border-color: #ff7ee29a;
+  border-left-color: #ffe074;
+  background: #27152be0;
+  color: #fff4df;
+  box-shadow: 0 4px 20px #12061482, 0 0 18px #ff6ed84c;
+}
+#rdHud.is-df40ii.is-aa14 #rdFocusText {
+  color: #ffe896;
+  font-weight: 700;
+}
+#rdHud.is-df40ii.is-aa14 .d01-line i {
+  background: linear-gradient(90deg, #ff68d6, #ffe274);
+}
+#rdHud.is-df40ii.is-overheat {
+  border-color: #ff5468b4;
+  border-left-color: #ff4a5e;
+  background: #2c1218e2;
+  box-shadow: 0 4px 18px #1a060a80, 0 0 16px #ff40544c;
+}
+#rdHud.is-df40ii.is-overheat #rdSensorText {
+  color: #ff98a4;
+  font-weight: 700;
+}
+.aa14-heat-line {
+  height: 4px;
+  margin-top: 4px;
+  background: #ffffff22;
+  border-radius: 2px;
+  overflow: hidden;
+}
+.aa14-heat-line i {
+  display: block;
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #5af4ff, #ffd666 65%, #ff4a62);
+  transition: width .05s linear;
+}
+#rdHud.is-df40ii.is-overheat .aa14-heat-line i {
+  background: linear-gradient(90deg, #ff5464, #ff9c54);
+  animation: aa14Pulse .45s ease-in-out infinite alternate;
+}
+@keyframes aa14Pulse {
+  from { opacity: .62; }
+  to { opacity: 1; }
+}
+
+/* DF40 II Tether Laser & Target Lock Brackets */
+#rdOverlay.is-df40ii #rdTetherGlow { stroke: #7e6cff48; stroke-width: 6px; }
+#rdOverlay.is-df40ii #rdTether { stroke: #7cf8ffee; stroke-width: 1.7px; }
+#rdOverlay.is-df40ii.is-aa14 { filter: drop-shadow(0 0 7px #ff74dcdd); }
+#rdOverlay.is-df40ii.is-aa14 #rdTetherGlow { stroke: #ff6ad858; stroke-width: 7px; }
+#rdOverlay.is-df40ii.is-aa14 #rdTether { stroke: #ffe88cff; stroke-width: 2.1px; stroke-dasharray: none; }
+
+#lockDot.is-df40ii {
+  width: 34px;
+  height: 34px;
+  --lock: #7cf6ff;
+  filter: drop-shadow(0 0 7px #8270ffdd);
+}
+#lockDot.is-df40ii i {
+  width: 9px;
+  height: 9px;
+  border-width: 2px 0 0 2px;
+}
+#lockDot.is-df40ii #lockTag {
+  color: #e8f8ff;
+  background: #14172cd8;
+  border-color: #8270ff99;
+}
+#lockDot.is-df40ii.is-aa14 {
+  width: 36px;
+  height: 36px;
+  --lock: #ffe278;
+  filter: drop-shadow(0 0 9px #ff6ad8ee);
+}
+#lockDot.is-df40ii.is-aa14 #lockTag {
+  color: #fff6d2;
+  background: #28102ad8;
+  border-color: #ff7ce2cc;
+}
+
+/* Mobile DF40 II Auto-Aim 1.4 Toggle Button */
+#touchDF40 {
+  position: absolute;
+  right: max(10px, calc(env(safe-area-inset-right) + 8px));
+  bottom: calc(max(10px, calc(env(safe-area-inset-bottom) + 8px)) + 114px);
+  display: flex;
+  gap: 4px;
+}
+#touchDF40 button {
+  position: static;
+  width: auto;
+  min-width: 58px;
+  height: 30px;
+  padding: 0 9px;
+  border-radius: 6px;
+  font: 700 10px/1 var(--mono);
+  letter-spacing: .04em;
+  color: #eceaff;
+  background: #1b1a36cc;
+  border: 1px solid #8c7bff99;
+  white-space: nowrap;
+}
+#touchDF40 button.is-active {
+  color: #fff6d0;
+  background: linear-gradient(135deg, #a23886d8, #c87b22d8);
+  border-color: #ffe278;
+  box-shadow: 0 0 12px #ff74dc66;
+}
+#touchDF40 button.is-overheat {
+  color: #ffc8cf;
+  background: #44131cd8;
+  border-color: #ff5468;
+}
+@media (max-height: 580px) {
+  #touchDF40 { bottom: calc(max(10px, calc(env(safe-area-inset-bottom) + 8px)) + 102px); }
+  #touchDF40 button { min-width: 50px; height: 26px; font-size: 9px; }
+}
+
+/* ==========================================================================
    Next-Gen 5 Innovations UI: FluxGI 1.0 · SchlierenOptics 1.0 · EchoPulse 1.0
    BallisticCore-X Banners · NV-Synapse 1.0 Match Results Telemetry
    ========================================================================== */
@@ -1383,6 +1600,7 @@ body.touch #rdHud {
 #echoCompass i.ep-ricochet { --ep-col: #ffd248ee; --ep-hi: #fff8c2ff; }
 #echoCompass i.ep-penetrate { --ep-col: #ff664ee0; --ep-hi: #ffd0b0ff; }
 #echoCompass i.ep-tanker { --ep-col: #4ef2dce0; --ep-hi: #d6fff9ff; }
+#echoCompass i.ep-smoke { --ep-col: #9ad8e8d4; --ep-hi: #e4f8ffff; }
 #echoCompass i.ep-step { --ep-col: #8ad6e8cc; --ep-hi: #dffaffff; }
 #echoCompass i.ep-occ {
   background: conic-gradient(from -11deg, transparent 0deg, var(--ep-col) 8deg, var(--ep-hi) 11deg, var(--ep-col) 14deg, transparent 22deg);
@@ -1758,11 +1976,17 @@ body.light-mode #chronoBanner {
   background: linear-gradient(135deg, #684814cc, #1e5266cc);
   box-shadow: 0 0 12px #f5c44e66;
 }
+#app[data-flir-active="true"] #chronoBanner {
+  top: calc(max(clamp(12px, 2.4vh, 26px), env(safe-area-inset-top)) + 76px);
+}
 body.touch #chronoBanner {
   top: calc(max(6px, env(safe-area-inset-top)) + 34px);
   max-width: 94vw;
   font-size: 8px;
   padding: 2px 8px;
+}
+body.touch #app[data-flir-active="true"] #chronoBanner {
+  top: calc(max(6px, env(safe-area-inset-top)) + 54px);
 }
 body.touch #touchTac {
   gap: 4px;

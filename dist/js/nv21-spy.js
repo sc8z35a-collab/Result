@@ -23,8 +23,9 @@
 //       with high-shot crouch-duck and agile low-shot evasive hop.
 
 import {clamp, mix, angleDiff} from './geometry.js';
-import {walkable, obstruction} from './yard.js';
+import {walkable, obstruction, clearOpticalPath} from './yard.js';
 import {eyeOf, targetPoint} from './posture.js';
+import {incomingPathClear} from './ballistics.js';
 
 const dist2 = (ax, az, bx, bz) => Math.hypot(ax - bx, az - bz);
 
@@ -659,14 +660,15 @@ export function planSpyTactics(nv, a, b, spyState) {
     if (lookDot > 0.65) enemiesLookingAtMe++;
   }
 
-  const mustVanish = a.hp < 52
+  const recentlyHit = t - (b.underFireAt || -10) < 3.4;
+  const mustVanish = (a.hp < 52 && (a.shield < 2 || enemiesLookingAtMe >= 1 || recentlyHit))
     || (a.hp < 68 && enemiesLookingAtMe >= 2)
     || (a.mag <= Math.max(2, Math.floor(wpn.capacity * 0.16)) && a.stock > 0 && enemiesLookingAtMe >= 1)
     || t < spyState.vanishUntil;
 
   if (mustVanish) {
     spyState.mode = 'SPY_VANISH';
-    spyState.holdFire = a.hp < 44 || a.mag <= 1;
+    spyState.holdFire = (a.hp < 44 && enemiesLookingAtMe === 0) || a.mag <= 1;
     if (t >= spyState.vanishUntil) spyState.vanishUntil = t + 2.35;
 
     // Pick best occluded flank cover away from known visual threats
@@ -876,7 +878,7 @@ export function computeSpyDodge(nv, a, b, spyState) {
     const cpy = s.p[1] + s.dir[1] * along;
     const cpz = s.p[2] + s.dir[2] * along;
     const missH = Math.hypot(cpx - ax, cpz - az);
-    if (missH < 1.38 && Math.abs(cpy - ay) < 1.08) {
+    if (missH < 1.38 && Math.abs(cpy - ay) < 1.08 && incomingPathClear(s, along, [cpx, cpy, cpz])) {
       incoming.push({
         px: s.p[0], pz: s.p[2],
         dx: s.dir[0], dz: s.dir[2],
@@ -899,7 +901,7 @@ export function computeSpyDodge(nv, a, b, spyState) {
     if (d < 2 || d > 44) continue;
     const fx = Math.sin(e.yaw), fz = -Math.cos(e.yaw);
     const aimDot = (ex * fx + ez * fz) / d;
-    if (aimDot > 0.945) {
+    if (aimDot > 0.945 && clearOpticalPath(eyeOf(e), targetPoint(a), nv.match.aeroVortex)) {
       aimRay = {ex: e.x, ez: e.z, fx, fz, d, aimDot};
       break;
     }
@@ -932,13 +934,13 @@ export function computeSpyDodge(nv, a, b, spyState) {
 
   // Test 6 candidate escape directions with walkable wall-clearance & multi-bullet clearance scoring!
   const baseAng = Math.atan2(refX, refZ);
-  let bestVx = refX, bestVz = refZ, bestScore = -Infinity;
+  let bestVx = refX, bestVz = refZ, bestScore = -Infinity, found = false;
 
   for (let k = 0; k < DODGE_ANGLES.length; k++) {
     const ang = baseAng + DODGE_ANGLES[k];
     const vx = Math.sin(ang), vz = Math.cos(ang);
-    const clear1 = walkable(ax + vx * 0.72, az + vz * 0.72);
-    const clear2 = walkable(ax + vx * 1.38, az + vz * 1.38);
+    const clear1 = walkable(ax + vx * 0.72, az + vz * 0.72, .41, a.y);
+    const clear2 = walkable(ax + vx * 1.38, az + vz * 1.38, .41, a.y);
     if (!clear1) continue;
 
     // Evaluate future body position ~0.18s into evade burst (1.15m lateral displacement)
@@ -979,8 +981,11 @@ export function computeSpyDodge(nv, a, b, spyState) {
       bestScore = sc;
       bestVx = vx;
       bestVz = vz;
+      found = true;
     }
   }
+
+  if (!found) return;
 
   b.dodgeVec[0] = bestVx;
   b.dodgeVec[1] = bestVz;

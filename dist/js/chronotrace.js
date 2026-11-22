@@ -132,16 +132,18 @@ export class ChronoTrace {
   }
 
   /** Records a BallisticCore-X slab wallbang tunnel (entry -> far-side exit & measured thickness). */
-  recordPenetration(shot, entryPos, exitPos, normal, thickness, mat, time) {
+  recordPenetration(shot, entryPos, exitPos, normal, thickness, mat, time, exitTime = time, exitNormal = null) {
     const rec = shot?.trace;
     if (!rec || rec.closed) return;
     const last = rec.pts[rec.pts.length - 1];
     rec.distM += Math.hypot(entryPos[0] - last[0], entryPos[1] - last[1], entryPos[2] - last[2]) + thickness;
-    rec.pts.push([entryPos[0], entryPos[1], entryPos[2], time], [exitPos[0], exitPos[1], exitPos[2], time]);
+    rec.pts.push([entryPos[0], entryPos[1], entryPos[2], time], [exitPos[0], exitPos[1], exitPos[2], exitTime]);
+    const en = exitNormal ? [exitNormal[0], exitNormal[1], exitNormal[2]] : [-normal[0], -normal[1], -normal[2]];
     rec.penetrations.push({
       entry: [entryPos[0], entryPos[1], entryPos[2]],
       exit: [exitPos[0], exitPos[1], exitPos[2]],
       normal: [normal[0], normal[1], normal[2]],
+      exitNormal: en,
       thickness,
       mat
     });
@@ -284,8 +286,9 @@ export class ChronoTrace {
 
       // 4. Wallbang Entry/Exit Portals
       for (const pen of tr.penetrations) {
+        const exitN = pen.exitNormal || [-pen.normal[0], -pen.normal[1], -pen.normal[2]];
         drawRing3D(m, add(pen.entry, scale(pen.normal, 0.04)), pen.normal, 0.24, 0.015, 8, '#ff8e52');
-        drawRing3D(m, add(pen.exit, scale(pen.normal, -0.04)), pen.normal, 0.30, 0.018, 8, '#ff4c32');
+        drawRing3D(m, add(pen.exit, scale(exitN, 0.04)), exitN, 0.30, 0.018, 8, '#ff4c32');
       }
 
       // 5. Lethal Impact Holographic Crown at terminal coordinate

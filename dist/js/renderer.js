@@ -1,6 +1,6 @@
 import {STRIDE, add, sub, scale, unit, cross, dot, multiply, invert4, lookAt, perspective, clamp} from './geometry.js';
 import {bodyCenter, torso} from './posture.js';
-import {loadTextures} from './materials.js';
+import {loadTextures, loadScenery} from './materials.js';
 import {buildHarbor} from './harbor.js';
 import {character, viewModel, movingDetails, muzzleFlashMesh} from './models.js';
 import {weapons, npcWeapons} from './match.js';
@@ -111,9 +111,9 @@ function rotateBasis(right, up, fwd, pitch, yaw, roll) {
 export class Renderer {
   constructor(canvas, hdrCanvas) {
     this.canvas = canvas;
-    this.hdrDisplay = new HDRDisplay(hdrCanvas);
     this.gl = canvas.getContext('webgl2', {alpha: false, antialias: true, premultipliedAlpha: false, powerPreference: 'high-performance'});
     if (!this.gl) throw Error('WebGL 2 を初期化できません');
+    this.hdrDisplay = new HDRDisplay(hdrCanvas);
     this.mirrorAt = -10;
     this.lastRenderTime = null;
     this.native = true;
@@ -134,18 +134,14 @@ export class Renderer {
     this.schlieren = new SchlierenOptics();
     this.floatHDR = this.khdr.floatHDR;
 
-    const [textures, wave] = await Promise.all([loadTextures(gl), new Promise((res, rej) => {
-      const img = new Image();
-      img.onload = () => res(img);
-      img.onerror = rej;
-      img.src = './assets/waves.webp';
-    })]);
+    const [textures, wave] = await Promise.all([loadTextures(gl), loadScenery(false)]);
     this.textures = textures;
     this.wave = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, this.wave);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, wave);
     gl.generateMipmap(gl.TEXTURE_2D);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    if (gl.getError() !== gl.NO_ERROR) throw new Error('WebGL 水面テクスチャを割り当てられませんでした');
 
     this.terrain = gpuMesh(gl, buildHarbor());
     this.actors = {};
@@ -224,6 +220,16 @@ export class Renderer {
       this.actorsLite['spy_' + team + g] = gpuMesh(gl, character(team, g, 'spy', 'lite'));
     }
   }
+  actorMesh(a, lite) {
+    const map = lite ? this.actorsLite : this.actors;
+    const team = a.team ? 1 : 0;
+    const gun = Object.hasOwn(weapons, a.gun) ? a.gun : 'SW T';
+    const key = (a.isSpy ? 'spy_' : '') + team + gun;
+    if (!map[key]) {
+      map[key] = gpuMesh(this.gl, character(team, gun, a.isSpy ? 'spy' : 'standard', lite ? 'lite' : 'high'));
+    }
+    return map[key];
+  }
   quality() {
     if (this.isLite()) return -1;
     return Object.hasOwn(qualityLevels, this.config?.graphics) ? qualityLevels[this.config.graphics] : 1;
@@ -284,6 +290,7 @@ export class Renderer {
       const f = clamp(pl.flash / .11, 0, 1);
       const mp = add(eye, add(scale(fwd, .85), add(scale(right, .14), scale(up, -.12))));
       const col = pl.gun === 'MS10' ? [.48, 1.45, 1.8]
+        : pl.gun === 'DF40 II' ? (pl.df40?.aa14Active ? [1.95, .86, 1.65] : [.74, 1.05, 1.98])
         : pl.gun === 'RD40' ? [1.95, .74, .58]
         : pl.gun === 'RD30' ? [1.90, 1.22, .46]
         : pl.gun === 'RD20' ? [.46, 1.52, 1.88]
@@ -304,6 +311,7 @@ export class Renderer {
       else if (e.kind === 'hit' || e.kind === 'wall') {
         const ic = e.source === 'p1' ? [1.45, .65, 1.95]
           : e.gun === 'MS10' ? [.46, 1.6, 1.95]
+          : e.gun === 'DF40 II' ? [.78, 1.05, 1.98]
           : e.gun === 'RD40' ? [1.95, .72, .52]
           : e.gun === 'RD30' ? [1.90, 1.18, .44]
           : e.gun === 'RD20' ? [.48, 1.54, 1.88]
@@ -312,16 +320,18 @@ export class Renderer {
       }
     }
     for (const s of match.shots) {
+      if (s.materialPass) continue;
       const d = Math.hypot(s.p[0] - eye[0], s.p[2] - eye[2]);
       if (d > 42) continue;
       const c = s.source === 'p1' ? [1.45, .68, 2.05]
         : s.gun === 'MS10' ? [.38, 1.65, 2.1]
+        : s.gun === 'DF40 II' ? (s.aaTier === '1.4' ? [1.98, .82, 1.68] : [.72, 1.08, 2.02])
         : s.gun === 'RD40' ? [1.95, .64, .58]
         : s.gun === 'RD30' ? [1.88, 1.18, .44]
         : s.gun === 'RD20' ? [.44, 1.56, 1.92]
         : s.guided ? [.38, 1.85, 1.65]
         : s.team ? [1.65, .86, .38] : [.58, 1.55, 1.28];
-      list.push({p: s.p, i: s.gun === 'MS10' ? 2.9 : (s.gun === 'RD40' || s.source === 'p1' || s.guided) ? 2.2 : 1.6, c, pri: 58 - d});
+      list.push({p: s.p, i: s.gun === 'MS10' ? 2.9 : (s.gun === 'DF40 II' || s.gun === 'RD40' || s.source === 'p1' || s.guided) ? 2.2 : 1.6, c, pri: 58 - d});
     }
     if (match.tankers) {
       for (const tk of match.tankers) {
@@ -464,6 +474,9 @@ export class Renderer {
     }
 
     // 1. Shadow Flame 1.0 Depth Pass (Off in Lightweight Mode / 1.0 Flash Dual-Cache / 1.0 Pro Focus-Snapped Dual-Cascade)
+    if (match && sfMode > 0) {
+      for (const a of match.actors) if (a.alive && !a.human) this.actorMesh(a, lite);
+    }
     this.sf.prepare(sfMode, eye, fwd, match, activeTerrain, activeActors, m => this.draw(m), time);
     this.sf.bindTextures(sfMode);
 
@@ -526,7 +539,7 @@ export class Renderer {
         if (p.uAnim) gl.uniform4f(p.uAnim, a.fwdVel || 0, a.sideVel || 0, a.airBlend || 0, a.landCompress || 0);
         if (p.uAnim2) gl.uniform4f(p.uAnim2, a.pitch || 0, time + a.id * 1.13, a.sprintAmt || 0, a.reloadFrac || 0);
         gl.uniform2f(p.uHitFX, a.hitFlash || 0, a.shieldFlash || 0);
-        this.draw(activeActors[(a.isSpy ? 'spy_' : '') + a.team + a.gun] || activeActors[a.team + a.gun]);
+        this.draw(this.actorMesh(a, lite));
       }
     }
 
@@ -635,7 +648,7 @@ export class Renderer {
       gl.uniform1i(p.uKHDR, khdrOn ? 1 : 0);
       gl.uniform2f(p.uRecoil, blowback, a.recoilSide || 0);
       if (p.uAnim) gl.uniform4f(p.uAnim, rdLock, rdD01, rdLockPulse, rdBarrelPhase);
-      if (p.uAnim2) gl.uniform4f(p.uAnim2, 0, time, 0, 0);
+      if (p.uAnim2) gl.uniform4f(p.uAnim2, (weapons[a.gun]?.pellets || 1) > 1 ? 1 : 0, time, 0, 0);
       gl.uniform2f(p.uHitFX, lite ? 0 : rdLock, lite ? 0 : rdD01);
       gl.uniform1f(p.uGunHeat, lite ? 0 : gunHeat);
       gl.uniformMatrix4fv(p.uModel, false, modelM);
