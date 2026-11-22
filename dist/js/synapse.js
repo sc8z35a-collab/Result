@@ -96,7 +96,8 @@ export class SynapseProfiler {
           this.markov[i] = clamp(Number(saved.markov[i]) || 0.18, 0.05, 40);
         }
       }
-      this.matchesLearned = Math.max(0, Number(saved?.matchesLearned) || 0);
+      const ml = Number(saved?.matchesLearned);
+      this.matchesLearned = Number.isFinite(ml) && ml > 0 ? Math.min(1e6, Math.floor(ml)) : 0;
     } catch {}
   }
 
@@ -181,6 +182,10 @@ export class SynapseProfiler {
       }
       this.fp.crouchFreq += ((crouch > 0.45 ? 1 : 0) - this.fp.crouchFreq) * 0.12;
     }
+
+    // Gentle recency decay on rare-event affinities so players who change playstyle aren't locked forever
+    this.fp.tankerAffinity = Math.max(0.10, this.fp.tankerAffinity * 0.986);
+    this.fp.reloadGreed = Math.max(0.10, this.fp.reloadGreed * 0.990);
 
     const pred = this.predictNextZone(zone);
     this.lastPredictedZone = pred.zone;

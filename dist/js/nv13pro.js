@@ -23,7 +23,7 @@ export const WEAPON_BAND = {
   RD30: {min: 10, ideal: 20, max: 36, burstMax: 5, cap: 40},
   RD20: {min: 11, ideal: 21, max: 38, burstMax: 4, cap: 20},
   RD40: {min: 14, ideal: 26, max: 48, burstMax: 6, cap: 65},
-  'DF40 II': {min: 12, ideal: 25, max: 48, burstMax: 6, cap: 260}
+  'DF40 II': {min: 12, ideal: 25, max: 48, burstMax: 6, cap: 87}
 };
 
 // Module-cached Prebaked Tactical Cover & Visibility Graph (computed once per harbor map, ~18 KB total).
@@ -1285,7 +1285,10 @@ export class NV13Pro extends NV12 {
     const lean = b.tactics?.computeAnatomicalLean
       ? b.tactics.computeAnatomicalLean(a, b, base.lean, t, this.metrics)
       : base.lean;
-    return {crouch: crouching && !b.vault && a.onGround, lean, ads};
+    const rawPose = {crouch: crouching && !b.vault && a.onGround, lean, ads};
+    return b.tactics?.refineExpressivePose
+      ? b.tactics.refineExpressivePose(a, b, rawPose, t, b.mind)
+      : rawPose;
   }
 
   tick(dt) {

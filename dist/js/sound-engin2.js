@@ -1162,6 +1162,15 @@ export class SoundEngin2 {
         }
         const ctx = new AudioCtx({latencyHint: 'interactive'});
         this.ctx = ctx;
+        this.lastWhizAt = -Infinity;
+        this.lastImpactAt = -Infinity;
+        this.lastCasingAt = -Infinity;
+        this.lastRdLockAt = -Infinity;
+        this.lastD01At = -Infinity;
+        this.lastFermatLockAt = -Infinity;
+        this.lastResonateAt = -Infinity;
+        this.lastWaterAt = -Infinity;
+        this.lastFootstepAt.clear();
         try {
           this._buildGraph();
           this._buildProceduralBuffers();
@@ -1976,6 +1985,9 @@ export class SoundEngin2 {
         st.wasAlive = true;
         st.strideMark = a.stride || 0;
         st.wasOnGround = !!a.onGround;
+        st.prevCrouch = (a.crouch || 0) > 0.45;
+        st.prevAds = !!(a.df?.ads);
+        st.prevLean = Math.abs(a.lean || 0) > 0.35 ? Math.sign(a.lean) : 0;
         st.reloadStage = 0;
       }
 
@@ -2661,17 +2673,20 @@ export class SoundEngin2 {
   _playStanceFoley(actor, isPlayer, kind, now) {
     this.stats.foleyCues++;
     const p = isPlayer ? null : eyeOf(actor);
-    const vol = isPlayer ? 0.075 : 0.032;
+    const path = isPlayer ? {delay: 0, cutoffHz: 18800, directGain: 1, dist: 0} : computeMultiBandAcousticPath(p, this.listenerPos);
+    if (!isPlayer && path.dist > 14) return;
+    const vol = isPlayer ? 0.075 : clamp(path.directGain * 0.048, 0.004, 0.036);
     this._playBuffer({
       buffer: this.clothBuf,
       rate: kind === 'crouch' ? 0.88 : kind === 'stand' ? 1.12 : 1.02,
       dur: 0.11,
       gain: vol,
+      lpf: path.cutoffHz,
       pos: p,
       pan: isPlayer ? (kind === 'lean' ? 0.14 : -0.06) : 0,
       bus: this.foleyBus,
       priority: 1,
-      start: now
+      start: now + path.delay
     });
   }
 
@@ -2891,9 +2906,14 @@ export class SoundEngin2 {
     if (e.type === 'penetrate' && e.point) { this._playPenetrate(e, now); return; }
     if (e.type === 'resonate' && e.point) { this._playContainerResonance(e, now, player); return; }
     if (e.type === 'smoke' && e.point) {
+      const path = computeMultiBandAcousticPath(e.point, this.listenerPos);
+      if (path.dist > 62) return;
       this.stats.systemCues++;
-      this._playBuffer({buffer: this.sub300Buf, rate: 1.15, dur: 0.11, gain: 0.16, pos: e.point, bus: this.foleyBus, priority: 3, start: now});
-      this._playBuffer({buffer: this.whiteNoiseBuf, loop: true, dur: 0.96, attack: 0.012, gain: 0.17, filterType: 'bandpass', f0: 3250, f1: 720, q: 1.4, pos: e.point, bus: this.foleyBus, reverbSend: 0.25, priority: 2, start: now + 0.014});
+      const vol = clamp(path.directGain * 1.15, 0.03, 1.0);
+      const start = now + path.delay;
+      const lpf = path.cutoffHz;
+      this._playBuffer({buffer: this.sub300Buf, rate: 1.15, dur: 0.11, gain: 0.16 * vol, lpf, pos: e.point, bus: this.foleyBus, priority: 3, start});
+      this._playBuffer({buffer: this.whiteNoiseBuf, loop: true, dur: 0.96, attack: 0.012, gain: 0.17 * vol, filterType: 'bandpass', f0: 3250, f1: 720, q: 1.4, lpf, pos: e.point, bus: this.foleyBus, reverbSend: clamp(0.25 + path.reverbBoost, 0.18, 0.72), priority: 2, start: start + 0.014});
       return;
     }
     if (e.type === 'reload' && a) {
@@ -2959,7 +2979,22 @@ export class SoundEngin2 {
   }
 
   _playIncomingHit(e, player, now) {
-    const srcPos = e.actor && e.actor !== player ? eyeOf(e.actor) : null;
+    let srcPos = null;
+    if (e.ricochet && e.dir) {
+      srcPos = [
+        this.listenerPos[0] - e.dir[0] * 10,
+        this.listenerPos[1] - e.dir[1] * 10,
+        this.listenerPos[2] - e.dir[2] * 10
+      ];
+    } else if (e.actor && e.actor !== player) {
+      srcPos = eyeOf(e.actor);
+    } else if (e.dir) {
+      srcPos = [
+        this.listenerPos[0] - e.dir[0] * 10,
+        this.listenerPos[1] - e.dir[1] * 10,
+        this.listenerPos[2] - e.dir[2] * 10
+      ];
+    }
     const pan = srcPos ? this._computeStereoPan(srcPos) : 0;
     this._duckAmbience(e.shieldBreak ? 0.88 : 0.48, now);
 

@@ -52,6 +52,18 @@ import {
   ManusiaTacticsV24,
   ManusiaSocialSquadV24
 } from './nv24-manusia.js';
+import {
+  NV25_HUMAIN_VERSION,
+  HumainActiveInferenceV25,
+  HumainDecisionDDM_V25,
+  HumainAffectivePsycheV25,
+  HumainMetaMindV25,
+  HumainMultisensoryV25,
+  HumainSensorimotorV25,
+  HumainFixationGazeV25,
+  HumainEmbodiedTacticsV25,
+  HumainSocialMindV25
+} from './nv25-humain.js';
 
 const dist2 = (ax, az, bx, bz) => Math.hypot(ax - bx, az - bz);
 const sigmoid = x => 1 / (1 + Math.exp(-clamp(x, -12, 12)));
@@ -738,7 +750,8 @@ const DODGE_DIRS6 = [0, 0.55, -0.55, 1.05, -1.05, Math.PI];
 function normalizeAiTier(model) {
   if (model === 'classic') return 'classic';
   if (model === 'nv23') return 'nv23';
-  return 'manusia';
+  if (model === 'manusia' || model === 'nv24') return 'manusia';
+  return 'humain';
 }
 
 export class NV2 extends NV13Pro {
@@ -754,11 +767,13 @@ export class NV2 extends NV13Pro {
       ? 'NV2'
       : match?.aiModel === 'nv23'
         ? NV23_HUMAN_VERSION
-        : NV24_MANUSIA_VERSION;
+        : (match?.aiModel === 'manusia' || match?.aiModel === 'nv24')
+          ? NV24_MANUSIA_VERSION
+          : NV25_HUMAIN_VERSION;
     this.hasNv21 = false;
     this.neural = new NV2NeuralCore(202607);
     this.nv2Teams = [new NV2TeamState(0), new NV2TeamState(1)];
-    this.comms = new ManusiaSocialSquadV24(random(202699));
+    this.comms = new HumainSocialMindV25(random(202699));
     this._teamAllies = [[], []];
     this.playerObsAt = 0;
     this.metrics = {
@@ -828,7 +843,22 @@ export class NV2 extends NV13Pro {
       manusiaAnatomicalLeans: 0,
       manusiaCornerPrefires: 0,
       manusiaPlayerAssists: 0,
-      manusiaCurvedTurns: 0
+      manusiaCurvedTurns: 0,
+      humainEpistemicScans: 0,
+      humainChangeOfMinds: 0,
+      humainHesitations: 0,
+      humainMouseLifts: 0,
+      humainRecoilOverpulls: 0,
+      humainCrosshairIntercepts: 0,
+      humainCrossModalLocks: 0,
+      humainCamoDelays: 0,
+      humainPatternBreaks: 0,
+      humainBaitTraps: 0,
+      humainPostKillChecks: 0,
+      humainSyncSwings: 0,
+      humainAsymStrafes: 0,
+      humainBreathResets: 0,
+      humainBuddyGlances: 0
     };
   }
 
@@ -841,11 +871,11 @@ export class NV2 extends NV13Pro {
   }
 
   getActorAiTier(actor) {
-    return actor ? this.teamAiTier[actor.team] : 'manusia';
+    return actor ? this.teamAiTier[actor.team] : 'humain';
   }
 
   attach(actor) {
-    // Preserve episodic memory (Nemesis, Trauma Angles, Enemy Models, EchoPulse Canyon Learning, Mental Ammo) across respawns!
+    // Preserve episodic memory (Nemesis, Trauma Angles, Enemy Models, EchoPulse Canyon Learning, Mental Ammo, Habits) across respawns!
     const prevBrain = this.brains.get(actor.id);
     const prevMind = prevBrain?.mind || null;
     const prevVision = prevBrain?.vision || null;
@@ -857,11 +887,14 @@ export class NV2 extends NV13Pro {
       const isNv21 = actor.aiVersion === 'NV2.1' || !!actor.isSpy;
       const tier = this.getActorAiTier(actor);
       const actorHuman = tier !== 'classic';
-      const isManusia = tier === 'manusia';
+      const isHumain = tier === 'humain';
+      const isManusia = tier === 'manusia' || isHumain;
       if (isNv21) this.hasNv21 = true;
       b.isNv21 = isNv21;
+      b.aiTier = tier;
       b.humanMode = actorHuman;
       b.manusiaMode = isManusia;
+      b.humainMode = isHumain;
       b.visibleEnemies = [];
       b._incoming = [];
       b.dodgeVec = [0, 0];
@@ -882,6 +915,9 @@ export class NV2 extends NV13Pro {
       b.tradeSwingUntil = -10;
       b.tradeTargetPos = null;
       b.tradeTargetId = -1;
+      b.syncSwingAt = -10;
+      b.syncSwingUntil = -10;
+      b.syncSwingPos = null;
       b.coverAllyUntil = -10;
       b.coverAllyPos = null;
       b.smokeWatchUntil = -10;
@@ -894,36 +930,70 @@ export class NV2 extends NV13Pro {
       b.unstuckUntil = -10;
       b.unstuckSign = 1;
 
-      if (isManusia) {
-        // Flagship NV 2.4 Manusia across ALL NPCs — INCLUDING 3v3 Spy Allies (NAGI / KAI)!
-        if (prevMind instanceof ManusiaSomaPsycheV24) {
+      if (isHumain) {
+        // Flagship NV2.5 humain across ALL NPCs — INCLUDING 3v3 Spy Allies (NAGI / KAI)!
+        if (prevMind instanceof HumainAffectivePsycheV25) {
+          prevMind.rng = b.rng;
+          prevMind.reset();
+          b.mind = prevMind;
+        } else {
+          b.mind = new HumainAffectivePsycheV25(actor, b.rng, isNv21);
+        }
+        if (prevVision instanceof HumainMultisensoryV25) {
+          prevVision.rng = b.rng;
+          prevVision.reset();
+          b.vision = prevVision;
+        } else {
+          b.vision = new HumainMultisensoryV25(b.rng, isNv21);
+        }
+        if (prevTom instanceof HumainMetaMindV25) {
+          prevTom.rng = b.rng;
+          prevTom.reset();
+          b.tom = prevTom;
+        } else {
+          b.tom = new HumainMetaMindV25(b.rng, b.mind.persona, isNv21);
+        }
+        b.inference = new HumainActiveInferenceV25(b.rng, b.mind.persona);
+        b.inference.reset(this.match.time, actor.team);
+        b.ddm = new HumainDecisionDDM_V25(b.rng, b.mind.persona);
+        b.ddm.reset(this.match.time);
+        b.gaze = new HumainFixationGazeV25(b.rng, b.mind.persona, isNv21);
+        b.humanAim = new HumainSensorimotorV25(b.rng, isNv21, b.mind.persona);
+        b.tactics = new HumainEmbodiedTacticsV25(b.rng, b.mind.persona, isNv21);
+        actor.humanPersona = b.mind.persona.ja;
+        actor.humanArchetype = b.mind.persona.id;
+      } else if (tier === 'manusia') {
+        // NV 2.4 Manusia mode (preserved for direct A/B/C/D head-to-head benchmarking!)
+        if (prevMind instanceof ManusiaSomaPsycheV24 && !(prevMind instanceof HumainAffectivePsycheV25)) {
           prevMind.rng = b.rng;
           prevMind.reset();
           b.mind = prevMind;
         } else {
           b.mind = new ManusiaSomaPsycheV24(actor, b.rng, isNv21);
         }
-        if (prevVision instanceof ManusiaPerceptionV24) {
+        if (prevVision instanceof ManusiaPerceptionV24 && !(prevVision instanceof HumainMultisensoryV25)) {
           prevVision.rng = b.rng;
           prevVision.reset();
           b.vision = prevVision;
         } else {
           b.vision = new ManusiaPerceptionV24(b.rng, isNv21);
         }
-        if (prevTom instanceof ManusiaTheoryOfMindV24) {
+        if (prevTom instanceof ManusiaTheoryOfMindV24 && !(prevTom instanceof HumainMetaMindV25)) {
           prevTom.rng = b.rng;
           prevTom.reset();
           b.tom = prevTom;
         } else {
           b.tom = new ManusiaTheoryOfMindV24(b.rng, b.mind.persona, isNv21);
         }
+        b.inference = null;
+        b.ddm = null;
         b.gaze = new ManusiaGazeV24(b.rng, b.mind.persona, isNv21);
         b.humanAim = new ManusiaNeuromotorAimV24(b.rng, isNv21, b.mind.persona);
         b.tactics = new ManusiaTacticsV24(b.rng, b.mind.persona, isNv21);
         actor.humanPersona = b.mind.persona.ja;
         actor.humanArchetype = b.mind.persona.id;
       } else if (actorHuman) {
-        // NV2.3 HUMAN mode (preserved for direct A/B/C head-to-head benchmarking!)
+        // NV2.3 HUMAN mode (preserved for direct A/B/C/D head-to-head benchmarking!)
         if (prevMind) {
           prevMind.rng = b.rng;
           prevMind.reset();
@@ -938,6 +1008,8 @@ export class NV2 extends NV13Pro {
         } else {
           b.vision = new HumanPerceptionV23(b.rng, isNv21);
         }
+        b.inference = null;
+        b.ddm = null;
         b.tom = null;
         b.gaze = new HumanGazeV23(b.rng, b.mind.persona, isNv21);
         b.humanAim = new HumanOFC_AimV23(b.rng, isNv21, b.mind.persona);
@@ -945,6 +1017,8 @@ export class NV2 extends NV13Pro {
         actor.humanPersona = b.mind.persona.ja;
         actor.humanArchetype = b.mind.persona.id;
       } else {
+        b.inference = null;
+        b.ddm = null;
         b.mind = null;
         b.vision = null;
         b.tom = null;
@@ -1125,8 +1199,16 @@ export class NV2 extends NV13Pro {
     if (b?.tom) b.tom.recordSelfExposed(actor.x, actor.z, shot?.owner?.id ?? -1, t);
     if (b?.vision) {
       const trace = b.vision.onBulletWhiz(actor, shot, dist, t, b.mind, this.metrics);
-      if (trace && b.gaze && !b.seen) {
-        b.gaze.onWhizCue(trace.yaw, trace.pitch, t);
+      if (trace) {
+        if (b.inference) {
+          const surprise = b.inference.observeEvidence(trace.estX, trace.estZ, 0.52, t);
+          if (!b.seen && dist < 1.25 && b.mind?.onUnexpectedShock) {
+            b.mind.onUnexpectedShock(surprise, t);
+          }
+        }
+        if (b.gaze && !b.seen) {
+          b.gaze.onWhizCue(trace.yaw, trace.pitch, t);
+        }
       }
     }
   }
@@ -1152,7 +1234,7 @@ export class NV2 extends NV13Pro {
     }
   }
 
-  onHit(victim, attacker, dir, power) {
+  onHit(victim, attacker, dir, power, shieldBreak = undefined) {
     const t = this.match.time;
     const bVPre = this.brains.get(victim.id);
     // Capture whether victim was actively peeking BEFORE nv12/nv13pro onHit clears peekPhase!
@@ -1169,7 +1251,9 @@ export class NV2 extends NV13Pro {
       clearOpticalPath(from, to, this.match.aeroVortex);
     const seenAttacker = visible ? attacker : null;
     super.onHit(victim, seenAttacker, dir, power);
-    const shieldBroken = victim.shield <= 0 && power > 0 && (victim.hp < 100 && victim.hp >= 100 - power - 0.5 || victim.shieldFlash > 0.9);
+    const shieldBroken = typeof shieldBreak === 'boolean'
+      ? shieldBreak
+      : (victim.shield <= 0 && power > 0 && (victim.hp < 100 && victim.hp >= 100 - power - 0.5 || victim.shieldFlash > 0.9));
     const lowHp = victim.hp <= 46;
 
     // Attacker team observes hit dealt / shield break -> positive reward + EXECUTE window + SHIELD_BREAK callout + ToM 5s Shield Clock!
@@ -1188,7 +1272,14 @@ export class NV2 extends NV13Pro {
         if (bA.mind) bA.mind.onHitDealt(shieldBroken, t);
         if (shieldBroken && bA.tom) bA.tom.onEnemyShieldBroken(victim.id, t);
         if (shieldBroken && bA.humanMode) {
-          this.comms.emitCallout(attacker.team, attacker.id, victim.id, victim.x, victim.z, 'SHIELD_BREAK', t, this.metrics);
+          this.comms.emitCallout(attacker.team, attacker.id, victim.id, victim.x, victim.z, 'SHIELD_BREAK', t, this.metrics, {stress: bA.mind?.stress || 0});
+          // NV2.5 humain: synchronized squad double-swing right after breaking enemy shield!
+          if (bA.humainMode && bA.tactics && t - (bA.tactics.lastSyncEmitAt || -10) > 4.0) {
+            bA.tactics.lastSyncEmitAt = t;
+            this.comms.emitCallout(attacker.team, attacker.id, victim.id, victim.x, victim.z, 'SWING_NOW', t, this.metrics, {
+              callerX: attacker.x, callerZ: attacker.z, stress: bA.mind?.stress || 0
+            });
+          }
         }
         if (bA.spy && rearAdvantage(attacker.x, attacker.z, victim.x, victim.z, victim.yaw) > 0.0) {
           this.metrics.spyBackstabs++;
@@ -1202,7 +1293,7 @@ export class NV2 extends NV13Pro {
       }
     }
 
-    // Victim team observes hit taken -> negative reward + survival token + NV 2.4 Manusia psyche/ToM/comms!
+    // Victim team observes hit taken -> negative reward + survival token + NV2.5 humain psyche/ToM/comms!
     const stV = this.nv2Teams[victim.team];
     stV.pushToken(this.buildToken(victim.team, 3, victim, seenAttacker));
     stV.lastReward -= shieldBroken ? 0.45 : 0.14;
@@ -1217,9 +1308,13 @@ export class NV2 extends NV13Pro {
       }
       if (seenAttacker && bV.humanMode) {
         if (stRes?.startled) {
-          this.comms.emitCallout(victim.team, victim.id, seenAttacker.id, seenAttacker.x, seenAttacker.z, 'AMBUSH', t, this.metrics, {callerX: victim.x, callerZ: victim.z});
+          this.comms.emitCallout(victim.team, victim.id, seenAttacker.id, seenAttacker.x, seenAttacker.z, 'AMBUSH', t, this.metrics, {
+            callerX: victim.x, callerZ: victim.z, stress: bV.mind?.stress || 0.7
+          });
         } else if (victim.hp < 64 || shieldBroken || bV.recentDamage >= 16) {
-          this.comms.emitCallout(victim.team, victim.id, seenAttacker.id, seenAttacker.x, seenAttacker.z, 'TRADE_REQUEST', t, this.metrics, {callerX: victim.x, callerZ: victim.z});
+          this.comms.emitCallout(victim.team, victim.id, seenAttacker.id, seenAttacker.x, seenAttacker.z, 'TRADE_REQUEST', t, this.metrics, {
+            callerX: victim.x, callerZ: victim.z, stress: bV.mind?.stress || 0.4
+          });
         }
       }
     }
@@ -1228,6 +1323,19 @@ export class NV2 extends NV13Pro {
   onKill(killer, victim) {
     super.onKill(killer, victim);
     const t = this.match.time;
+    const bV = this.brains.get(victim.id);
+    let victimSawKiller = false;
+    if (killer) {
+      if (bV && (bV.contacts?.get(killer.id)?.seen || (bV.targetId === killer.id && bV.seen))) {
+        victimSawKiller = true;
+      } else if (killer.alive) {
+        const vEye = eyeOf(victim), kTp = targetPoint(killer), rel = sub(kTp, vEye);
+        const dist = Math.hypot(rel[0], rel[1], rel[2]);
+        victimSawKiller = dist <= 85 &&
+          dot(forward(victim.yaw, victim.pitch), unit(rel)) > .12 &&
+          clearOpticalPath(vEye, kTp, this.match.aeroVortex);
+      }
+    }
     if (killer) {
       const stK = this.nv2Teams[killer.team];
       stK.pushToken(this.buildToken(killer.team, 4, killer, victim));
@@ -1236,8 +1344,12 @@ export class NV2 extends NV13Pro {
       if (bK) {
         bK.stepReward += 1.65;
         if (bK.mind) bK.mind.onKill(t, victim, this.metrics);
-        // Squad Cohesion bonding boost on successful Trade Swing refrag!
-        if (bK.state === 'トレード突入' && bK.mind?.onSquadBond) {
+        // NV2.5 humain Post-Kill Trade-Check Ritual: briefly verify no trade-fragger is swinging behind corpse!
+        if (bK.tom?.triggerPostKillCheck && victim) {
+          bK.tom.triggerPostKillCheck(killer, [victim.x, victim.z], t, this.metrics);
+        }
+        // Squad Cohesion bonding boost on successful Trade Swing / Sync Double-Swing refrag!
+        if ((bK.state === 'トレード突入' || bK.state === '同期ダブルスイング') && bK.mind?.onSquadBond) {
           bK.mind.onSquadBond(0.16);
         }
         // After an NV2.1 Spy assassination, slip back into shadow if injured or another enemy is nearby
@@ -1246,13 +1358,15 @@ export class NV2 extends NV13Pro {
           bK.planAt = t + 0.05;
         }
       }
-      // Team Morale Contagion & Squad Cohesion: ally kill boosts team morale & confidence!
+      // Team Morale & Emotional Contagion: ally kill boosts nearby teammates' confidence & composure!
+      const killerComp = bK?.mind?.persona?.composureRecovery || 0.85;
       for (const mate of this.match.actors) {
         if (!mate.alive || mate.human || mate.team !== killer.team || mate.id === killer.id) continue;
         const bm = this.brains.get(mate.id);
         if (bm?.mind) {
           const close = dist2(mate.x, mate.z, killer.x, killer.z) < 28;
           bm.mind.onTeamEvent('ally_kill', t, close);
+          if (bm.mind.onEmotionalContagion) bm.mind.onEmotionalContagion('ally_kill', killerComp, close);
           if (close && bm.mind.onSquadBond) bm.mind.onSquadBond(0.08);
         }
       }
@@ -1266,19 +1380,34 @@ export class NV2 extends NV13Pro {
     }
     const stV = this.nv2Teams[victim.team];
     stV.lastReward -= 1.25;
-    const bV = this.brains.get(victim.id);
     if (bV) {
       bV.stepReward -= 1.35;
-      if (bV.mind) bV.mind.onDeath(victim, killer, t);
+      if (bV.mind) {
+        const traumaPos = victimSawKiller && killer
+          ? [killer.x, killer.z]
+          : victim.hitDir
+            ? [victim.x - victim.hitDir[0] * 12, victim.z - victim.hitDir[2] * 12]
+            : null;
+        bV.mind.onDeath(victim, killer, t, traumaPos);
+      }
     }
-    // Team Morale Contagion + MAN_DOWN Trade-Swing callout for victim's surviving teammates!
+    // Team Morale + Emotional Contagion + MAN_DOWN Trade-Swing callout for victim's surviving teammates!
     for (const mate of this.match.actors) {
       if (!mate.alive || mate.human || mate.team !== victim.team || mate.id === victim.id) continue;
       const bm = this.brains.get(mate.id);
-      if (bm?.mind) bm.mind.onTeamEvent('ally_death', t, dist2(mate.x, mate.z, victim.x, victim.z) < 28);
+      if (bm?.mind) {
+        const close = dist2(mate.x, mate.z, victim.x, victim.z) < 28;
+        bm.mind.onTeamEvent('ally_death', t, close);
+        if (bm.mind.onEmotionalContagion) bm.mind.onEmotionalContagion('ally_death', 0.8, close);
+      }
     }
     if (killer && this.isTeamHumanMode(victim.team)) {
-      this.comms.emitCallout(victim.team, victim.id, killer.id, killer.x, killer.z, 'MAN_DOWN', t, this.metrics, {callerX: victim.x, callerZ: victim.z});
+      const callTargetId = victimSawKiller ? killer.id : -1;
+      const callX = victimSawKiller ? killer.x : victim.x;
+      const callZ = victimSawKiller ? killer.z : victim.z;
+      this.comms.emitCallout(victim.team, victim.id, callTargetId, callX, callZ, 'MAN_DOWN', t, this.metrics, {
+        callerX: victim.x, callerZ: victim.z, stress: 0.75
+      });
     }
 
     // Reinforce the outcome before the final match checkpoint.
@@ -1296,12 +1425,14 @@ export class NV2 extends NV13Pro {
     this.match.echoPulse.emit(this.match, {
       kind: 'reload', pos: eyeOf(actor), actor, team: actor.team, loudness: .5
     });
-    // NV 2.4 Manusia RELOAD_COVER voice callout to nearby teammates when reloading in combat!
+    // NV2.5 humain / NV 2.4 Manusia RELOAD_COVER voice callout to nearby teammates when reloading in combat!
     const b = this.brains.get(actor.id);
     if (b?.humanMode && (b.seen || t - (b.seenAt || -10) < 4.5 || t - (b.underFireAt || -10) < 2.2)) {
       const refX = b.lastPos ? b.lastPos[0] : actor.x;
       const refZ = b.lastPos ? b.lastPos[1] : actor.z;
-      this.comms.emitCallout(actor.team, actor.id, b.targetId ?? -1, refX, refZ, 'RELOAD_COVER', t, this.metrics, {callerX: actor.x, callerZ: actor.z});
+      this.comms.emitCallout(actor.team, actor.id, b.targetId ?? -1, refX, refZ, 'RELOAD_COVER', t, this.metrics, {
+        callerX: actor.x, callerZ: actor.z, stress: b.mind?.stress || 0.25
+      });
     }
   }
 
@@ -1311,7 +1442,10 @@ export class NV2 extends NV13Pro {
     st.pushToken(this.buildToken(actor.team, 6, actor, null));
     st.lastReward += 0.65;
     const b = this.brains.get(actor.id);
-    if (b) b.stepReward += 0.75;
+    if (b) {
+      b.stepReward += 0.75;
+      if (b.mind?.triggerBreathReset) b.mind.triggerBreathReset(this.match.time, this.metrics);
+    }
   }
 
   // ============================================================================
@@ -1645,7 +1779,17 @@ export class NV2 extends NV13Pro {
             b.tom.recordSelfExposed(a.x, a.z, e.id, t);
           }
           if ((e.flash || 0) > 0.008) {
-            b.tom.onObservedEnemyShot(e.id, e.gun, t);
+            b.tom.onObservedEnemyShot(e.id, e.gun, t, e.shotCount);
+          }
+          if (b.tom.observeEnemyHabit) {
+            b.tom.observeEnemyHabit(a, e, t, a.hp < 70);
+          }
+        }
+        if (b.inference) {
+          const surprise = b.inference.observeEvidence(e.x, e.z, 0.88, t);
+          const offAxis = Math.abs(angleDiff(Math.atan2(e.x - a.x, -(e.z - a.z)), a.yaw));
+          if (!hadTarget && surprise > 0.68 && offAxis > 1.15 && b.mind?.onUnexpectedShock) {
+            b.mind.onUnexpectedShock(surprise, t);
           }
         }
         if (b.mind) b.mind.observeEnemyBehavior(a, e, t);
@@ -1696,19 +1840,20 @@ export class NV2 extends NV13Pro {
       st.pushToken(this.buildToken(a.team, 0, a, b.target));
       if (b.mind) b.mind.onVisualContact(t, b.target);
       if (b.humanMode) {
-        this.comms.emitCallout(a.team, a.id, b.target.id, b.target.x, b.target.z, 'CONTACT', t, this.metrics);
+        this.comms.emitCallout(a.team, a.id, b.target.id, b.target.x, b.target.z, 'CONTACT', t, this.metrics, {stress: b.mind?.stress || 0});
       }
     } else if (!b.seen && b.humanMode && Math.abs(a.x) > 8.5 && t - (b.lastFlankClearAt || -10) > 5.2 && t - (b.seenAt || -10) > 3.2
       && (b.state === '戦術掃討' || b.state === '連携側面展開' || b.state === '視認偵察')) {
       // FLANK_CLEAR callout: lets teammates know this outer corridor is clear!
       b.lastFlankClearAt = t;
+      if (b.inference) b.inference.observeFlankClear(a.x, a.z, t);
       this.comms.emitCallout(a.team, a.id, -1, a.x, a.z, 'FLANK_CLEAR', t, this.metrics, {lane: a.x < 0 ? -1 : 1});
     }
   }
 
   /**
    * EchoPulse 1.0 physically delayed (d / 343 m/s) acoustic arrival handler for NPCs.
-   * Integrates elevated rooftop footsteps, EchoPulse canyon echo learning, fair-play mental ammo count, and NV 2.4 Manusia gaze/memory!
+   * Integrates elevated rooftop footsteps, EchoPulse canyon echo learning, fair-play mental ammo count, Active-Inference & NV2.5 humain gaze/memory!
    */
   onEchoArrival(rep) {
     if (!rep) return;
@@ -1721,12 +1866,12 @@ export class NV2 extends NV13Pro {
     if (rep.kind === 'reload') {
       const source = rep.sourceActor;
       if (!source?.alive || source.spawnId !== rep.sourceSpawnId || rep.reloadUntil <= t) return;
+      b?.tom?.onObservedEnemyReload(source.id, t);
       const {pr} = cog.ensureEnemy(source.id);
       if (pr.lastReloadCue === rep.emittedAt) return;
       pr.lastReloadCue = rep.emittedAt;
       pr.reloadUntil = Math.max(pr.reloadUntil, rep.reloadUntil);
       pr.shotsSinceReload = 0;
-      b?.tom?.onObservedEnemyReload(source.id, t);
       const team = this.nv2Teams[listener.team];
       team.pushToken(this.buildToken(listener.team, 5, null, {x: px, z: pz}));
       if (cog.beliefs.get(source.id)?.conf > .34) {
@@ -1737,10 +1882,22 @@ export class NV2 extends NV13Pro {
       return;
     }
 
+    if (rep.sourceActor && (!rep.sourceActor.alive || (rep.sourceSpawnId !== undefined && rep.sourceActor.spawnId !== rep.sourceSpawnId))) {
+      return;
+    }
+
     if (b) {
       const cue = b.vision ? b.vision.onEchoArrival(listener, rep, t, b.mind, this.metrics) : null;
+      if (b.inference && !cue?.discountedEcho) {
+        const w = rep.kind === 'fire' ? 0.56 : 0.38;
+        const surprise = b.inference.observeEvidence(px, pz, w, t);
+        const offAxis = Math.abs(angleDiff(Math.atan2(px - listener.x, -(pz - listener.z)), listener.yaw));
+        if (!b.seen && rep.kind === 'fire' && dist2(listener.x, listener.z, px, pz) < 13 && surprise > 0.68 && offAxis > 1.25 && b.mind?.onUnexpectedShock) {
+          b.mind.onUnexpectedShock(surprise, t);
+        }
+      }
       if (b.tom && rep.kind === 'fire' && rep.sourceActor && rep.sourceActor.team !== listener.team && rep.sourceActor.spawnId === rep.sourceSpawnId) {
-        b.tom.onObservedEnemyShot(rep.sourceActor.id, rep.gun || rep.sourceActor.gun, t);
+        b.tom.onObservedEnemyShot(rep.sourceActor.id, rep.gun || rep.sourceActor.gun, t, rep.shotSeq ?? null);
       }
       if (!b.seen) {
         if (!cue?.discountedEcho) {
@@ -1798,11 +1955,55 @@ export class NV2 extends NV13Pro {
       }
     }
 
-    // 0b. NV2.1 Spy Engine (now fused with NV2.3 HUMAN psyche, OFC aim, gaze & silent walk!)
+    // 0b. NV2.1 Spy Engine (now fused with NV2.5 humain psyche, OFC aim, gaze & silent walk!)
     if (b.spy) {
       this.astarUsedThisTick = -8;
       const urgentTanker = a.stock < 24 && (this.match.tankers || []).some(tk => tk.cooldown <= 0 && dist2(a.x, a.z, tk.x, tk.z) < 16);
       if (!urgentTanker && planSpyTactics(this, a, b, b.spy)) {
+        b.prevState = b.state;
+        return;
+      }
+    }
+
+    // 0b2. NV2.5 humain Cover-Anchored Synchronized Squad Double-Swing (from SHIELD_BREAK / BAIT_READY / Player push!)
+    const isLongSniper = a.gun === 'MS10' || a.gun === 'SW T';
+    if (b.humainMode && b.syncSwingPos && !b.seen && !isLongSniper && t >= b.syncSwingAt && t < b.syncSwingUntil
+      && a.hp >= 68 && a.mag >= 6 && a.reload <= 0 && !b.mind?.isSuppressed()) {
+      const dSync = dist2(a.x, a.z, b.syncSwingPos[0], b.syncSwingPos[1]);
+      if (dSync > 5.0 && dSync < 30) {
+        const cov = this.findProCover(a, b, [{x: b.syncSwingPos[0], z: b.syncSwingPos[1], gun: 'SRA'}], 'skirmish');
+        if (cov) {
+          b.cover = {x: cov.x, z: cov.z, peek: cov.peek};
+          b.coverNodeId = cov.nodeId;
+          this.astarUsedThisTick = -8;
+          b.path = this.nav.route([a.x, a.z], cov.peek, this.tacticalWeights(a, b));
+          b.state = '同期ダブルスイング';
+          b.peekPhase = 'peek';
+          b.htnTask = 'SYNC_SWING';
+          b.htnUntil = t + 0.65;
+          b.planAt = t + 0.30;
+          if (b.prevState !== '同期ダブルスイング') this.metrics.humainSyncSwings++;
+          b.prevState = b.state;
+          return;
+        }
+      }
+    }
+
+    // 0b3. NV2.5 humain Wounded Bait Trap (punish greedy pursuers from cover instead of blind panic run!)
+    if (b.humainMode && b.tom?.tryStartWoundedBaitTrap) {
+      const trap = b.tom.tryStartWoundedBaitTrap(a, b, t, this.metrics);
+      if (trap && b.cover) {
+        b.path = dist2(a.x, a.z, b.cover.x, b.cover.z) > 1.2
+          ? this.nav.route([a.x, a.z], [b.cover.x, b.cover.z], this.tacticalWeights(a, b))
+          : [];
+        b.state = '負傷ベイトトラップ';
+        b.peekPhase = 'hide';
+        b.planAt = t + 0.35;
+        if (trap.justStarted && b.lastPos) {
+          this.comms.emitCallout(a.team, a.id, b.targetId ?? -1, b.lastPos[0], b.lastPos[1], 'BAIT_READY', t, this.metrics, {
+            callerX: a.x, callerZ: a.z, stress: b.mind?.stress || 0.4
+          });
+        }
         b.prevState = b.state;
         return;
       }
@@ -1879,6 +2080,14 @@ export class NV2 extends NV13Pro {
     this.astarUsedThisTick = -8;
     super.pickGoal(a, b);
 
+    // 2a. NV2.5 humain Ratcliff DDM Mid-Motion Change-of-Mind Abort (Resulaj et al. 2009)!
+    if (b.ddm && t < b.ddm.comAbortUntil && b.cover) {
+      b.peekPhase = 'hide';
+      b.path = this.nav.route([a.x, a.z], [b.cover.x, b.cover.z], this.tacticalWeights(a, b));
+      b.state = '判断変更退避';
+      b.planAt = t + 0.32;
+    }
+
     // 2b. NV2.3 HUMAN Re-Peek Hesitation / Abort (FIXED: no longer swallowed by nv13pro.onHit!)
     if (b.mind && b.cover && a.hp < 90 && t >= (b.lastRepeekAbortAt || -10) + 0.65
       && (b.repeekAbortPending || (b.mind.shouldHesitateRepeek(t) && b.peekPhase === 'peek'))) {
@@ -1927,7 +2136,7 @@ export class NV2 extends NV13Pro {
 
   // ============================================================================
   // 360Hz Main Tick Loop (Time-Normalized Fields, 4Hz Strategy Lookahead,
-  // 7-Channel Delayed Squad Comms, NV2.3 HUMAN 6-Core Loop & Spy Integration)
+  // 10-Channel Delayed Squad Comms, NV2.5 humain 8-Core Loop & Spy Integration)
   // ============================================================================
   tick(dt) {
     const t = this.match.time;
@@ -1950,8 +2159,8 @@ export class NV2 extends NV13Pro {
       if (act.alive) teamAllies[act.team].push(act);
     }
 
-    // 1. Time-Normalized Influence Map & Bayesian Belief Diffusion + 8-Channel Delayed Squad Comms + Player Synergy
-    if (t >= this.playerObsAt && this.teamAiTier[0] === 'manusia' && this.match.player?.human) {
+    // 1. Time-Normalized Influence Map & Bayesian Belief Diffusion + 10-Channel Delayed Squad Comms + Player Synergy
+    if (t >= this.playerObsAt && (this.teamAiTier[0] === 'humain' || this.teamAiTier[0] === 'manusia') && this.match.player?.human) {
       this.playerObsAt = t + 0.25;
       this.comms.observeHumanPlayer(this.match.player, teamAllies[0], t, this.metrics);
     }
@@ -1968,13 +2177,15 @@ export class NV2 extends NV13Pro {
           const c = calls[ci];
           let tradeAssigned = false;
           let coverAssigned = false;
+          let syncAssigned = false;
           for (const mate of teamAllies[ti]) {
             if (mate.human || mate.id === c.callerId) continue;
             const bm = this.brains.get(mate.id);
             if (!bm) continue;
 
             if (c.kind === 'FLANK_CLEAR') {
-              // Collapse stale Cowan memory entries in the cleared lane
+              // Collapse stale Cowan memory entries & Active-Inference threat prior in the cleared lane
+              if (bm.inference) bm.inference.observeFlankClear(c.x, c.z, t);
               if (bm.vision) {
                 for (const [eid, slot] of bm.vision.workingMemory) {
                   if (Math.abs(slot.x - c.x) < 10 && t - slot.updatedAt > 2.2) {
@@ -1995,9 +2206,12 @@ export class NV2 extends NV13Pro {
               continue;
             }
 
-            // Prime visual attention (+38% recognition!) & update Cowan working memory
+            // Prime visual attention (+38% recognition!), Active-Inference belief & Cowan working memory
             const dxC = c.x - mate.x, dzC = c.z - mate.z;
             const dCall = Math.hypot(dxC, dzC);
+            if (bm.inference && dCall > 1.5) {
+              bm.inference.observeEvidence(c.x, c.z, c.kind === 'SHIELD_BREAK' ? 0.65 : 0.45, t);
+            }
             if (bm.vision && dCall > 1.5) {
               bm.vision.primeAttention(Math.atan2(dxC, -dzC), 0, c.x, c.z, 2.4, 'callout', t);
               if (c.enemyId >= 0) {
@@ -2012,13 +2226,27 @@ export class NV2 extends NV13Pro {
               if (bm.mind) bm.mind.onTeamEvent('shield_break_callout', t, dCall < 28);
               if (bm.tom && c.enemyId >= 0) bm.tom.onEnemyShieldBroken(c.enemyId, t);
             }
+            if (c.kind === 'AMBUSH' && bm.mind?.onEmotionalContagion) {
+              bm.mind.onEmotionalContagion('ambush_cry', 0.8, dCall < 24);
+            }
 
             if (!bm.seen) {
               bm.lastPos = [c.x, c.z];
               bm.seenAt = Math.max(bm.seenAt || 0, t - 0.35);
               if (bm.gaze) {
-                bm.gaze.onAcousticCue(mate, [c.x, 1.5, c.z], t, c.kind === 'AMBUSH' || c.kind === 'MAN_DOWN' || c.kind === 'TRADE_REQUEST', this.metrics);
+                bm.gaze.onAcousticCue(mate, [c.x, 1.5, c.z], t, c.kind === 'AMBUSH' || c.kind === 'MAN_DOWN' || c.kind === 'TRADE_REQUEST' || c.kind === 'SWING_NOW', this.metrics);
               }
+            }
+
+            // NV2.5 humain SWING_NOW / BAIT_READY behavioral coupling: Synchronized Squad Double-Swing!
+            if ((c.kind === 'SWING_NOW' || c.kind === 'BAIT_READY') && !syncAssigned && bm.humainMode
+              && dCall < 32 && mate.hp >= 56 && mate.mag >= 4 && mate.reload <= 0 && t > (bm.syncSwingUntil || -10)) {
+              const delay = c.kind === 'SWING_NOW' ? (0.14 + bm.rng() * 0.16) : (0.28 + bm.rng() * 0.24);
+              bm.syncSwingAt = t + delay;
+              bm.syncSwingUntil = t + delay + 1.30;
+              bm.syncSwingPos = [c.x, c.z];
+              bm.planAt = Math.min(bm.planAt, t + delay + 0.04);
+              syncAssigned = true;
             }
 
             // RELOAD_COVER behavioral coupling: nearest healthy teammate holds angle for reloading ally (including human player!)
@@ -2092,7 +2320,10 @@ export class NV2 extends NV13Pro {
       const enemyCount = teamAllies[1 - a.team].length;
 
       if (t - b.damageClock > 1.45) b.recentDamage = Math.max(0, b.recentDamage - dt * 20);
-      if (b.mind) b.mind.step(a, dt, t, b.seen, {aliveAllies: allies.length, aliveEnemies: enemyCount, killsToWin});
+      if (b.mind) b.mind.step(a, dt, t, b.seen, {aliveAllies: allies.length, aliveEnemies: enemyCount, killsToWin, metrics: this.metrics});
+      if (b.inference) b.inference.step(a, dt, t, b.seen);
+      const ddmOut = b.ddm ? b.ddm.step(a, b, dt, t, b.mind, b.tom, this.metrics) : null;
+      if (ddmOut?.changeOfMindAbort && b.cover) b.planAt = Math.min(b.planAt, t + 0.04);
       if (b.vision) b.vision.decayUnseen(dt, t, a);
 
       // Active 360Hz 3D incoming-projectile trajectory dodge (walkable 6-dir + cover priority!)
@@ -2104,7 +2335,7 @@ export class NV2 extends NV13Pro {
         this.perceive(a, b);
         b.sightAt = t + (isSpy ? (b.seen ? 0.028 : 0.062) : (b.seen ? 0.060 : 0.125));
       }
-      // NV 2.4 Manusia Active Tactical Smoke Deployment (escape / player-save / tanker screen!)
+      // NV2.5 humain / NV 2.4 Manusia Active Tactical Smoke Deployment (escape / player-save / tanker screen!)
       if (b.tactics?.evaluateSmokeDeploy) {
         const smokeReason = b.tactics.evaluateSmokeDeploy(a, b, this.match, t, b.mind, allies, this.metrics);
         if (smokeReason) {
@@ -2134,7 +2365,7 @@ export class NV2 extends NV13Pro {
       }
       postureStep(a, dt, wantCrouch, p.lean, p.ads);
 
-      // NV2.3 HUMAN Tactical Silent Walk (sprintAmt <= 0.30 -> zero EchoPulse footsteps!) vs Adrenaline Sprint!
+      // NV2.3+ Tactical Silent Walk (sprintAmt <= 0.30 -> zero EchoPulse footsteps!) vs Adrenaline Sprint!
       let silentWalk = false;
       if (b.tactics) {
         const pace = b.tactics.computeMovementPace(a, b, t, b.mind, isSpy);
@@ -2159,7 +2390,7 @@ export class NV2 extends NV13Pro {
       let targetX = pt ? pt[0] : a.x, targetZ = pt ? pt[1] : a.z;
       let dx = pt ? targetX - a.x : 0, dz = pt ? targetZ - a.z : 0, L = Math.hypot(dx, dz);
 
-      // NV 2.4 Manusia Curved Corner-Rounding: smoothly arc toward upcoming waypoint instead of sharp 90-deg bot snaps!
+      // NV 2.4+ Curved Corner-Rounding: smoothly arc toward upcoming waypoint instead of sharp 90-deg bot snaps!
       if (b.manusiaMode && pt && b.path.length >= 2 && L < 2.2 && L > 0.35) {
         const pt1 = b.path[1];
         const blend = clamp((2.2 - L) / 1.85, 0, 1) * 0.48;
@@ -2174,7 +2405,7 @@ export class NV2 extends NV13Pro {
       }
       if (L) { dx /= L; dz /= L; }
 
-      // Active 3D Projectile Dodge Override + Acoustic Footstep Feint + Asymmetric Human A-D-A-D Strafe Cadence!
+      // Active 3D Projectile Dodge Override + Acoustic Footstep Feint + Non-Periodic Asymmetric Strafe Choreography!
       const dodgingShot = t < b.dodgeUntil;
       const spyInfiltrating = isSpy && (b.spy.mode === 'SPY_INFILTRATE' || b.spy.mode === 'SPY_VANISH');
       const acousticFeint = b.tom ? b.tom.evaluateAcousticFeint(a, b, t, this.metrics) : null;
@@ -2195,9 +2426,13 @@ export class NV2 extends NV13Pro {
           dx = dx * 0.25 + fx * 0.75;
           dz = dz * 0.25 + fz * 0.75;
         }
-      } else if (b.seen && b.target && !spyInfiltrating && b.state !== '戦術退避' && b.state !== '態勢立て直し' && b.state !== '予測待ち伏せ') {
+      } else if (b.seen && b.target && !spyInfiltrating && b.state !== '戦術退避' && b.state !== '態勢立て直し' && b.state !== '予測待ち伏せ' && b.state !== '負傷ベイトトラップ') {
         if (t >= b.strafeAt) {
-          if (b.mind) {
+          if (b.tactics?.nextAsymmetricStrafe) {
+            const stf = b.tactics.nextAsymmetricStrafe(b.strafe || 1, b.mind, isSpy, this.metrics);
+            b.strafe = stf.sign;
+            b.strafeAt = t + stf.dur;
+          } else if (b.mind) {
             b.strafe = b.mind.nextStrafeSign(b.strafe || 1);
             b.strafeAt = t + b.mind.nextStrafeInterval(isSpy, b.target.id);
           } else {
@@ -2221,6 +2456,7 @@ export class NV2 extends NV13Pro {
         const sx = a.x - mate.x, sz = a.z - mate.z, d = Math.hypot(sx, sz);
         const minSep = mate.team === a.team ? 2.4 : 1.4;
         if (d > 0.005 && d < minSep) {
+          if (mate.team !== a.team && obstruction(eyeOf(a), eyeOf(mate)) <= 1) continue;
           const v = (minSep - d) * 1.45;
           dx += sx / d * v;
           dz += sz / d * v;
@@ -2231,9 +2467,13 @@ export class NV2 extends NV13Pro {
       if (norm > 0.01) { dx /= norm; dz /= norm; }
 
       const counterStrafing = t < b.counterStrafeUntil && !dodgingShot;
-      let speed = (b.state === '態勢立て直し' || b.state === '予測待ち伏せ' ? (L > 0.5 ? 2.6 : 0) : 4.64) * a.paceFactor;
+      const startleFreeze = !!b.mind?.isStartleFrozen?.(t) && !b.seen;
+      const hesitating = !!ddmOut?.hesitating && !dodgingShot && !b.seen;
+      let speed = (b.state === '態勢立て直し' || b.state === '予測待ち伏せ' || b.state === '負傷ベイトトラップ' ? (L > 0.5 ? 2.6 : 0) : 4.64) * a.paceFactor;
       if (dodgingShot) speed *= isSpy ? 1.28 : 1.18;
       if (counterStrafing) speed *= 0.22;
+      else if (startleFreeze) speed *= 0.35;
+      else if (hesitating) speed *= 0.52;
 
       const e = 1 - Math.exp(-(counterStrafing ? 26 : dodgingShot ? (isSpy ? 24 : 19) : (isSpy ? 14.8 : 12.8)) * dt);
       a.vx += (dx * speed - a.vx) * e;
@@ -2273,7 +2513,7 @@ export class NV2 extends NV13Pro {
       let physicsAction = null;
 
       if (!(b.seen && b.target)) {
-        // NV 2.4 Manusia 4-Way Harbor Physics Mastery + Fair-Play Anticipatory Corner Pre-Fire!
+        // NV2.5 humain / NV 2.4 Manusia 4-Way Harbor Physics Mastery + Fair-Play Anticipatory Corner Pre-Fire!
         if (b.tactics) {
           physicsAction = b.tactics.evaluatePhysicsTactics(a, b, this.match, t, b.mind, this.metrics);
           if (!physicsAction && b.tactics.evaluateCornerPreFire) {
@@ -2319,6 +2559,16 @@ export class NV2 extends NV13Pro {
 
       const backstabBonus = !!(isSpy && b.seen && b.target
         && rearAdvantage(a.x, a.z, b.target.x, b.target.z, b.target.yaw) > 0.25);
+      const urgentRearWhip = !!(
+        t - (b.underFireAt || -10) < 0.85
+        || t - (b.vision?.lastWhizAt || -10) < 0.65
+        || b.mind?.isStartled?.(t)
+      );
+      const holdingTrapAngle = !!(
+        b.state === '負傷ベイトトラップ'
+        || b.state === '予測待ち伏せ'
+        || (b.tom && t < (b.tom.postKillCheckUntil || -10))
+      );
 
       const aimRes = b.humanAim.step(a, dt, t, {
         seenTarget: (b.seen && b.target) ? b.target : null,
@@ -2331,7 +2581,9 @@ export class NV2 extends NV13Pro {
         backstabBonus,
         primed: !!b.lastPrimed,
         mind: b.mind,
-        metrics: this.metrics
+        metrics: this.metrics,
+        urgentRearWhip,
+        holdingTrapAngle
       });
       b.lastYawRate = aimRes.yawRate ?? Math.abs(b.humanAim.velYaw || 0);
       b.lastQuietEyeShot = !!aimRes.quietEyeShot;

@@ -167,6 +167,7 @@ export class SpectraField {
       if (clearDist < 2.2) continue;
 
       const steps = Math.min(12, Math.floor(clearDist / 3.2));
+      const elevated = eye[1] > 2.0;
       for (let s = 1; s <= steps; s++) {
         const d = (s / steps) * clearDist;
         const wx = eye[0] + sx * d;
@@ -176,6 +177,8 @@ export class SpectraField {
         const [ix, iz] = worldToSpecCell(wx, wz);
         const idx = iz * this.w + ix;
         if (!this.passable[idx]) continue;
+        // Elevated rooftop observers must actually have line-of-sight down to ground level (not shoot over containers)
+        if (elevated && obstruction(eye, [wx, 1.15, wz]) <= 1) continue;
         // Softly collapse cleared cell while leaving tiny floor for sudden re-entry
         const prev = f[idx];
         if (prev > 1e-5) {

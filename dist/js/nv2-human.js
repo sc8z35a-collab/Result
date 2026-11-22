@@ -35,3 +35,18 @@ export {
   ManusiaTacticsV24,
   ManusiaSocialSquadV24
 } from './nv24-manusia.js';
+
+export {
+  NV25_HUMAIN_VERSION,
+  CALLSIGN_PROFILES_V25,
+  COMMS_CHANNELS_V25,
+  HumainActiveInferenceV25,
+  HumainDecisionDDM_V25,
+  HumainAffectivePsycheV25,
+  HumainMetaMindV25,
+  HumainMultisensoryV25,
+  HumainSensorimotorV25,
+  HumainFixationGazeV25,
+  HumainEmbodiedTacticsV25,
+  HumainSocialMindV25
+} from './nv25-humain.js';
