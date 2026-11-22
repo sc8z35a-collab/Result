@@ -171,6 +171,17 @@ export function updateRD(match, a, dt) {
   d.d01Pulse = Math.max(0, d.d01Pulse - dt * 2.1);
   d.firePulse = Math.max(0, d.firePulse - dt * 7.5);
 
+  if (a.human && match.autoAim === false) {
+    if (d.focusId >= 0 || d.locked || d.d01Active) clearLock(d, t);
+    const kPose = 1 - Math.exp(-13 * dt);
+    const kGimbal = 1 - Math.exp(-16 * dt);
+    d.lockBlend += (0 - d.lockBlend) * kPose;
+    d.d01Blend += (0 - d.d01Blend) * kPose;
+    d.trackYaw += (0 - d.trackYaw) * kGimbal;
+    d.trackPitch += (0 - d.trackPitch) * kGimbal;
+    return;
+  }
+
   // 1. Validate & maintain active target across the weapon's lock hold cone (plus D01 SENSOR on RD40)
   if (d.focusId >= 0) {
     const cur = match.actors[d.focusId];
@@ -300,7 +311,7 @@ export function bulletGuidanceRD(match, a, barrelSide = 0) {
   const spec = RD_SPECS[d?.gun || a.gun] || RD_SPECS[RD];
   const microFan = barrelSide * (a.gun === RD ? 0.0022 : 0.0042);
   const e = d && d.focusId >= 0 ? match.actors[d.focusId] : null;
-  if (!d || !d.locked || !e?.alive || e.team === a.team || e.spawnId !== d.focusSpawnId) {
+  if ((a.human && match.autoAim === false) || !d || !d.locked || !e?.alive || e.team === a.team || e.spawnId !== d.focusSpawnId) {
     return {
       dir: forward(a.yaw + microFan, clamp(a.pitch, -1.31, 1.31)),
       guided: false,
