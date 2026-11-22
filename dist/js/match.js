@@ -352,7 +352,7 @@ export class Match {
     this.thermoFlux.depositHeat(sx, sz, 0.45, 2);
     if (a.human) this.smokeCooldown = 10.0;
     else a.smokeCooldown = 14.0;
-    this.echoPulse.emit(this, {kind: 'tanker', pos: [sx, 1.2, sz], actor: a, team: a.team, loudness: 0.72});
+    this.echoPulse.emit(this, {kind: 'smoke', pos: [sx, 1.2, sz], actor: a, team: a.team, loudness: 0.72});
     this.event('smoke', {actor: a, point: [sx, 1.0, sz]});
     return true;
   }
@@ -382,7 +382,7 @@ export class Match {
       this.resonance.exciteBlast([v.x, v.y + 1.0, v.z], 0.78);
     }
     this.nv.learn(v, false);
-    this.nv.onHit?.(v, owner, dir, power);
+    this.nv.onHit?.(v, owner, dir, power, shieldBreak);
     this.event('hit', {victim: v, actor: owner, shield: absorbed > 0, shieldBreak, kill, damage: power, dir, ricochet: !!meta?.ricochet, wallbang: !!meta?.wallbang});
     if (!kill)return {shield: absorbed > 0, shieldBreak, kill: false};
     this.aeroVortex.injectBurst(v.x, v.z, {smoke: 1.35, heat: 0.92, force: 4.8, radius: 3});
@@ -393,6 +393,30 @@ export class Match {
     v.reload = 0;
     v.burstLeft = 0;
     v.queue.length = 0;
+    if (v.df) {
+      v.df.ads = false;
+      v.df.locked = false;
+      v.df.focus = 0;
+      v.df.focusId = -1;
+      v.df.boost = false;
+    }
+    if (v.rd) {
+      v.rd.locked = false;
+      v.rd.d01Active = false;
+      v.rd.occluded = false;
+      v.rd.focus = 0;
+      v.rd.focusId = -1;
+      v.rd.d01Timer = 0;
+    }
+    if (v.df40) {
+      v.df40.aa14Active = false;
+      v.df40.locked = false;
+      v.df40.d01Active = false;
+      v.df40.occluded = false;
+      v.df40.focus = 0;
+      v.df40.focusId = -1;
+      v.df40.d01Timer = 0;
+    }
     v.deaths++;
     owner.kills++;
     if (owner.human) owner.earned += 10;
@@ -583,7 +607,7 @@ export class Match {
     const {ball, normal, mat} = pass;
     s.materialPass = null;
     this.techStats.penetrations++;
-    this.chronoTrace.recordPenetration(s, ball.entryPos, ball.exitPos, normal, ball.thickness, mat, pass.time, time);
+    this.chronoTrace.recordPenetration(s, ball.entryPos, ball.exitPos, normal, ball.thickness, mat, pass.time, time, ball.exitNormal);
     s.old = [...ball.entryPos];
     s.p = ball.exitPos;
     s.dir = ball.dir;
@@ -858,7 +882,9 @@ export class Match {
     for (const rep of arrivedEchoes) {
       this.nv.onEchoArrival?.(rep);
       const listener = this.actors[rep.listenerId];
-      if (listener?.alive) {
+      const src = rep.sourceActor;
+      const staleSource = src && (!src.alive || (rep.sourceSpawnId !== undefined && src.spawnId !== rep.sourceSpawnId));
+      if (listener?.alive && !staleSource) {
         this.spectraField.observe(listener.team, rep.perceivedPos[0], rep.perceivedPos[2], {
           sigma: rep.occluded ? 7.2 : 4.5,
           weight: rep.isDecoy ? 0.35 : 0.62
@@ -870,10 +896,11 @@ export class Match {
       for (const w of this.echoPulse.playerWaves) {
         if (!w.specFed && this.player.alive && w.team !== this.player.team && this.time >= w.arriveAt) {
           w.specFed = true;
-          this.spectraField.observe(0, w.pos[0], w.pos[2], {sigma: w.occluded ? 7.2 : 4.6, weight: 0.58});
-          if (w.actorId >= 0) {
-            const srcActor = this.actors[w.actorId];
-            if (srcActor?.alive && srcActor.team === 1 && srcActor.spawnId === w.actorSpawnId) {
+          const srcActor = w.actorId >= 0 ? this.actors[w.actorId] : null;
+          const staleSrc = w.actorId >= 0 && (!srcActor?.alive || srcActor.spawnId !== w.actorSpawnId);
+          if (!staleSrc) {
+            this.spectraField.observe(0, w.pos[0], w.pos[2], {sigma: w.occluded ? 7.2 : 4.6, weight: 0.58});
+            if (srcActor && srcActor.team === 1 && w.kind !== 'smoke') {
               this.fermat.recordIntel(0, srcActor, this.time, 'echo', [w.pos[0], Math.max(1.15, w.pos[1]), w.pos[2]]);
             }
           }

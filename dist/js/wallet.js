@@ -100,7 +100,10 @@ export class PilotWallet {
     try {
       for (let i = 0; i < localStorage.length; i++) {
         const key = localStorage.key(i);
-        if (key?.startsWith(this.awardPrefix)) receipts.add(key.slice(this.awardPrefix.length));
+        if (key?.startsWith(this.awardPrefix)) {
+          const receipt = key.slice(this.awardPrefix.length);
+          if (validReceipt(receipt)) receipts.add(receipt);
+        }
       }
       unlocked = localStorage.getItem(this.unlockKey) === '1';
     } catch {}
@@ -159,11 +162,33 @@ export class PilotWallet {
     } catch {}
   }
 
+  async ensureConnected() {
+    if (this.db) return true;
+    this.reconnect ??= this.connect().catch(() => {
+      this.db?.close();
+      this.db = null;
+    }).finally(() => { this.reconnect = null; });
+    await this.reconnect;
+    return !!this.db;
+  }
+
   async read() {
+    if (!this.db && this._booted) {
+      await this.ensureConnected();
+    }
+    this._booted = true;
     if (this.db) {
-      await this.importBackup();
-      this.state = await this.transaction('readonly', () => {});
-      this.rememberConfirmed();
+      try {
+        await this.importBackup();
+        this.state = await this.transaction('readonly', () => {});
+        this.rememberConfirmed();
+      } catch (error) {
+        if (error?.name === 'InvalidStateError') {
+          this.db?.close();
+          this.db = null;
+        }
+        this.state = this.backupAccount(this.readBackup());
+      }
     } else {
       this.state = this.backupAccount(this.readBackup());
     }
@@ -250,13 +275,7 @@ export class PilotWallet {
     if (receipt !== null && !validReceipt(receipt)) throw new TypeError('Invalid award receipt');
     await this.ready;
     // Reopen after an IndexedDB version change or a temporary open failure.
-    if (!this.db) {
-      this.reconnect ??= this.connect().catch(() => {
-        this.db?.close();
-        this.db = null;
-      }).finally(() => { this.reconnect = null; });
-      await this.reconnect;
-    }
+    await this.ensureConnected();
     let changed;
     if (this.db) {
       try {
@@ -264,10 +283,24 @@ export class PilotWallet {
         changed = await this.commit(receipt);
         this.rememberConfirmed(receipt);
       } catch (error) {
-        // Each award is additive and reconciled by receipt. Purchases must
-        // wait for the IndexedDB transaction if the active database fails.
-        if (receipt === null) throw error;
-        changed = await this.withBackupLock(() => this.changeBackup(receipt));
+        if (error?.name === 'InvalidStateError') {
+          this.db?.close();
+          this.db = null;
+          if (receipt === null && await this.ensureConnected()) {
+            await this.importBackup();
+            changed = await this.commit(receipt);
+            this.rememberConfirmed(receipt);
+          } else if (receipt === null) {
+            throw error;
+          } else {
+            changed = await this.withBackupLock(() => this.changeBackup(receipt));
+          }
+        } else {
+          // Each award is additive and reconciled by receipt. Purchases must
+          // wait for the IndexedDB transaction if the active database fails.
+          if (receipt === null) throw error;
+          changed = await this.withBackupLock(() => this.changeBackup(receipt));
+        }
       }
     } else {
       changed = await this.withBackupLock(() => this.changeBackup(receipt));

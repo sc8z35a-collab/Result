@@ -390,7 +390,10 @@ export class FermatCore {
       }
       // 2. RD40 D01 SENSOR / DF40 II ARV1.3 active behind-wall lock (fair-play weapon feature)
       const pl = match.player;
-      if (pl?.alive && ((pl.rd?.d01Active && pl.rd.focusId === e.id) || (pl.df40?.d01Active && pl.df40.focusId === e.id))) {
+      if (pl?.alive && (
+        (pl.rd?.d01Active && pl.rd.focusId === e.id && pl.rd.focusSpawnId === e.spawnId) ||
+        (pl.df40?.d01Active && pl.df40.focusId === e.id && pl.df40.focusSpawnId === e.spawnId)
+      )) {
         this.recordIntel(0, e, t, 'd01', tp);
         continue;
       }

@@ -933,13 +933,13 @@ export function computeSpyDodge(nv, a, b, spyState) {
 
   // Test 6 candidate escape directions with walkable wall-clearance & multi-bullet clearance scoring!
   const baseAng = Math.atan2(refX, refZ);
-  let bestVx = refX, bestVz = refZ, bestScore = -Infinity;
+  let bestVx = refX, bestVz = refZ, bestScore = -Infinity, found = false;
 
   for (let k = 0; k < DODGE_ANGLES.length; k++) {
     const ang = baseAng + DODGE_ANGLES[k];
     const vx = Math.sin(ang), vz = Math.cos(ang);
-    const clear1 = walkable(ax + vx * 0.72, az + vz * 0.72);
-    const clear2 = walkable(ax + vx * 1.38, az + vz * 1.38);
+    const clear1 = walkable(ax + vx * 0.72, az + vz * 0.72, .41, a.y);
+    const clear2 = walkable(ax + vx * 1.38, az + vz * 1.38, .41, a.y);
     if (!clear1) continue;
 
     // Evaluate future body position ~0.18s into evade burst (1.15m lateral displacement)
@@ -980,8 +980,11 @@ export function computeSpyDodge(nv, a, b, spyState) {
       bestScore = sc;
       bestVx = vx;
       bestVz = vz;
+      found = true;
     }
   }
+
+  if (!found) return;
 
   b.dodgeVec[0] = bestVx;
   b.dodgeVec[1] = bestVz;

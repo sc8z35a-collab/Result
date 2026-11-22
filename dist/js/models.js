@@ -478,11 +478,15 @@ export function character(team, gun, variant = 'standard', detail = 'high') {
     }
     // Simplified Weapon Silhouette (Bone 15)
     m.boneOffset = 150;
-    const wLen = gun === 'MS10' ? .82 : gun === 'D1' ? .64 : gun === 'SRA' ? .68 : gun === 'RD30' ? .62 : gun === 'RD20' ? .52 : .58;
-    const wCol = gun === 'MS10' ? '#465861' : gun === 'DF1 OUT' ? '#3d5452' : gun === 'RD30' ? '#4b4846' : gun === 'RD20' ? '#384e54' : '#404a4d';
-    const wGlow = gun === 'MS10' ? '#58e8ff' : gun === 'DF1 OUT' ? '#5ae8d0' : gun === 'RD30' ? '#ffbe62' : gun === 'RD20' ? '#64f0ff' : accent;
-    m.box(.072, 1.270, -.360, gun === 'RD30' ? .086 : .068, .110, wLen * .62, 'blackMetal', wCol, 0, 1);
-    if (gun === 'RD30') {
+    const wLen = gun === 'MS10' ? .82 : gun === 'DF40 II' ? .76 : gun === 'RD40' ? .74 : gun === 'D1' ? .64 : gun === 'SRA' ? .68 : gun === 'RD30' ? .62 : gun === 'RD20' ? .52 : .58;
+    const wCol = gun === 'MS10' ? '#465861' : gun === 'DF40 II' ? '#2c3644' : gun === 'RD40' ? '#523c42' : gun === 'DF1 OUT' ? '#3d5452' : gun === 'RD30' ? '#4b4846' : gun === 'RD20' ? '#384e54' : '#404a4d';
+    const wGlow = gun === 'MS10' ? '#58e8ff' : gun === 'DF40 II' ? '#7c82ff' : gun === 'RD40' ? '#ff6478' : gun === 'DF1 OUT' ? '#5ae8d0' : gun === 'RD30' ? '#ffbe62' : gun === 'RD20' ? '#64f0ff' : accent;
+    m.box(.072, 1.270, -.360, gun === 'DF40 II' ? .096 : (gun === 'RD30' || gun === 'RD40') ? .086 : .068, .110, wLen * .62, 'blackMetal', wCol, 0, 1);
+    if (gun === 'DF40 II') {
+      m.box(.040, 1.280, -.360 - wLen * .44, .024, .026, wLen * .48, 'steel', '#2c3437', 0, 1);
+      m.box(.072, 1.312, -.360 - wLen * .46, .026, .026, wLen * .50, 'steel', '#2c3437', 0, 1);
+      m.box(.104, 1.280, -.360 - wLen * .44, .024, .026, wLen * .48, 'steel', '#2c3437', 0, 1);
+    } else if (gun === 'RD30' || gun === 'RD40') {
       m.box(.044, 1.292, -.360 - wLen * .44, .026, .030, wLen * .48, 'steel', '#2c3437', 0, 1);
       m.box(.100, 1.292, -.360 - wLen * .44, .026, .030, wLen * .48, 'steel', '#2c3437', 0, 1);
     } else {

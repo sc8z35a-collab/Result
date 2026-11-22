@@ -79,8 +79,8 @@ void main(){
       float tip=(1.-smoothstep(-.80,-.35,p.z));
       p.x+=uRecoil.y*uRecoil.x*.003*tip;
       p.y+=uRecoil.x*.004*tip;
-      // Alternating twin-barrel hydraulic servo recoil for twin-linked RD40/RD30
-      float barrelZone=(1.-smoothstep(-.36,-.26,p.z))*step(abs(p.x),.065)*step(.012,abs(p.x));
+      // Alternating hydraulic servo recoil restricted cleanly to multi-barrel weapons (RD30/RD40/DF40 II)
+      float barrelZone=uAnim2.x*(1.-smoothstep(-.36,-.26,p.z))*(1.-smoothstep(.058,.068,abs(p.x)))*smoothstep(.016,.026,abs(p.x));
       float sideBias=p.x<0.?(1.0-rdPhase*.36):(0.64+rdPhase*.36);
       p.z+=uRecoil.x*.042*barrelZone*sideBias;
     }
@@ -92,7 +92,7 @@ void main(){
       if(rdD01>.01){
         p.x+=sin(uAnim2.y*12.0)*0.0055*rdD01*pod;
       }
-      float rail=step(.048,abs(p.x))*smoothstep(-.72,-.04,p.z);
+      float rail=smoothstep(.042,.054,abs(p.x))*smoothstep(-.72,-.04,p.z);
       p.x+=sign(p.x)*rdLockPulse*.0065*rail;
     }
   }

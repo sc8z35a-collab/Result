@@ -40,7 +40,7 @@ export class ThermalOptic {
     // ThermoFlux 1.0 physical ground thermal trails (footprints, hot impact craters, hot brass) & solar contrast
     const tf = match.thermoFlux;
     if (tf && origin[1] > 0.1) {
-      for (let py = Math.floor(H * 0.35); py < H; py += 2) {
+      for (let py = 0; py < H; py += 2) {
         const vertical = (1 - 2 * (py + .5) / H) * halfY;
         const ry = dir[1] + vertical * up[1];
         if (ry >= -0.025) continue;
@@ -52,6 +52,7 @@ export class ThermalOptic {
           const rz = dir[2] + horizontal * right[2] + vertical * up[2];
           const gx = origin[0] + rx * tGround;
           const gz = origin[2] + rz * tGround;
+          if (gx < -25 || gx > 25 || gz < -100 || gz > 100) continue;
           const samp = tf.sampleTemp(gx, gz);
           if (samp.dyn < 0.06 || obstruction(origin, [gx, .015, gz]) <= 1) continue;
           const boost = Math.min(185, samp.dyn * 165);

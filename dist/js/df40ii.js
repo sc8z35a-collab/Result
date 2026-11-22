@@ -272,6 +272,8 @@ export function triggerAA14Overheat(match, a) {
   d.aa14Cooldown = AA14_OVERHEAT_COOLDOWN;
   d.aa14LastOffAt = match.time;
   d.aaVersion = AA13_VERSION;
+  d.d01Max = AA13_WALL_DURATION;
+  if (d.d01Timer > d.d01Max) d.d01Timer = d.d01Max;
   d.aa14Pulse = 1;
   if (a.human) {
     match.event('aa14', {actor: a, gun: a.gun, state: 'overheat', cooldown: d.aa14Cooldown});
@@ -286,6 +288,8 @@ export function toggleAA14(match, a) {
     d.aa14Active = false;
     d.aa14LastOffAt = match.time;
     d.aaVersion = AA13_VERSION;
+    d.d01Max = AA13_WALL_DURATION;
+    if (d.d01Timer > d.d01Max) d.d01Timer = d.d01Max;
     d.aa14Pulse = 0.65;
     if (a.human) match.event('aa14', {actor: a, gun: a.gun, state: 'off', heat: d.aa14Heat});
     return {ok: true, active: false, state: 'off', heat: d.aa14Heat};
@@ -349,6 +353,7 @@ export function updateDF40II(match, a, dt) {
   const spec = activeDF40Spec(d);
   d.aaVersion = spec.tier;
   d.d01Max = spec.wallDuration;
+  if (d.d01Timer > d.d01Max) d.d01Timer = d.d01Max;
   const wasLocked = d.locked;
   const wasD01 = d.d01Active;
   let chainPrecharge = 0;
@@ -460,13 +465,14 @@ export function updateDF40II(match, a, dt) {
       const dyaw = angleDiff(s.yaw, a.yaw);
       const dpitch = s.pitch - a.pitch;
       const ang = Math.hypot(dyaw, dpitch);
+      const sep = Math.hypot(dyaw * Math.cos(a.pitch), dpitch);
       d.lastAimPoint = s.raw;
       d.targetDist = s.range;
       const gimbalGain = d.locked ? (d.aa14Active ? 1.2 : 1.0) : d.focus * 0.6;
       targetTrackYaw = clamp(dyaw * 2.0 * gimbalGain, -0.25, 0.25);
       targetTrackPitch = clamp(dpitch * 1.8 * gimbalGain, -0.18, 0.18);
 
-      if (d.locked && ang > 1e-4 && ang < spec.lockHold) {
+      if (d.locked && ang > 1e-4 && sep < spec.lockHold) {
         const rate = d.d01Active ? spec.trackGain * 0.88 : spec.trackGain;
         const step = Math.min(ang, ang * (1 - Math.exp(-rate * dt)), spec.trackRate * dt);
         const frac = step / ang;

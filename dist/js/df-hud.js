@@ -69,20 +69,34 @@ export class PilotEquipment {
   }
 
   async saveAwards(newReceipt) {
-    if (this.savingAwards) return;
+    if (!newReceipt) this.retryAllAwards = true;
+    if (this.savingAwards) {
+      this.rescanAwards = true;
+      return;
+    }
     this.savingAwards = true;
     this.accountView();
-    for (const receipt of this.pendingAwards.keys()) {
-      if (newReceipt && this.failedAwards.has(receipt)) continue;
-      try {
-        await this.wallet.change(receipt);
-        this.pendingAwards.delete(receipt);
-        this.failedAwards.delete(receipt);
-      } catch {
-        this.failedAwards.add(receipt);
-      }
+    try {
+      do {
+        this.rescanAwards = false;
+        const retryFailed = !!this.retryAllAwards || !newReceipt;
+        this.retryAllAwards = false;
+        for (const receipt of [...this.pendingAwards.keys()]) {
+          if (!retryFailed && this.failedAwards.has(receipt)) continue;
+          try {
+            await this.wallet.change(receipt);
+            this.pendingAwards.delete(receipt);
+            this.failedAwards.delete(receipt);
+            this.accountView();
+          } catch {
+            this.failedAwards.add(receipt);
+          }
+        }
+        newReceipt = null;
+      } while (this.rescanAwards || this.retryAllAwards);
+    } finally {
+      this.savingAwards = false;
     }
-    this.savingAwards = false;
     if (this.failedAwards.size) this.notice('未保存のクレジットがあります。試合結果から保存を再試行できます');
     this.accountView();
   }
