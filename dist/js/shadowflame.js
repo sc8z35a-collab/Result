@@ -549,7 +549,11 @@ export class ShadowFlame {
       if (d.uRecoil) gl.uniform2f(d.uRecoil, a.recoil || 0, a.recoilSide || 0);
       if (d.uAnim) gl.uniform4f(d.uAnim, a.fwdVel || 0, a.sideVel || 0, a.airBlend || 0, a.landCompress || 0);
       if (d.uAnim2) gl.uniform4f(d.uAnim2, a.pitch || 0, time + a.id * 1.13, a.sprintAmt || 0, a.reloadFrac || 0);
-      drawFn(actorsMap[(a.isSpy ? 'spy_' : '') + a.team + a.gun] || actorsMap[a.team + a.gun]);
+      const actorMesh = actorsMap[(a.isSpy ? 'spy_' : '') + a.team + a.gun]
+        || actorsMap[a.team + a.gun]
+        || actorsMap[(a.isSpy ? 'spy_' : '') + a.team + 'SW T']
+        || actorsMap[a.team + 'SW T'];
+      if (actorMesh) drawFn(actorMesh);
     }
   }
 
@@ -622,9 +626,11 @@ export class ShadowFlame {
       this.nearWidthM = 42;
       this.nearDepthSpan = snap.span;
 
-      // Skip rebuilding near cascade on static title frames if focus didn't shift and no match actors exist
-      if (match || snap.key !== this.lastNearKey) {
+      // Skip rebuilding near cascade on static title frames if focus didn't shift and no match actors existed
+      const hasMatch = !!match;
+      if (hasMatch || this.lastHadMatch || snap.key !== this.lastNearKey) {
         this.lastNearKey = snap.key;
+        this.lastHadMatch = hasMatch;
         gl.bindFramebuffer(gl.FRAMEBUFFER, this.nearTarget.fb);
         gl.viewport(0, 0, this.nearSize, this.nearSize);
         gl.clear(gl.DEPTH_BUFFER_BIT);

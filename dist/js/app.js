@@ -379,7 +379,7 @@ function triggerHitUI(e) {
 function triggerDamageUI(e, p) {
   hurt = Math.min(1, hurt + (e.shieldBreak ? .96 : .64));
   let dx = 0, dz = -1;
-  if (e.actor && e.actor !== p) {
+  if (!e.ricochet && e.actor && e.actor !== p) {
     dx = e.actor.x - p.x;
     dz = e.actor.z - p.z
   } else if (e.dir) {
@@ -639,7 +639,10 @@ function setGraphics(key, value) {
   applyLightModeChrome();
   save();
   if (renderer && ready) {
-    try { renderer.settings(settings); } catch (error) { recoverRenderer(error); }
+    try { renderer.settings(settings); } catch (error) {
+      if (renderer.native) recoverRenderer(error);
+      else { ready = false; rendererError(error); }
+    }
   }
   drawSettings()
 }
@@ -959,6 +962,8 @@ function event(e) {
     resetMotion();
     gameKick = hurt = 0;
     holdFireMouse = holdFireKey = holdFireTouch = holdFirePad = false;
+    fireTouch = fireTouchLast = mousePointer = null;
+    $('touchFire')?.classList.remove('is-active');
     padFireArmed = false;
     flirActive = false;
     simJump = false;
@@ -1008,7 +1013,7 @@ function hud() {
   }
   $('tankerHint').textContent = !a.alive || !nearestTk ? '' : nearestTk.cooldown <= 0 ? `補給タンカー ${Math.round(nearestDist)}m · +100発 / 精製1.5×` : `補給タンカー再充填 ${Math.ceil(nearestTk.cooldown)}s`;
   $('respawn').hidden = a.alive;
-  $('reticle').hidden = !a.alive;
+  $('reticle').hidden = !a.alive || !!a.df?.ads;
   $('reticle').classList.toggle('is-ms10', a.gun === 'MS10');
   $('reticle').classList.toggle('is-rd20', a.gun === 'RD20');
   $('reticle').classList.toggle('is-rd30', a.gun === 'RD30');
@@ -1559,7 +1564,10 @@ function rendererError(error) {
   $('loading').querySelector('span').textContent = '3D描画を開始できません。ページを再読み込みしてください。';
 }
 
+let recovering = false;
 async function recoverRenderer(error) {
+  if (recovering) return;
+  recovering = true;
   ready = false;
   doPause();
   flirActive = false;
@@ -1584,6 +1592,8 @@ async function recoverRenderer(error) {
     $('resume').disabled = false;
   } catch (fallbackError) {
     rendererError(fallbackError);
+  } finally {
+    recovering = false;
   }
 }
 
@@ -1612,7 +1622,10 @@ async function init() {
     try {
       renderer.resize();
       if (screen === 'settings') drawSettings();
-    } catch (error) { recoverRenderer(error); }
+    } catch (error) {
+      if (renderer.native) recoverRenderer(error);
+      else { ready = false; rendererError(error); }
+    }
   });
   if (ready) requestAnimationFrame(frame);
 }

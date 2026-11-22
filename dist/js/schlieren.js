@@ -84,6 +84,7 @@ export class SchlierenOptics {
     this.version = SCHLIEREN_VERSION;
     this.waves = [];
     this.seenEffects = new Set();
+    this.lastMatch = null;
     this.uShocks = new Float32Array(MAX_SHOCKS * 4);
     this.uShockMeta = new Float32Array(MAX_SHOCKS * 4);
     this.activeCount = 0;
@@ -92,6 +93,7 @@ export class SchlierenOptics {
   reset() {
     this.waves.length = 0;
     this.seenEffects.clear();
+    this.lastMatch = null;
     this.uShocks.fill(0);
     this.uShockMeta.fill(0);
     this.activeCount = 0;
@@ -119,6 +121,11 @@ export class SchlierenOptics {
 
   /** Advances 3D pressure waves and ingests new high-energy events from Match.effects. */
   step(match, dt) {
+    if (match !== this.lastMatch) {
+      this.seenEffects.clear();
+      if (!match) this.waves.length = 0;
+      this.lastMatch = match || null;
+    }
     const stepDt = clamp(dt ?? 0.016, 0, 0.1);
     for (let i = this.waves.length - 1; i >= 0; i--) {
       this.waves[i].age += stepDt;
@@ -131,7 +138,7 @@ export class SchlierenOptics {
         if (e.kind === 'kill' || e.kind === 'break' || e.kind === 'tanker' || e.kind === 'ricochet' || e.kind === 'penetrate') {
           this.seenEffects.add(e.seed);
           this.emit(e.kind, e.p);
-        } else if (e.kind === 'muzzle' && (e.gun === 'MS10' || e.gun === 'RD40') && !e.human) {
+        } else if (e.kind === 'muzzle' && (e.gun === 'MS10' || e.gun === 'RD40' || e.gun === 'DF40 II') && !e.human) {
           this.seenEffects.add(e.seed);
           this.emit('mach', e.p);
         }

@@ -1600,6 +1600,7 @@ body.touch #rdHud {
 #echoCompass i.ep-ricochet { --ep-col: #ffd248ee; --ep-hi: #fff8c2ff; }
 #echoCompass i.ep-penetrate { --ep-col: #ff664ee0; --ep-hi: #ffd0b0ff; }
 #echoCompass i.ep-tanker { --ep-col: #4ef2dce0; --ep-hi: #d6fff9ff; }
+#echoCompass i.ep-smoke { --ep-col: #9ad8e8d4; --ep-hi: #e4f8ffff; }
 #echoCompass i.ep-step { --ep-col: #8ad6e8cc; --ep-hi: #dffaffff; }
 #echoCompass i.ep-occ {
   background: conic-gradient(from -11deg, transparent 0deg, var(--ep-col) 8deg, var(--ep-hi) 11deg, var(--ep-col) 14deg, transparent 22deg);
@@ -1975,11 +1976,17 @@ body.light-mode #chronoBanner {
   background: linear-gradient(135deg, #684814cc, #1e5266cc);
   box-shadow: 0 0 12px #f5c44e66;
 }
+#app[data-flir-active="true"] #chronoBanner {
+  top: calc(max(clamp(12px, 2.4vh, 26px), env(safe-area-inset-top)) + 76px);
+}
 body.touch #chronoBanner {
   top: calc(max(6px, env(safe-area-inset-top)) + 34px);
   max-width: 94vw;
   font-size: 8px;
   padding: 2px 8px;
+}
+body.touch #app[data-flir-active="true"] #chronoBanner {
+  top: calc(max(6px, env(safe-area-inset-top)) + 54px);
 }
 body.touch #touchTac {
   gap: 4px;

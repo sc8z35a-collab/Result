@@ -242,6 +242,7 @@ export class AeroVortex {
   injectSmoke(x, z, amount = 1.0, heatAmt = 0.25, radius = 2, impulseX = 0, impulseZ = 0) {
     const [cx, cz] = worldToAeroCell(x, z);
     const W = this.w, H = this.h;
+    let deltaSmoke = 0;
     for (let dz = -radius; dz <= radius; dz++) {
       const nz = cz + dz;
       if (nz < 0 || nz >= H) continue;
@@ -253,18 +254,23 @@ export class AeroVortex {
         const r2 = dx * dx + dz * dz;
         if (r2 > radius * radius + 0.5) continue;
         const w = Math.exp(-r2 * (radius > 2 ? 0.34 : 0.62));
-        this.smoke[idx] = Math.min(3.2, this.smoke[idx] + amount * w);
+        const prev = this.smoke[idx];
+        const next = Math.min(3.2, prev + amount * w);
+        this.smoke[idx] = next;
+        deltaSmoke += next - prev;
         this.heat[idx] = Math.min(1.4, this.heat[idx] + heatAmt * w);
         this.vx[idx] = clamp(this.vx[idx] + impulseX * w, -9, 9);
         this.vz[idx] = clamp(this.vz[idx] + impulseZ * w, -9, 9);
       }
     }
+    this.stats.totalSmoke = Math.max(0, this.stats.totalSmoke + deltaSmoke);
   }
 
   /** Injects an expanding radial shock burst + heated smoke plume (kills, shield breaks, tankers, smoke vents). */
   injectBurst(x, z, {smoke = 1.6, heat = 0.75, force = 4.2, radius = 3} = {}) {
     const [cx, cz] = worldToAeroCell(x, z);
     const W = this.w, H = this.h;
+    let deltaSmoke = 0;
     for (let dz = -radius; dz <= radius; dz++) {
       const nz = cz + dz;
       if (nz < 0 || nz >= H) continue;
@@ -276,7 +282,10 @@ export class AeroVortex {
         const dist = Math.hypot(dx, dz);
         if (dist > radius + 0.4) continue;
         const w = Math.exp(-(dist * dist) / Math.max(1.2, radius * 1.1));
-        this.smoke[idx] = Math.min(3.2, this.smoke[idx] + smoke * w);
+        const prev = this.smoke[idx];
+        const next = Math.min(3.2, prev + smoke * w);
+        this.smoke[idx] = next;
+        deltaSmoke += next - prev;
         this.heat[idx] = Math.min(1.4, this.heat[idx] + heat * w);
         if (dist > 0.1) {
           const push = force * w / dist;
@@ -285,6 +294,7 @@ export class AeroVortex {
         }
       }
     }
+    this.stats.totalSmoke = Math.max(0, this.stats.totalSmoke + deltaSmoke);
   }
 
   /** Deploys a tactical pressurized smoke canister vent (G key) that billows around containers! */
@@ -313,7 +323,7 @@ export class AeroVortex {
     const carve = clamp((gun === 'MS10' ? 0.58 : gun === 'RD40' ? 0.44 : gun === 'DF40 II' ? 0.40 : 0.34) * machFactor, 0.18, 0.72);
 
     const samples = Math.max(1, Math.min(4, Math.ceil(seg / 1.4)));
-    let carvedAny = false;
+    let carvedAny = false, deltaSmoke = 0;
     for (let s = 0; s < samples; s++) {
       const f = (s + 0.5) / samples;
       const wx = p0[0] + dx * f;
@@ -326,8 +336,11 @@ export class AeroVortex {
       this.vz[idx] = clamp(this.vz[idx] + uz * wakeForce, -9, 9);
 
       if (this.smoke[idx] > 0.04) {
-        const displaced = this.smoke[idx] * carve;
-        this.smoke[idx] = Math.max(0, this.smoke[idx] - displaced);
+        const prev = this.smoke[idx];
+        const displaced = prev * carve;
+        const next = Math.max(0, prev - displaced);
+        this.smoke[idx] = next;
+        deltaSmoke += next - prev;
         carvedAny = true;
         // Push displaced smoke sideways into swirling vortices flanking the bullet path!
         for (const side of [-1, 1]) {
@@ -335,14 +348,20 @@ export class AeroVortex {
           const sz = clamp(iz + Math.round(tz * side), 0, this.h - 1);
           const sIdx = sz * this.w + sx;
           if (!this.solid[sIdx]) {
-            this.smoke[sIdx] = Math.min(3.2, this.smoke[sIdx] + displaced * 0.36);
+            const sPrev = this.smoke[sIdx];
+            const sNext = Math.min(3.2, sPrev + displaced * 0.36);
+            this.smoke[sIdx] = sNext;
+            deltaSmoke += sNext - sPrev;
             this.vx[sIdx] = clamp(this.vx[sIdx] + tx * side * wakeForce * 0.55, -9, 9);
             this.vz[sIdx] = clamp(this.vz[sIdx] + tz * side * wakeForce * 0.55, -9, 9);
           }
         }
       }
     }
-    if (carvedAny) this.stats.wakesCarved++;
+    if (carvedAny) {
+      this.stats.wakesCarved++;
+      this.stats.totalSmoke = Math.max(0, this.stats.totalSmoke + deltaSmoke);
+    }
   }
 
   /** Bilinear wind & smoke probe at any world coordinate (x, z). */

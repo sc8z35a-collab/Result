@@ -262,6 +262,7 @@ export const WEAPON_RECOIL_PROFILE = Object.freeze({
   RD30:   {kickP: 0.0058, kickY: 0.0042, pullSkill: 0.88, driftBias: -0.12, quietReq: 0.040, arvWait: true,  bloomPerShot: 0.0030},
   RD20:   {kickP: 0.0060, kickY: 0.0040, pullSkill: 0.89, driftBias: 0.10, quietReq: 0.042, arvWait: true,  bloomPerShot: 0.0029},
   RD40:   {kickP: 0.0052, kickY: 0.0036, pullSkill: 0.92, driftBias: 0.08, quietReq: 0.036, arvWait: true,  bloomPerShot: 0.0025},
+  'DF40 II': {kickP: 0.0048, kickY: 0.0034, pullSkill: 0.93, driftBias: 0.06, quietReq: 0.032, arvWait: true,  bloomPerShot: 0.0022},
   'DF1 OUT': {kickP: 0.0056, kickY: 0.0042, pullSkill: 0.88, driftBias: 0.10, quietReq: 0.038, arvWait: true, bloomPerShot: 0.0028}
 });
 
@@ -650,7 +651,7 @@ export class HumanPsycheV23 {
     return {startled: false, freezeDur: 0, threatYaw: actor.yaw};
   }
 
-  onDeath(actor, killer, t) {
+  onDeath(actor, killer, t, traumaPos = undefined) {
     if (killer && killer.team !== actor.team) {
       let rec = this.nemesisMap.get(killer.id);
       if (!rec) { rec = {killedBy: 0, killedThem: 0, dmgTaken: 0, lastAt: t}; this.nemesisMap.set(killer.id, rec); }
@@ -660,7 +661,11 @@ export class HumanPsycheV23 {
       if (rec.killedBy >= 2 && rec.killedBy > rec.killedThem) {
         this.nemesisId = killer.id;
       }
-      this.recordTraumaAngle(actor.x, actor.z, killer.x, killer.z, 1.0, t);
+      if (traumaPos === undefined) {
+        this.recordTraumaAngle(actor.x, actor.z, killer.x, killer.z, 1.0, t);
+      } else if (traumaPos) {
+        this.recordTraumaAngle(actor.x, actor.z, traumaPos[0], traumaPos[1], 1.0, t);
+      }
     }
   }
 
@@ -1577,6 +1582,10 @@ export class HumanOFC_AimV23 {
       this.velYaw = dYaw * ds * 0.42;
       this.velPitch = dPitch * ds * 0.42;
       if (u >= 1) this.motorPhase = 'SETTLE';
+    } else if (this.motorPhase === 'SUBMOVE') {
+      // Meyer Phase-2 corrective submovement angles are driven by ManusiaNeuromotorAimV24.step().
+      this.velYaw *= 0.85;
+      this.velPitch *= 0.85;
     } else {
       if (this.motorPhase === 'SETTLE' && t >= this.settleUntil) {
         this.motorPhase = this.quietEyeReady ? 'QUIET_EYE' : 'PURSUIT';

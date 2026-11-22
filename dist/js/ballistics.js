@@ -107,6 +107,9 @@ export function solveBallisticImpact(shot, hit, rng = null) {
     const j3 = rng ? (rng() - 0.5) * 2 * tumble : 0;
     const exitDir = unit([dir[0] + j1, dir[1] + j2, dir[2] + j3]);
     const exitPos = add(hit.exitPoint, scale(exitDir, 0.06));
+    if (exitPos[1] <= 0.01 && Math.abs(exitPos[0]) <= 25 && Math.abs(exitPos[2]) <= 100) {
+      return {action: 'stop'};
+    }
     return {
       action: 'penetrate',
       entryPos: hit.point,

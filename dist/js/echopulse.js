@@ -48,7 +48,7 @@ export class EchoPulseField {
     if (!match || !pos) return;
     this.stats.emitted++;
     const tNow = match.time || 0;
-    const maxRange = kind === 'reload' ? 26 : kind === 'step' ? 24 : kind === 'ricochet' ? 68 : kind === 'tanker' ? 95 : 135;
+    const maxRange = kind === 'reload' ? 26 : kind === 'step' ? 24 : kind === 'smoke' ? 56 : kind === 'ricochet' ? 68 : kind === 'tanker' ? 95 : 135;
 
     for (const listener of match.actors) {
       if (!listener.alive || (listener.human && kind === 'reload')) continue;
@@ -86,6 +86,7 @@ export class EchoPulseField {
         }
       }
 
+      const emitGun = gun || actor?.gun || '';
       if (listener.human) {
         // Queue for player's peripheral Sound-to-Sight Acoustic Compass (enemy & neutral/tanker cues)
         this.playerWaves.push({
@@ -96,11 +97,11 @@ export class EchoPulseField {
           team,
           pos: perceivedPos,
           arriveAt: tNow + arrivalDelay,
-          expireAt: tNow + arrivalDelay + (kind === 'tanker' ? 1.55 : kind === 'fire' ? 0.92 : 0.72),
-          strength: clamp(effectiveGain * (kind === 'tanker' ? 1.5 : 1.35), 0.14, 1.0),
+          expireAt: tNow + arrivalDelay + (kind === 'tanker' ? 1.55 : kind === 'smoke' ? 0.95 : kind === 'fire' ? 0.92 : 0.72),
+          strength: clamp(effectiveGain * (kind === 'tanker' ? 1.5 : kind === 'smoke' ? 1.15 : 1.35), 0.14, 1.0),
           occluded: path.occluded,
           dist,
-          gun
+          gun: emitGun
         });
         if (this.playerWaves.length > MAX_PULSES) this.playerWaves.shift();
       } else {
@@ -110,11 +111,13 @@ export class EchoPulseField {
           listenerSpawnId: listener.spawnId,
           sourceSpawnId: actor?.spawnId,
           sourceActor: actor,
+          shotSeq: kind === 'fire' ? actor?.shotCount : undefined,
+          gun: emitGun,
           perceivedPos,
           truePos: [pos[0], pos[1], pos[2]],
           arriveAt: tNow + arrivalDelay,
           emittedAt: tNow,
-          reloadUntil: kind === 'reload' ? tNow + actor.reload : 0,
+          reloadUntil: kind === 'reload' && actor ? tNow + (actor.reload || 0) : 0,
           occluded: path.occluded,
           isDecoy,
           kind,

@@ -261,11 +261,12 @@ export function updateRD(match, a, dt) {
   let targetTrackYaw = 0, targetTrackPitch = 0;
   if (d.focusId >= 0) {
     const e = match.actors[d.focusId];
-    if (e?.alive && e.team !== a.team) {
+    if (e?.alive && e.team !== a.team && e.spawnId === d.focusSpawnId) {
       const s = aimAt(a, e, spec.speed, !d.occluded);
       const dyaw = angleDiff(s.yaw, a.yaw);
       const dpitch = s.pitch - a.pitch;
       const ang = Math.hypot(dyaw, dpitch);
+      const sep = Math.hypot(dyaw * Math.cos(a.pitch), dpitch);
       d.lastAimPoint = s.raw;
       d.targetDist = s.range;
       // Live gimbal tracking offset for badass 3D weapon aim-tracking animation
@@ -273,7 +274,7 @@ export function updateRD(match, a, dt) {
       targetTrackYaw = clamp(dyaw * 1.85 * gimbalGain, -0.22, 0.22);
       targetTrackPitch = clamp(dpitch * 1.65 * gimbalGain, -0.16, 0.16);
 
-      if (spec.trackAim && d.locked && ang > 1e-4 && ang < spec.lockHold) {
+      if (spec.trackAim && d.locked && ang > 1e-4 && sep < spec.lockHold) {
         const rate = d.d01Active ? 4.4 : 4.8;
         const step = Math.min(ang, ang * (1 - Math.exp(-rate * dt)), RD40_TRACK_RATE * dt);
         const frac = step / ang;

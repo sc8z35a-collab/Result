@@ -220,6 +220,16 @@ export class Renderer {
       this.actorsLite['spy_' + team + g] = gpuMesh(gl, character(team, g, 'spy', 'lite'));
     }
   }
+  actorMesh(a, lite) {
+    const map = lite ? this.actorsLite : this.actors;
+    const team = a.team ? 1 : 0;
+    const gun = Object.hasOwn(weapons, a.gun) ? a.gun : 'SW T';
+    const key = (a.isSpy ? 'spy_' : '') + team + gun;
+    if (!map[key]) {
+      map[key] = gpuMesh(this.gl, character(team, gun, a.isSpy ? 'spy' : 'standard', lite ? 'lite' : 'high'));
+    }
+    return map[key];
+  }
   quality() {
     if (this.isLite()) return -1;
     return Object.hasOwn(qualityLevels, this.config?.graphics) ? qualityLevels[this.config.graphics] : 1;
@@ -464,6 +474,9 @@ export class Renderer {
     }
 
     // 1. Shadow Flame 1.0 Depth Pass (Off in Lightweight Mode / 1.0 Flash Dual-Cache / 1.0 Pro Focus-Snapped Dual-Cascade)
+    if (match && sfMode > 0) {
+      for (const a of match.actors) if (a.alive && !a.human) this.actorMesh(a, lite);
+    }
     this.sf.prepare(sfMode, eye, fwd, match, activeTerrain, activeActors, m => this.draw(m), time);
     this.sf.bindTextures(sfMode);
 
@@ -526,7 +539,7 @@ export class Renderer {
         if (p.uAnim) gl.uniform4f(p.uAnim, a.fwdVel || 0, a.sideVel || 0, a.airBlend || 0, a.landCompress || 0);
         if (p.uAnim2) gl.uniform4f(p.uAnim2, a.pitch || 0, time + a.id * 1.13, a.sprintAmt || 0, a.reloadFrac || 0);
         gl.uniform2f(p.uHitFX, a.hitFlash || 0, a.shieldFlash || 0);
-        this.draw(activeActors[(a.isSpy ? 'spy_' : '') + a.team + a.gun] || activeActors[a.team + a.gun]);
+        this.draw(this.actorMesh(a, lite));
       }
     }
 
@@ -635,7 +648,7 @@ export class Renderer {
       gl.uniform1i(p.uKHDR, khdrOn ? 1 : 0);
       gl.uniform2f(p.uRecoil, blowback, a.recoilSide || 0);
       if (p.uAnim) gl.uniform4f(p.uAnim, rdLock, rdD01, rdLockPulse, rdBarrelPhase);
-      if (p.uAnim2) gl.uniform4f(p.uAnim2, 0, time, 0, 0);
+      if (p.uAnim2) gl.uniform4f(p.uAnim2, (weapons[a.gun]?.pellets || 1) > 1 ? 1 : 0, time, 0, 0);
       gl.uniform2f(p.uHitFX, lite ? 0 : rdLock, lite ? 0 : rdD01);
       gl.uniform1f(p.uGunHeat, lite ? 0 : gunHeat);
       gl.uniformMatrix4fv(p.uModel, false, modelM);

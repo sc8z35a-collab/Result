@@ -121,8 +121,8 @@ export class ThermoFlux {
     this.baseTemp = new Float32Array(N);  // Static sunlit vs shaded equilibrium (0.14..0.52)
     this.dynHeat = new Float32Array(N);   // Dynamic footprints, craters, brass, blast heat (0..1.5)
     this.dynBuf = new Float32Array(N);
-    this.teamTag = new Int8Array(N);      // Team ID of freshest thermal footprint at cell (-1 = none/neutral)
-    this.stampTime = new Float32Array(N); // Match time when cell was last heated by an actor
+    this.teamTag = new Int8Array(N).fill(-1); // Team ID of freshest thermal footprint at cell (-1 = none/neutral)
+    this.stampTime = new Float32Array(N).fill(-100); // Match time when cell was last heated by an actor
 
     this.texData = new Uint8Array(N * 4);
     this.gl = null;
