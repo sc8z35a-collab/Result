@@ -2382,6 +2382,10 @@ export class SoundEngin2 {
         });
       }
       this._playTone({f0: 850 * j, f1: 165 * j, dur: 0.072, gain: 0.15 * vol, type: 'triangle', lpf, pos, pan: muzzlePan, bus: this.weaponsBus, priority: prio, start});
+    } else if (gun === 'RD 50') {
+      // RD 50: Deep punchy full-auto heavy carbine with resonant brass-drum thump
+      this._playBuffer({buffer: this.crackBuf, rate: 0.92 * j, dur: 0.050, gain: 0.27 * vol * (1 - distNorm * 0.36), filterType: 'bandpass', f0: 2750 * j, f1: 580 * j, q: 1.20, lpf, pos, pan: muzzlePan, bus: this.weaponsBus, reverbSend: revSend * 0.68, priority: prio, ...elevOpts, start});
+      this._playTone({f0: 540 * j, f1: 94 * j, dur: 0.102, gain: 0.22 * vol, type: 'triangle', lpf, pos, pan: muzzlePan, bus: this.weaponsBus, priority: prio, start});
     } else if (gun === 'RD20') {
       this._playBuffer({buffer: this.whiteNoiseBuf, loop: true, dur: 0.080, gain: 0.23 * vol, filterType: 'bandpass', f0: 3300 * j, f1: 690 * j, q: 1.65, lpf, pos, pan: muzzlePan, bus: this.weaponsBus, reverbSend: revSend * 0.62, priority: prio, ...elevOpts, start});
       this._playTone({f0: 730 * j, f1: 132 * j, dur: 0.082, gain: 0.17 * vol, type: 'triangle', lpf, pos, pan: muzzlePan, bus: this.weaponsBus, priority: prio, start});
@@ -2411,8 +2415,8 @@ export class SoundEngin2 {
     // LAYER 4: Karplus-Strong Waveguide Bolt Carrier & Mechanical Action Clack (close range)
     if (isPlayer || d < 20) {
       const mGain = isPlayer ? 0.088 : 0.044 * (1 - d / 20);
-      const boltDelay = gun === 'MS10' ? 0.013 : gun === 'DF40 II' ? 0.010 : gun === 'RD40' ? 0.012 : gun === 'RD30' ? 0.014 : 0.018;
-      const boltRate = gun === 'MS10' ? 1.38 : gun === 'DF40 II' ? 1.32 : gun === 'RD40' ? 1.28 : gun === 'RD30' ? 1.12 : gun === 'SW T' ? 0.88 : 1.04;
+      const boltDelay = gun === 'MS10' ? 0.013 : gun === 'DF40 II' ? 0.010 : gun === 'RD40' ? 0.012 : gun === 'RD 50' ? 0.015 : gun === 'RD30' ? 0.014 : 0.018;
+      const boltRate = gun === 'MS10' ? 1.38 : gun === 'DF40 II' ? 1.32 : gun === 'RD40' ? 1.28 : gun === 'RD 50' ? 0.96 : gun === 'RD30' ? 1.12 : gun === 'SW T' ? 0.88 : 1.04;
       this._playBuffer({
         buffer: this.boltBuf,
         rate: boltRate * j * (1 + (isPlayer ? this.barrelHeat * 0.06 : 0)),
@@ -2502,6 +2506,11 @@ export class SoundEngin2 {
         });
       }
     }
+
+    if (e.scherp && (isPlayer || d < 32)) {
+      const sVol = (isPlayer ? 0.064 : clamp(vol * 0.08, 0.01, 0.055));
+      this._playTone({f0: 4180 * j, f1: 6240 * j, dur: 0.036, attack: 0.001, gain: sVol, type: 'sine', pos: isPlayer ? null : srcPos, pan: isPlayer ? 0.02 : muzzlePan, bus: this.foleyBus, priority: 3, start: start + 0.004});
+    }
   }
 
   // --------------------------------------------------------------------------
@@ -2534,7 +2543,7 @@ export class SoundEngin2 {
     const pan0 = e.pan ?? this._computeStereoPan(pStart);
     const pan1 = e.panEnd ?? this._computeStereoPan(pEnd);
 
-    // 1. Supersonic Mach-Cone N-Wave Ballistic Crack
+    // 1. Supersonic Mach-Cone N-Wave Double-Shock Ballistic Crack (MagnusAero 1.0 Bow + Tail N-Wave)
     if (doppler.isSupersonic && d < 5.8) {
       const crackAmp = vol * (gun === 'MS10' ? 1.46 : gun === 'RD40' ? 1.24 : 1.14) * clamp(1 - d / 6.0, 0.22, 1);
       if (d < 2.2) this._triggerStapediusReflex(0.28 * (1 - d / 2.2));
@@ -2554,6 +2563,24 @@ export class SoundEngin2 {
         priority: 4,
         start: now
       });
+      const nw = finite(e.nWaveDelay, 0);
+      if (nw > 0.0005) {
+        this._playBuffer({
+          buffer: this.crackBuf,
+          rate: (gun === 'MS10' ? 1.12 : 0.90) * j,
+          dur: 0.036,
+          attack: 0.001,
+          gain: crackAmp * 0.56,
+          filterType: 'highpass',
+          f0: 1380,
+          pos: pt,
+          pan: pan1,
+          bus: this.impactsBus,
+          reverbSend: 0.16,
+          priority: 3,
+          start: now + nw
+        });
+      }
     }
 
     // 2. Build 300Hz-Sampled Hyperbolic Pitch Curve for Web Audio Filter & Oscillator!
@@ -2884,6 +2911,15 @@ export class SoundEngin2 {
     this._playTone({f0: base * 1.5, f1: base * (aa14 ? 2.15 : 2.0), dur: 0.072, attack: 0.002, gain: aa14 ? 0.062 : 0.054, type: 'sine', pan: -0.05, bus: this.uiBus, priority: 3, start: now + 0.024});
   }
 
+  _playScherpLock(mode, now) {
+    if (now - this.lastRdLockAt < 0.09) return;
+    this.lastRdLockAt = now;
+    this.stats.systemCues++;
+    const base = mode === 'bank' ? 2380 : mode === 'pen' ? 1960 : 2140;
+    this._playTone({f0: base, f1: base * 1.5, dur: 0.042, attack: 0.001, gain: 0.068, type: 'sine', pan: -0.04, bus: this.uiBus, priority: 4, start: now});
+    this._playTone({f0: base * 1.5, f1: base * 2.25, dur: 0.058, attack: 0.001, gain: 0.054, type: 'triangle', pan: 0.04, bus: this.uiBus, priority: 4, start: now + 0.018});
+  }
+
   _playAA14(state, now) {
     this.stats.systemCues++;
     if (state === 'on') {
@@ -2989,6 +3025,7 @@ export class SoundEngin2 {
     if (e.type === 'impact') { this.playImpact(e); return; }
     if (e.type === 'casing') { this.playCasing(e); return; }
     if (e.type === 'rdlock' && a === player) { this._playRdLock(!!e.d01, now, !!e.aa14); return; }
+    if (e.type === 'scherplock' && a === player) { this._playScherpLock(e.mode, now); return; }
     if (e.type === 'd01' && a === player) { this._playD01Ping(now); return; }
     if (e.type === 'aa14' && a === player) { this._playAA14(e.state, now); return; }
     if (e.type === 'fermatLock') { this._playFermatLock(!!e.doubleBounce, now); return; }

@@ -14,9 +14,9 @@ export function targetPoint(a) {
   const [x, z] = bodyCenter(a);
   return [x, a.y + 1.23 * torso(a), z]
 }
-export function vertical(a, dt, floorAt) {
+export function vertical(a, dt, floorAt, gravityScale = 1) {
   const before = a.y;
-  a.vy -= 14 * dt;
+  a.vy -= 14 * gravityScale * dt;
   const next = before + a.vy * dt;
   const floor = a.vy <= 0 ? floorAt(a.x, a.z, before) : -Infinity;
   if (next <= floor) {

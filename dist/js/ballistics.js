@@ -26,6 +26,7 @@ export const WEAPON_PENETRATION = {
   RD40: {wood: 2.9, steel: 0.30, concrete: 0.14, maxPen: 2, maxRic: 2},
   'DF40 II': {wood: 2.3, steel: 0.20, concrete: 0.09, maxPen: 1, maxRic: 2},
   RD30: {wood: 2.4, steel: 0.22, concrete: 0.10, maxPen: 1, maxRic: 2},
+  'RD 50': {wood: 2.35, steel: 0.19, concrete: 0.09, maxPen: 1, maxRic: 1},
   SRA: {wood: 2.2, steel: 0.18, concrete: 0.08, maxPen: 1, maxRic: 1},
   RD20: {wood: 1.9, steel: 0.14, concrete: 0.06, maxPen: 1, maxRic: 1},
   D1: {wood: 1.7, steel: 0.12, concrete: 0.05, maxPen: 1, maxRic: 1},
@@ -48,7 +49,7 @@ export function incomingPathClear(shot, distance, point) {
  *   - {action: 'penetrate', entryPos, exitPos, exitNormal, dir, speed, damage, mat, thickness, retain}
  *   - {action: 'stop'}
  */
-export function solveBallisticImpact(shot, hit, rng = null) {
+export function solveBallisticImpact(shot, hit, rng = null, opts = null) {
   if (!shot || !hit || !hit.normal) return {action: 'stop'};
   const spec = WEAPON_PENETRATION[shot.gun] || WEAPON_PENETRATION.SRA;
   const mat = hit.mat || 'steel';
@@ -61,10 +62,13 @@ export function solveBallisticImpact(shot, hit, rng = null) {
   const sinGrazing = Math.abs(dn); // 0 = parallel graze, 1 = perpendicular hit
   const ricCount = shot.ricochets || 0;
   const penCount = shot.penetrations || 0;
+  const boost = !!opts?.ricochetBoost;
 
   // 1. Check Oblique Grazing Ricochet on steel containers or concrete docks
-  const critSin = mat === 'steel' ? RICOCHET_SIN_STEEL : mat === 'concrete' ? RICOCHET_SIN_CONCRETE : 0;
-  if (critSin > 0 && sinGrazing <= critSin && ricCount < spec.maxRic && shot.speed >= 140 && shot.damage >= 1.2) {
+  const baseCrit = mat === 'steel' ? RICOCHET_SIN_STEEL : mat === 'concrete' ? RICOCHET_SIN_CONCRETE : 0;
+  const critSin = boost && baseCrit > 0 ? Math.min(0.76, baseCrit * 1.65) : baseCrit;
+  const maxRic = spec.maxRic + (boost ? 2 : 0);
+  if (critSin > 0 && sinGrazing <= critSin && ricCount < maxRic && shot.speed >= (boost ? 95 : 140) && shot.damage >= (boost ? 0.8 : 1.2)) {
     // True vector reflection r = d - 2*(d·n)*n + deterministic subtle surface-corrugation scatter
     const rx = dir[0] - 2 * dn * n[0];
     const ry = dir[1] - 2 * dn * n[1];
@@ -77,8 +81,8 @@ export function solveBallisticImpact(shot, hit, rng = null) {
     // Guarantee reflected ray moves cleanly away from struck face
     if (dot(rDir, n) < 0.06) rDir = unit(add(rDir, scale(n, 0.14)));
 
-    const speedRetain = mat === 'steel' ? 0.80 : 0.72;
-    const dmgRetain = mat === 'steel' ? 0.74 : 0.65;
+    const speedRetain = mat === 'steel' ? (boost ? 0.90 : 0.80) : (boost ? 0.84 : 0.72);
+    const dmgRetain = mat === 'steel' ? (boost ? 0.88 : 0.74) : (boost ? 0.80 : 0.65);
     const bouncePos = add(hit.point, scale(n, 0.045));
     return {
       action: 'ricochet',
@@ -94,9 +98,9 @@ export function solveBallisticImpact(shot, hit, rng = null) {
   }
 
   // 2. Check Exact Slab-Thickness Material Penetration (Wood crates & thin steel/concrete edges)
-  const penBudget = spec[mat] || 0;
+  const penBudget = (spec[mat] || 0) * (boost ? 1.55 : 1.0);
   const thick = Number.isFinite(hit.thickness) ? hit.thickness : Infinity;
-  if (penBudget > 0 && thick > 0.02 && thick <= penBudget && hit.exitPoint && penCount < spec.maxPen && shot.speed >= 150 && shot.damage >= 1.5) {
+  if (penBudget > 0 && thick > 0.02 && thick <= penBudget && hit.exitPoint && penCount < spec.maxPen + (boost ? 1 : 0) && shot.speed >= 150 && shot.damage >= 1.5) {
     const lossFrac = clamp(thick / penBudget, 0.08, 0.85);
     const retain = clamp(1.0 - lossFrac * 0.56, 0.38, 0.90);
     const speedRetain = clamp(1.0 - lossFrac * 0.36, 0.52, 0.92);

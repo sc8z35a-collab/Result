@@ -530,14 +530,16 @@ export class ShadowFlame {
     };
   }
 
-  drawActorsShadow(match, drawFn, actorsMap, time = 0) {
+  drawActorsShadow(match, drawFn, actorsMap, time = 0, fpActor = undefined) {
     if (!match) return;
     const gl = this.gl, d = this.depthProg;
     gl.uniform1i(d.uMode, 1);
+    const spectating = !!match.spectating;
     const viewerTeam = match.player?.team ?? 0;
+    const skipActor = fpActor === undefined ? (!spectating ? match.player : null) : fpActor;
     for (const a of match.actors) {
-      if (!a.alive || a.human) continue;
-      if (a.team !== viewerTeam && (a.shafferTimer || 0) > 0) continue;
+      if (!a.alive || a === skipActor) continue;
+      if (!spectating && a.team !== viewerTeam && (a.shafferTimer || 0) > 0) continue;
       const sy = Math.sin(a.yaw), cy = Math.cos(a.yaw);
       const rVec = [cy, 0, sy], bVec = [-sy, 0, cy];
       let hitX = 0, hitZ = 1;
@@ -546,7 +548,7 @@ export class ShadowFlame {
         hitZ = clamp(dot(a.hitDir, bVec), -1, 1);
       }
       gl.uniformMatrix4fv(d.uModel, false, matrix(rVec, [0, 1, 0], bVec, [a.x, a.y, a.z]));
-      gl.uniform2f(d.uGait, a.stride * 2.85, clamp(Math.hypot(a.vx, a.vz) / 4.2, 0, 1.2));
+      gl.uniform2f(d.uGait, a.stride * 1.92, clamp(Math.hypot(a.vx, a.vz) / 4.2, 0, 1.15));
       gl.uniform3f(d.uPose, a.crouch, a.lean, a.aimPose);
       gl.uniform3f(d.uHit, a.hitRecoil || 0, hitX, hitZ);
       if (d.uRecoil) gl.uniform2f(d.uRecoil, a.recoil || 0, a.recoilSide || 0);
@@ -554,7 +556,7 @@ export class ShadowFlame {
       if (d.uAnim2) gl.uniform4f(d.uAnim2, a.pitch || 0, time + a.id * 1.13, a.sprintAmt || 0, a.reloadFrac || 0);
       if (d.uExpr) {
         const ex = a.expr;
-        gl.uniform4f(d.uExpr, ex?.headYaw || 0, ex?.gestureEncoded || 0, ex?.tension || 0, ex?.breathWave || 0);
+        gl.uniform4f(d.uExpr, ex?.headYaw || 0, 0, ex?.tension || 0, ex?.breathWave || 0);
       }
       const actorMesh = actorsMap[(a.isSpy ? 'spy_' : '') + a.team + a.gun]
         || actorsMap[a.team + a.gun]
@@ -587,7 +589,7 @@ export class ShadowFlame {
     this.staticReady = true;
   }
 
-  prepare(mode, eye, fwd, match, terrain, actorsMap, drawFn, time = 0) {
+  prepare(mode, eye, fwd, match, terrain, actorsMap, drawFn, time = 0, fpActor = undefined) {
     if (mode <= 0) return;
     const gl = this.gl, d = this.depthProg;
     // Unbind depth textures from all sampler units before rendering into shadow FBOs (prevents WebGL2 feedback loops)
@@ -622,7 +624,7 @@ export class ShadowFlame {
         gl.uniformMatrix4fv(d.uVP, false, this.nearMatrix);
         gl.enable(gl.POLYGON_OFFSET_FILL);
         gl.polygonOffset(1.2, 2.0);
-        this.drawActorsShadow(match, drawFn, actorsMap, time);
+        this.drawActorsShadow(match, drawFn, actorsMap, time, fpActor);
         gl.disable(gl.POLYGON_OFFSET_FILL);
       }
     } else if (mode === 2) {
@@ -656,7 +658,7 @@ export class ShadowFlame {
         gl.enable(gl.POLYGON_OFFSET_FILL);
         gl.polygonOffset(1.0, 1.8);
         drawFn(terrain);
-        this.drawActorsShadow(match, drawFn, actorsMap, time);
+        this.drawActorsShadow(match, drawFn, actorsMap, time, fpActor);
         gl.disable(gl.POLYGON_OFFSET_FILL);
       }
     }

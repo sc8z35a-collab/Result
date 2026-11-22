@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {createRequire} from 'node:module';
-import {Match,modes,weapons,npcWeapons,BASE_SHIELD_MAX,MAX_SKILL_CHARGES,KILLS_PER_SKILL_CHARGE,SHAFFER_DURATION} from '../dist/js/match.js';
+import {Match,modes,weapons,npcWeapons,BASE_SHIELD_MAX,BAIZER_MAX_STACK,MAX_SKILL_CHARGES,KILLS_PER_SKILL_CHARGE,SHAFFER_DURATION,SKILL_POOL} from '../dist/js/match.js';
 import {ARV1_VERSION,ARV1_ASSIST_STRENGTH,ARV1_LAUNCH_GAIN,ARV1_LAUNCH_STEP,ARV1_LOCK_ACQUIRE,ARV1_LOCK_HOLD} from '../dist/js/df1.js';
 import {RD40_AA_VERSION,RD40_ASSIST_STRENGTH,RD40_LOCK_ACQUIRE,RD40_LOCK_HOLD,RD40_D01_DURATION,RD30_MINI_STRENGTH,RD20_AA_STRENGTH,RD_SPECS} from '../dist/js/rd40.js';
 import {
@@ -1469,8 +1469,9 @@ for (const [mode,counts] of Object.entries(modes)) {
   forward(m,p,180);assert.equal(p.reload,0,'Must not reload with 0 stock');
   forward(m,p,200);assert(p.reload>0&&p.autoReloading,'Must auto-reload as soon as 1 round regens into stock');
  }
- // 12B. BAIZER 200 (+20) & BAIZER 400 (+40) purple road pickups: walkable placement, one-time non-regenerating consumption, absorption order, upgrade/no-downgrade, 3D geometry
+ // 12B. BAIZER 200 (+20) & BAIZER 400 (+40) purple road pickups: walkable placement, additive stacking up to 100, non-regenerating consumption, absorption order, 3D geometry
  {
+  assert.equal(BAIZER_MAX_STACK,100,'BAIZER max stack must be 100');
   assert(baizerPickups.length>=6,'Map must place BAIZER 200 and BAIZER 400 pickups on roads');
   assert(baizerPickups.some(b=>b.kind==='BAIZER 200'&&b.amount===20)&&baizerPickups.some(b=>b.kind==='BAIZER 400'&&b.amount===40));
   for(const b of baizerPickups){
@@ -1479,32 +1480,42 @@ for (const [mode,counts] of Object.entries(modes)) {
   const ev=[],m=duel('DF40 II','unlimited',2,ev),[p,e]=arrange(m,0,80,-80);
   assert.equal(p.shield,25,'Base shield must start at 25');
   assert.equal(p.baizerShield,0);
-  const bz200=m.baizers.find(b=>b.amount===20),bz400=m.baizers.find(b=>b.amount===40);
+  const bz200s=m.baizers.filter(b=>b.amount===20),bz400s=m.baizers.filter(b=>b.amount===40);
   // Walk onto BAIZER 200 -> grants 20 purple BAIZER shield
-  p.x=bz200.x;p.z=bz200.z;p.y=0;
+  p.x=bz200s[0].x;p.z=bz200s[0].z;p.y=0;
   m.updateBaizers(h);
-  assert.equal(p.baizerShield,20,'BAIZER 200 must grant 20 purple shield');
-  assert.equal(p.baizerMax,20);
-  assert(bz200.cooldown>20,'Picked up BAIZER 200 must enter cooldown');
-  assert(ev.some(x=>x.type==='baizer'&&x.kind==='BAIZER 200'&&x.amount===20));
-  // Upgrade from 20 -> 40 on BAIZER 400 works!
-  p.x=bz400.x;p.z=bz400.z;
+  assert.equal(p.baizerShield,20,'BAIZER 200 must grant +20 purple shield');
+  assert.equal(p.baizerMax,100);
+  assert(bz200s[0].cooldown>20,'Picked up BAIZER 200 must enter cooldown');
+  assert(ev.some(x=>x.type==='baizer'&&x.kind==='BAIZER 200'&&x.amount===20&&x.total===20));
+  // Stack BAIZER 400 (+40) -> 20 + 40 = 60!
+  p.x=bz400s[0].x;p.z=bz400s[0].z;
   m.updateBaizers(h);
-  assert.equal(p.baizerShield,40,'BAIZER 400 must upgrade purple shield to 40');
-  assert.equal(p.baizerMax,40);
-  // Walking over a fresh BAIZER 200 while holding 40 must NOT downgrade or consume it!
-  const bz200Other=m.baizers.find(b=>b.amount===20&&b.cooldown<=0);
-  p.x=bz200Other.x;p.z=bz200Other.z;
+  assert.equal(p.baizerShield,60,'BAIZER 400 must stack additively (20 + 40 = 60)');
+  // Stack another BAIZER 200 (+20) -> 60 + 20 = 80!
+  p.x=bz200s[1].x;p.z=bz200s[1].z;
   m.updateBaizers(h);
-  assert.equal(p.baizerShield,40,'Higher BAIZER 400 must not be downgraded by BAIZER 200');
-  assert.equal(bz200Other.cooldown,0,'Unused BAIZER 200 must stay on road');
-  // One-time consumable & non-regenerating + damage absorption order (BAIZER -> 25 Shield -> HP)
+  assert.equal(p.baizerShield,80,'Second BAIZER 200 must stack to 80');
+  // Stack another BAIZER 400 (+40) -> capped at 100!
+  const bz400Next=bz400s[1]||bz400s[0];bz400Next.cooldown=0;
+  p.x=bz400Next.x;p.z=bz400Next.z;
+  m.updateBaizers(h);
+  assert.equal(p.baizerShield,100,'BAIZER must cap at 100 max stock');
+  // Walking over a fresh BAIZER while at 100 must NOT consume it!
+  const bzFresh=m.baizers.find(b=>b.cooldown<=0);
+  if(bzFresh){
+   p.x=bzFresh.x;p.z=bzFresh.z;
+   m.updateBaizers(h);
+   assert.equal(p.baizerShield,100);
+   assert.equal(bzFresh.cooldown,0,'Unused BAIZER pickup at 100 cap must stay on road');
+  }
+  // One-time consumable & non-regenerating + damage absorption order (BAIZER 100 -> 25 Shield -> HP)
   const r1=m.damage(p,e,15);
   assert(r1.baizer&&!r1.baizerBreak&&!r1.shield);
-  assert.deepEqual([p.baizerShield,p.shield,p.hp],[25,25,100],'Damage must hit purple BAIZER shield first');
+  assert.deepEqual([p.baizerShield,p.shield,p.hp],[85,25,100],'Damage must hit purple BAIZER shield first');
   forward(m,p,360*15);
-  assert.equal(p.baizerShield,25,'Purple BAIZER shield is one-time consumable and MUST NOT regenerate');
-  const r2=m.damage(p,e,35); // Breaks remaining 25 BAIZER + absorbs 10 from 25 base shield!
+  assert.equal(p.baizerShield,85,'Purple BAIZER shield is one-time consumable and MUST NOT regenerate');
+  const r2=m.damage(p,e,95); // Breaks remaining 85 BAIZER + absorbs 10 from 25 base shield!
   assert(r2.baizer&&r2.baizerBreak&&r2.shield&&!r2.shieldBreak);
   assert.deepEqual([p.baizerShield,p.shield,p.hp],[0,15,100],'Overflow from broken BAIZER must flow into 25 base shield');
   const r3=m.damage(p,e,25); // Breaks remaining 15 base shield + deals 10 HP!
@@ -1516,62 +1527,71 @@ for (const [mode,counts] of Object.entries(modes)) {
   const fxNoBz=movingDetails(m,1.0,true,false);
   assert(fxWithBz.count>fxNoBz.count,'Active purple road BAIZER pickups must render 3D meshes in movingDetails');
  }
- // 12C. 5-Kill Charge Skill System (Max 3 stock), Shaffer (12s enemy-only invisibility w/ visible impact physics) & Recharge Heal (full HP)
+ // 12C. Random Single Assigned Skill (1 per match from shaffer/heal), 5-Kill Charge Skill System (Max 3 stock), Shaffer (12s) & Recharge Heal
  {
-  const ev=[],m=duel('DF40 II','unlimited',2,ev),[p,e]=m.actors;
-  assert.equal(KILLS_PER_SKILL_CHARGE,5);assert.equal(MAX_SKILL_CHARGES,3);assert.equal(SHAFFER_DURATION,12);
-  // Cannot use skills with 0 charges
-  assert(!m.useSkill(p,'shaffer')&&!m.useSkill(p,'heal'));
-  // Accumulate 17 kills while e is at north spawn (keeping south lane free of death-burst smoke!) -> 5->1, 10->2, 15->3 (capped at 3!)
-  for(let k=1;k<=17;k++){
-   if(!e.alive)m.spawn(e);
-   m.damage(e,p,200);
-   if(k===4)assert.equal(p.skillCharges,0);
-   if(k===5)assert.equal(p.skillCharges,1);
-   if(k===10)assert.equal(p.skillCharges,2);
-   if(k===15)assert.equal(p.skillCharges,3);
-   if(k===17)assert.equal(p.skillCharges,3,'Skill charges must cap at 3');
+  assert.deepEqual(SKILL_POOL,['shaffer','heal']);
+  // Verify random single assignment covers both skills across seeds
+  const seenSkills=new Set();
+  for(let seed=1;seed<=40;seed++){
+   const rm=new Match({mode:'1v1',limit:'unlimited',loadout:'SW T',skillSeed:seed});
+   assert(SKILL_POOL.includes(rm.player.assignedSkill),'Every match must randomly assign strictly 1 skill');
+   seenSkills.add(rm.player.assignedSkill);
   }
-  assert.equal(ev.filter(x=>x.type==='skill_charge'&&x.actor===p).length,3);
-  // Skill charges persist across player respawn!
-  m.spawn(p);
-  assert.equal(p.skillCharges,3,'Earned skill charges must persist across respawn');
+  assert.equal(seenSkills.size,2,'Random skill assignment must span both shaffer and heal');
 
-  // Test Recharge Heal: refuses waste at 100 HP, restores full HP when damaged!
-  assert(!m.useSkill(p,'heal'),'Recharge Heal must not waste a charge at 100 HP');
-  assert.equal(p.skillCharges,3);
-  p.hp=23;
-  assert(m.useSkill(p,'heal'),'Recharge Heal must activate when HP < 100');
-  assert.equal(p.hp,100,'Recharge Heal must restore HP to 100');
-  assert.equal(p.skillCharges,2,'Recharge Heal must spend 1 charge');
+  // Test Heal-assigned match: strictly allows heal and rejects shaffer!
+  const evH=[],mH=new Match({mode:'1v1',limit:'unlimited',loadout:'DF40 II',playerSkill:'heal'},x=>evH.push(x)),[pH,eH]=mH.actors;
+  assert.equal(pH.assignedSkill,'heal');
+  assert.equal(KILLS_PER_SKILL_CHARGE,5);assert.equal(MAX_SKILL_CHARGES,3);assert.equal(SHAFFER_DURATION,12);
+  assert(!mH.useSkill(pH,'heal')&&!mH.useSkill(pH,'shaffer'));
+  for(let k=1;k<=17;k++){
+   if(!eH.alive)mH.spawn(eH);
+   mH.damage(eH,pH,200);
+   if(k===4)assert.equal(pH.skillCharges,0);
+   if(k===5)assert.equal(pH.skillCharges,1);
+   if(k===10)assert.equal(pH.skillCharges,2);
+   if(k===15)assert.equal(pH.skillCharges,3);
+   if(k===17)assert.equal(pH.skillCharges,3,'Skill charges must cap at 3');
+  }
+  assert.equal(evH.filter(x=>x.type==='skill_charge'&&x.actor===pH).length,3);
+  mH.spawn(pH);
+  assert.equal(pH.skillCharges,3,'Earned skill charges must persist across respawn');
+  assert(!mH.useSkill(pH,'shaffer'),'Player assigned heal MUST NOT be able to activate shaffer');
+  assert(!mH.useSkill(pH,'heal'),'Recharge Heal must not waste a charge at 100 HP');
+  assert.equal(pH.skillCharges,3);
+  pH.hp=23;
+  assert(mH.useSkill(pH,'heal'),'Recharge Heal must activate when HP < 100');
+  assert.equal(pH.hp,100,'Recharge Heal must restore HP to 100');
+  assert.equal(pH.skillCharges,2,'Recharge Heal must spend 1 charge');
 
-  // Test Shaffer: 12s complete invisibility to enemies (body, weapon, fired bullets), while impacts/sparks/damage still work!
+  // Test Shaffer-assigned match: strictly allows shaffer and rejects heal!
+  const ev=[],m=new Match({mode:'1v1',limit:'unlimited',loadout:'DF40 II',playerSkill:'shaffer'},x=>ev.push(x)),[p,e]=m.actors;
+  assert.equal(p.assignedSkill,'shaffer');
+  for(let k=0;k<10;k++){if(!e.alive)m.spawn(e);m.damage(e,p,200);}
+  assert.equal(p.skillCharges,2);
+  p.hp=40;
+  assert(!m.useSkill(p,'heal'),'Player assigned shaffer MUST NOT be able to activate heal');
+  p.hp=100;
   if(!e.alive)m.spawn(e);
   Object.assign(p,{x:2,y:0,z:85,yaw:0,pitch:0,alive:true,vx:0,vz:0});
   Object.assign(e,{x:2,y:0,z:73,yaw:Math.PI,pitch:0,alive:true,vx:0,vz:0});
-  // First verify enemy AI CAN see uncloaked player face-to-face
   const bE=m.nv.brains.get(e.id);
   for(let i=0;i<25;i++){m.time+=0.05;m.nv.perceive(e,bE)}
   assert(bE.contacts.get(p.id)?.seen,'Enemy AI should see uncloaked player face-to-face before Shaffer');
-  // Activate Shaffer!
   assert(m.useSkill(p,'shaffer'),'Shaffer must activate with available charge');
   assert.equal(p.skillCharges,1,'Shaffer must spend 1 charge');
   assert.equal(p.shafferTimer,12,'Shaffer duration must be 12 seconds');
   assert(!bE.contacts.has(p.id)&&!bE.seen,'Activating Shaffer must immediately purge enemy AI visual lock');
-  // Cannot double-stack Shaffer while already active
   assert(!m.useSkill(p,'shaffer'),'Cannot stack Shaffer while already active');
-  // Enemy AI remains completely blind even face-to-face at 12m while player fires cloaked bullets!
   m.shots.length=0;p.cooldown=0;p.mag=100;
   assert(m.trigger(p),'Cloaked player can still fire normally');
   assert(m.shots.length===4&&m.shots.every(s=>s.shafferCloaked===true),'All shots fired during Shaffer must be marked shafferCloaked');
-  // Verify enemy viewer hides cloaked shots/casings/muzzle in movingDetails, while friendly viewer still sees them!
   const friendlyFx=movingDetails(m,m.time,false,false);
   const origPlayer=m.player;
-  m.player=e; // Switch camera/viewer perspective to enemy team!
+  m.player=e;
   const enemyFx=movingDetails(m,m.time,false,false);
   m.player=origPlayer;
   assert(friendlyFx.count>enemyFx.count,'Enemy renderer must hide Shaffer-cloaked bullets/muzzle/casings while self/allies still see them');
-  // Advance bullets into the enemy -> bullet hit sparks & real damage STILL occur visibly!
   const eStartHp=e.hp+e.shield;
   for(let i=0;i<60;i++){
    m.time+=h;
@@ -1582,20 +1602,18 @@ for (const [mode,counts] of Object.entries(modes)) {
   assert((e.hp+e.shield)<eStartHp,'Cloaked Shaffer shots must still deal real ballistic damage on impact');
   assert(m.effects.some(fx=>fx.target===true&&!fx.shafferCloaked),'Bullet impact sparks/shield ripples MUST remain visible to everyone');
   assert(!bE.contacts.get(p.id)?.seen&&bE.visibleEnemies.every(v=>v.id!==p.id),'Enemy AI MUST NOT see cloaked player even while getting hit');
-  // Verify auto-aim also cannot lock a Shaffer-cloaked enemy!
   e.shafferTimer=8;
   forward(m,p,90);
   assert(!p.df40.locked,'Auto-Aim MUST NOT lock onto a Shaffer-cloaked enemy');
   e.shafferTimer=0;
-  // Verify Shaffer expires cleanly after 12.0s so enemy can see player again
   forward(m,p,360*12);
   assert.equal(p.shafferTimer,0,'Shaffer must expire cleanly after 12 seconds');
   for(let i=0;i<25;i++){m.time+=0.05;m.nv.perceive(e,bE)}
   assert(bE.contacts.get(p.id)?.seen,'Enemy AI must be able to perceive player again once Shaffer expires');
-  console.log('Auto-Reload, Shield 25, BAIZER 200/400 & Skills (Shaffer 12s / Recharge Heal) OK:',{baseShield:BASE_SHIELD_MAX,baizerPickups:baizerPickups.length,maxCharges:MAX_SKILL_CHARGES,shafferSec:SHAFFER_DURATION});
+  console.log('Auto-Reload, Shield 25, BAIZER 100 Stack & Random Single Skill (Shaffer 12s / Recharge Heal) OK:',{baseShield:BASE_SHIELD_MAX,baizerMax:BAIZER_MAX_STACK,baizerPickups:baizerPickups.length,maxCharges:MAX_SKILL_CHARGES,shafferSec:SHAFFER_DURATION});
  }
 }
-console.log('360Hz sim, weapon specs (DF1 OUT 95-mag 2x rate, MS10, RD20/30/40, DF40 II 350-mag 4-scatter rate-260 stock-500 2/s ARV1.3/AA1.3/AA1.4), Auto-Reload, Shield 25, BAIZER 200/400, Skills (Shaffer 12s / Recharge Heal), FluxGI 1.0, SchlierenOptics 1.0, BallisticCore-X, EchoPulse 1.0, NV-Synapse 1.0, AeroVortex 1.0, ThermoFlux 1.0, SpectraField 1.0, ResonanceCore 1.0, ChronoTrace 1.0, FermatCore 1.0, Lightweight Mode LOD, 16-joint sculpted rig (uExpr IK gestures & cervical head-look), KHDR, Shadow Flame 1.0 Flash/Pro, Sound Engin 2.0 (300Hz-Class + Klatt Vocal DSP), NV2.6 Force Embodied Squad-Force AI (NV2.5 humain / NV 2.4 Manusia / NV2.3 HUMAN compat), NV2.1 Spy Engine, and all matches passed.');
+console.log('360Hz sim, weapon specs (DF1 OUT 95-mag 2x rate, MS10, RD20/30/40, DF40 II 350-mag 4-scatter rate-260 stock-500 2/s ARV1.3/AA1.3/AA1.4), Auto-Aim 1.5 Scherp (Lab-exclusive), Lab Mode 10-Gen AI Arena, MagnusAero 1.0, KineticFlow 1.0, QuantumTick 1.0, Auto-Reload, Shield 25, BAIZER 100 Stack, Random Single Skill, FluxGI 1.0, SchlierenOptics 1.0, BallisticCore-X, EchoPulse 1.0, NV-Synapse 1.0, AeroVortex 1.0, ThermoFlux 1.0, SpectraField 1.0, ResonanceCore 1.0, ChronoTrace 1.0, FermatCore 1.0, Lightweight Mode LOD, 16-joint sculpted rig, KHDR, Shadow Flame 1.0 Flash/Pro, Sound Engin 2.0, NV2.6 Force, NV2.1 Spy, and all matches passed.');
 
 
 

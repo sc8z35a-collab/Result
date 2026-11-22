@@ -371,10 +371,30 @@ export class SoftwareRenderer {
         const oy = y, oz = z;
         const c = transform?.pose ? clamp(transform.pose.crouch || 0, 0, 1) : 0;
         if (gait && boneId >= 9 && boneId <= 14) {
-          const s = boneId >= 12 ? 1 : -1;
-          const leg = clamp((.90 - oy) / .45, 0, 1) * s, gs = gait * (1 - .52 * c);
-          z += leg * gs * .26;
-          y += Math.abs(leg) * Math.max(0, gs * s) * .09;
+          const isR = boneId >= 12;
+          const ph = gait.phase + (isR ? Math.PI : 0);
+          const amt = gait.amt * (1 - .55 * c);
+          if (amt > .005) {
+            const sp = gait.sprint;
+            const cp = Math.cos(ph);
+            const hipA = (cp >= 0 ? cp * (.34 + .20 * sp) : cp * (.26 + .16 * sp)) * amt;
+            const swingB = Math.pow(.5 + .5 * Math.cos(ph - 4.18), 2.2);
+            const kneeA = -(0.08 + (.72 + .52 * sp) * swingB) * amt;
+            const ch = Math.cos(hipA), sh = Math.sin(hipA);
+            if (oy < .50) {
+              const ky = .50, kz = .006;
+              const ly = y - ky, lz = z - kz;
+              const ck = Math.cos(kneeA), sk = Math.sin(kneeA);
+              const ny = ky + ly * ck - lz * sk, nz = kz + ly * sk + lz * ck;
+              const hy = ny - .895, hz = nz - .012;
+              y = .895 + hy * ch - hz * sh;
+              z = .012 + hy * sh + hz * ch;
+            } else {
+              const hy = y - .895, hz = z - .012;
+              y = .895 + hy * ch - hz * sh;
+              z = .012 + hy * sh + hz * ch;
+            }
+          }
         }
         if (transform?.pose) {
           const p = transform.pose, upper = clamp((oy - .38) / 1.04, 0, 1);
@@ -415,15 +435,6 @@ export class SoftwareRenderer {
               const hx = x, hz = z + .008;
               x = hx * ch - hz * sh;
               z = -.008 + hx * sh + hz * ch;
-            }
-            if ((boneId === 5 || boneId === 6) && ex.gesture > 0 && ex.gestureBlend > .05) {
-              const gb = ex.gestureBlend;
-              if (ex.gesture === 1) { y += .22 * gb; x -= .14 * gb; }
-              else if (ex.gesture === 3) { z -= .18 * gb; x -= .10 * gb; y += .08 * gb; }
-            }
-            if (ex.gesture === -1 && ex.gestureBlend > .05 && oy > .85) {
-              z += .08 * ex.gestureBlend;
-              y += .02 * ex.gestureBlend;
             }
           }
           if (p.hitRecoil > .01) {
@@ -496,19 +507,27 @@ export class SoftwareRenderer {
     this.background(time);
     this.depth.fill(0);
     this.mesh(activeTerrain);
+    const spectating = !!match?.spectating;
+    const fpActor = view.firstPerson ? (view.spectateActor || match?.player || null) : null;
+    const viewerTeam = (view.spectateActor || match?.player)?.team ?? 0;
     if (match) {
-      const viewerTeam = match.player?.team ?? 0;
       for (const a of match.actors) {
-        if (a.human || !a.alive)continue;
-        if (a.team !== viewerTeam && (a.shafferTimer || 0) > 0) continue;
+        if (!a.alive || a === fpActor) continue;
+        if (!spectating && a.team !== viewerTeam && (a.shafferTimer || 0) > 0) continue;
         const cy = Math.cos(a.yaw), sy = Math.sin(a.yaw);
-        this.mesh(this.actorMesh(a, lite), {pose: a, p: [a.x, a.y, a.z], r: [cy, 0, sy], u: [0, 1, 0], b: [-sy, 0, cy]}, Math.sin(a.stride * 2.75) * Math.min(1, Math.hypot(a.vx, a.vz) / 4))
+        this.mesh(this.actorMesh(a, lite), {pose: a, p: [a.x, a.y, a.z], r: [cy, 0, sy], u: [0, 1, 0], b: [-sy, 0, cy]}, {phase: a.stride * 1.92, amt: Math.min(1, Math.hypot(a.vx, a.vz) / 4.2), sprint: a.sprintAmt || 0})
       }
     }
-    const deathTrace = (this.config?.chronoTrace !== false && match?.player && !match.player.alive) ? (match.chronoTrace?.lastPlayerDeathTrace || null) : null;
-    this.mesh(chunk(movingDetails(match, time, extra, lite, {showChrono: !!view.chrono && this.config?.chronoTrace !== false, deathTrace})));
-    if (match?.player.alive && view.firstPerson) {
-      const a = match.player,
+    const deathTrace = (!spectating && this.config?.chronoTrace !== false && match?.player && !match.player.alive) ? (match.chronoTrace?.lastPlayerDeathTrace || null) : null;
+    this.mesh(chunk(movingDetails(match, time, extra, lite, {
+      showChrono: !!view.chrono && this.config?.chronoTrace !== false,
+      deathTrace,
+      spectating,
+      viewerActor: view.spectateActor || match?.player || null,
+      fpActorId: fpActor ? fpActor.id : -1
+    })));
+    if (fpActor?.alive && view.firstPerson) {
+      const a = fpActor,
         m = view.motion || {},
         prog = a.reload > 0 ? clamp(1 - a.reload / weapons[a.gun].reload, 0, 1) : 0;
       let relDrop = 0, relX = 0, relZ = 0;

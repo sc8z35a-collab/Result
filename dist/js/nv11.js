@@ -150,8 +150,9 @@ export class NV11 extends NV1 {
   tick(dt) {
     const t = this.match.time;
     for (const a of this.match.actors) {
-      if (a.human || !a.alive)continue;
+      if (a.human || !a.alive || (this.teamFilter != null && a.team !== this.teamFilter))continue;
       const b = this.brains.get(a.id);
+      if (!b) continue;
       if (t >= b.motionAt) {
         b.pose = this.choosePose(a, b);
         b.motionAt = t + .095 + b.rng() * .05
@@ -172,12 +173,13 @@ export class NV11 extends NV1 {
       }
       postureStep(a, dt, p.crouch && a.onGround, p.lean, p.ads);
       a.paceFactor = b.vault ? 1.13 : 1 - a.crouch * .40 - a.aimPose * .12;
-      vertical(a, dt, floorAt)
+      vertical(a, dt, floorAt, this.match.gravityScale || 1)
     }
     super.tick(dt);
     for (const a of this.match.actors) {
-      if (a.human || !a.alive)continue;
+      if (a.human || !a.alive || (this.teamFilter != null && a.team !== this.teamFilter))continue;
       const b = this.brains.get(a.id);
+      if (!b) continue;
       if (b.lookUntil > t && t - b.seenAt > .46)a.yaw += clamp(angleDiff(b.lookYaw, a.yaw), -dt * .95, dt * .95)
     }
   }

@@ -764,6 +764,7 @@ const DODGE_DIRS6 = [0, 0.55, -0.55, 1.05, -1.05, Math.PI];
 
 function normalizeAiTier(model) {
   if (model === 'classic') return 'classic';
+  if (model === 'nv21') return 'nv21';
   if (model === 'nv23') return 'nv23';
   if (model === 'manusia' || model === 'nv24') return 'manusia';
   if (model === 'humain' || model === 'nv25') return 'humain';
@@ -777,10 +778,12 @@ export class NV2 extends NV13Pro {
     this.teamAiTier = tm
       ? [normalizeAiTier(tm[0]), normalizeAiTier(tm[1])]
       : [normalizeAiTier(match?.aiModel), normalizeAiTier(match?.aiModel)];
-    this.teamHumanMode = [this.teamAiTier[0] !== 'classic', this.teamAiTier[1] !== 'classic'];
+    this.teamHumanMode = [this.teamAiTier[0] !== 'classic' && this.teamAiTier[0] !== 'nv21', this.teamAiTier[1] !== 'classic' && this.teamAiTier[1] !== 'nv21'];
     this.humanMode = this.teamHumanMode[0] || this.teamHumanMode[1];
     this.version = match?.aiModel === 'classic'
       ? 'NV2'
+      : match?.aiModel === 'nv21'
+        ? 'NV2.1'
       : match?.aiModel === 'nv23'
         ? NV23_HUMAN_VERSION
         : (match?.aiModel === 'manusia' || match?.aiModel === 'nv24')
@@ -912,9 +915,9 @@ export class NV2 extends NV13Pro {
     super.attach(actor);
     const b = this.brains.get(actor.id);
     if (b) {
-      const isNv21 = actor.aiVersion === 'NV2.1' || !!actor.isSpy;
       const tier = this.getActorAiTier(actor);
-      const actorHuman = tier !== 'classic';
+      const isNv21 = actor.aiVersion === 'NV2.1' || !!actor.isSpy || tier === 'nv21';
+      const actorHuman = tier !== 'classic' && tier !== 'nv21';
       const isForce = tier === 'force';
       const isHumain = tier === 'humain' || isForce;
       const isManusia = tier === 'manusia' || isHumain;
@@ -2377,6 +2380,21 @@ export class NV2 extends NV13Pro {
       }
     }
 
+    // 1b. KineticFlow 1.0 Fair-Play Opportunistic BAIZER Stack Pickup (when safe & below 80 purple shield)
+    if (!b.seen && t - b.underFireAt > 2.2 && a.hp > 55 && (a.baizerShield || 0) < 80 && this.match.kineticFlow) {
+      const bz = this.match.kineticFlow.bestBaizerPickup(a, this.match, 18);
+      if (bz) {
+        const bzPath = this.nav.route([a.x, a.z], [bz.x, bz.z], this.tacticalWeights(a, b));
+        if (bzPath.length) {
+          b.path = bzPath;
+          b.state = 'BAIZER確保';
+          b.planAt = t + 0.55;
+          b.prevState = b.state;
+          return;
+        }
+      }
+    }
+
     // 2. Unconstrained A* budget for full-precision NV2 routing
     this.astarUsedThisTick = -8;
     super.pickGoal(a, b);
@@ -2600,7 +2618,7 @@ export class NV2 extends NV13Pro {
         st.lookaheadAt = t + 0.25 + ti * 0.03;
       }
       if (t >= st.trainAt) {
-        if (this.neural.trainMiniBatch(8, 0.0028)) {
+        if (this.match.lab?.aiLearning !== false && this.neural.trainMiniBatch(8, 0.0028)) {
           this.metrics.neuralUpdates = this.neural.updates;
         }
         st.trainAt = t + 1.35 + ti * 0.2;
@@ -2628,12 +2646,22 @@ export class NV2 extends NV13Pro {
     const killsToWin = Math.min(rem0, rem1);
 
     for (const a of this.match.actors) {
-      if (!a.alive || a.human) continue;
+      if (!a.alive || a.human || (this.teamFilter != null && a.team !== this.teamFilter)) continue;
       const b = this.brains.get(a.id);
+      if (!b) continue;
       const cog = this.teams[a.team];
       const isSpy = !!b.spy;
       const allies = teamAllies[a.team];
       const enemyCount = teamAllies[1 - a.team].length;
+
+      // Optional Lab NPC assigned single-skill activation
+      if (this.match.lab?.npcSkills && (a.skillCharges || 0) > 0 && a.assignedSkill) {
+        if (a.assignedSkill === 'heal' && a.hp < (a.maxHp || 100) * 0.55) {
+          this.match.useSkill(a, 'heal');
+        } else if (a.assignedSkill === 'shaffer' && (a.shafferTimer || 0) <= 0 && (b.seen || t - b.underFireAt < 1.2)) {
+          this.match.useSkill(a, 'shaffer');
+        }
+      }
 
       if (t - b.damageClock > 1.45) b.recentDamage = Math.max(0, b.recentDamage - dt * 20);
       if (b.mind) b.mind.step(a, dt, t, b.seen, {aliveAllies: allies.length, aliveEnemies: enemyCount, killsToWin, metrics: this.metrics});
@@ -2709,7 +2737,7 @@ export class NV2 extends NV13Pro {
 
       const wasAir = !a.onGround;
       const preVy = a.vy;
-      vertical(a, dt, floorAt);
+      vertical(a, dt, floorAt, this.match.gravityScale || 1);
       if (wasAir && a.onGround && preVy < -1.2) {
         a.landCompress = clamp(Math.abs(preVy) / 7.5, 0.25, 1.0);
       }
@@ -2916,6 +2944,10 @@ export class NV2 extends NV13Pro {
         || (b.tom && t < (b.tom.postKillCheckUntil || -10))
       );
 
+      const aa = a.aa;
+      const aaTracking = !!(aa?.locked && aa.level !== 'off' && aa.level !== '1.1');
+      const scherpFireReady = !!(aa?.locked && aa.level === '1.5' && (aa.solveMode === 'direct' || aa.solveMode === 'pen' || aa.solveMode === 'bank'));
+      const savedYawAA = a.yaw, savedPitchAA = a.pitch;
       const aimRes = b.humanAim.step(a, dt, t, {
         seenTarget: (b.seen && b.target) ? b.target : null,
         wpn,
@@ -2935,6 +2967,10 @@ export class NV2 extends NV13Pro {
         syncExecuting: b.state === '同期ダブルスイング' || b.state === 'プレイヤー命令突入',
         baitOverwatch: b.state === 'ベイト連携待機' || b.state === 'プレイヤー罠待機'
       });
+      if (aaTracking) {
+        a.yaw = savedYawAA;
+        a.pitch = savedPitchAA;
+      }
       b.lastYawRate = aimRes.yawRate ?? Math.abs(b.humanAim.velYaw || 0);
       b.lastQuietEyeShot = !!aimRes.quietEyeShot;
 
@@ -2945,35 +2981,40 @@ export class NV2 extends NV13Pro {
 
       // Tactical Reload Discipline + NV 2.4 Manusia Post-Kill Habitual Reload!
       const habitReload = !!(b.mind && t >= b.mind.postKillReloadAt && t < b.mind.postKillReloadAt + 0.55 && !b.seen && a.mag < wpn.capacity * 0.68);
-      if (a.reload <= 0 && a.stock > 0 && (a.mag === 0 || habitReload || (!b.seen && a.mag < wpn.capacity * 0.48 && b.state !== 'リロード狩り' && b.state !== '一斉突入' && b.state !== 'トレード突入' && b.state !== '裏どり急襲'))) {
+      if (a.reload <= 0 && a.stock > 0 && (a.mag === 0 || habitReload || (!b.seen && !scherpFireReady && a.mag < wpn.capacity * 0.48 && b.state !== 'リロード狩り' && b.state !== '一斉突入' && b.state !== 'トレード突入' && b.state !== '裏どり急襲'))) {
         if (this.match.reload(a) && habitReload && b.mind) {
           b.mind.postKillReloadAt = -10;
           this.metrics.humanHabitReloads++;
         }
       }
 
-      // Human Firing Discipline (Startle, Saccade/Submove, Quiet Eye, Breath-Hold, ARV Wait, ToM Trigger Discipline & Spy Stealth!)
+      // Human Firing Discipline + Lab Auto-Aim / Scherp 1.5 Cooperative Fire
       const canShootSeen = b.seen && b.target && b.peekPhase !== 'bait' && !(isSpy && b.spy.holdFire);
-      const holdingTrigger = !suppressMode && canShootSeen && b.tom
+      const holdingTrigger = !scherpFireReady && !suppressMode && canShootSeen && b.tom
         ? b.tom.evaluateTriggerDiscipline(a, b.target, aimRes, t, b.mind, this.metrics)
         : false;
-      if ((canShootSeen || suppressMode) && !holdingTrigger && aimRes.readyToFire && a.mag > 0 && a.reload <= 0 && a.cooldown <= 0 && !a.burstLeft && t >= b.burstPauseUntil) {
-        const d = aimRes.dist;
+      const fireGate = scherpFireReady || ((canShootSeen || suppressMode) && !holdingTrigger && aimRes.readyToFire);
+      if (fireGate && a.mag > 0 && a.reload <= 0 && a.cooldown <= 0 && !a.burstLeft && t >= b.burstPauseUntil) {
+        const d = scherpFireReady ? (aa.targetDist || 25) : aimRes.dist;
         const tol = (fermatBank ? 0.055 : physicsAction ? 0.095 : suppressMode ? 0.14 : (isSpy ? 0.048 : 0.060) + (d < 14 ? 0.034 : 0)) * (1 + b.spread * 0.20);
         const maxEngageD = Math.max(72, band.max * 1.42);
-        if (aimRes.alignPerceived < tol && d < maxEngageD) {
-          if (!suppressMode && d > 18 && (a.gun === 'SW T' || a.gun === 'MS10' || a.gun === 'SRA') && Math.hypot(a.vx, a.vz) > 3.1 && t > b.counterStrafeUntil + 0.36) {
+        if (scherpFireReady || ((aaTracking || aimRes.alignPerceived < tol) && d < maxEngageD)) {
+          if (!scherpFireReady && !suppressMode && d > 18 && (a.gun === 'SW T' || a.gun === 'MS10' || a.gun === 'SRA') && Math.hypot(a.vx, a.vz) > 3.1 && t > b.counterStrafeUntil + 0.36) {
             b.counterStrafeUntil = t + 0.058;
             this.metrics.counterStrafes++;
           }
           const saveY = a.yaw, saveP = a.pitch;
-          const ms = aimRes.microSpread * (fermatBank ? 0.36 : counterStrafing ? 0.62 : 1.0);
-          a.yaw += (b.rng() - 0.5) * ms;
-          a.pitch = clamp(a.pitch + (b.rng() - 0.5) * ms * 0.65, -1.2, 1.2);
-          if (fermatBank) a._fermatAiShot = true;
+          const ms = scherpFireReady ? 0 : aaTracking ? aimRes.microSpread * 0.18 : aimRes.microSpread * (fermatBank ? 0.36 : counterStrafing ? 0.62 : 1.0);
+          if (ms > 0) {
+            a.yaw += (b.rng() - 0.5) * ms;
+            a.pitch = clamp(a.pitch + (b.rng() - 0.5) * ms * 0.65, -1.2, 1.2);
+          }
+          if (fermatBank || (scherpFireReady && aa.solveMode === 'bank')) a._fermatAiShot = true;
           if (this.match.trigger(a)) {
             b.burstCount++;
-            if (fermatBank) {
+            if (scherpFireReady) {
+              b.burstPauseUntil = t;
+            } else if (fermatBank) {
               if (this.match.fermat) this.match.fermat.stats.aiBankShots++;
               if (physicsAction && !physicsAction.counted) {
                 physicsAction.counted = true;
@@ -3017,7 +3058,7 @@ export class NV2 extends NV13Pro {
           a.yaw = saveY;
           a.pitch = saveP;
         }
-      } else if (!canShootSeen && !suppressMode) {
+      } else if (!canShootSeen && !suppressMode && !scherpFireReady) {
         b.burstCount = 0;
       }
     }
