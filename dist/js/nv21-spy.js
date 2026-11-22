@@ -865,7 +865,7 @@ export function computeSpyDodge(nv, a, b, spyState) {
 
   for (let i = 0; i < shots.length; i++) {
     const s = shots[i];
-    if (s.team === a.team) continue;
+    if (s.team === a.team || s.shafferCloaked) continue;
     const rx = ax - s.p[0], ry = ay - s.p[1], rz = az - s.p[2];
     const d2 = rx * rx + ry * ry + rz * rz;
     if (d2 > 1936 || d2 < 0.20) continue; // >44m or already passed

@@ -301,7 +301,7 @@ export class HumainDecisionDDM_V25 {
    *     heavy tag, or threat appraisal flips evidence -> clean mid-step abort back to cover!)
    */
   step(actor, b, dt, t, mind, tom, metrics = null) {
-    const hpRatio = clamp((actor.hp + (actor.shield || 0) * 0.8) / 110, 0, 1);
+    const hpRatio = clamp((actor.hp + (actor.shield || 0) * 0.8 + (actor.baizerShield || 0) * 0.6) / 125, 0, 1);
     const visCount = b.visibleEnemies ? b.visibleEnemies.length : (b.seen ? 1 : 0);
     const underFire = t - (b.underFireAt || -10) < 0.85;
     const challenge = mind?.challengeBalance ?? 0;
@@ -509,7 +509,7 @@ export class HumainAffectivePsycheV25 extends ManusiaSomaPsycheV24 {
     super.step(actor, dt, t, seenEnemy, ctx);
 
     // 1. Update Blascovich Cognitive Appraisal (Resources vs Demands)
-    const resources = clamp((actor.hp + (actor.shield || 0)) / 110, 0, 1) * 0.45
+    const resources = clamp((actor.hp + (actor.shield || 0) + (actor.baizerShield || 0) * 0.6) / 125, 0, 1) * 0.45
       + (this.cohesion || 0.55) * 0.25 + this.hotHand * 0.22 + (ctx?.aliveAllies || 1) * 0.08;
     const demands = this.stress * 0.48 + (ctx?.aliveEnemies || 1) * 0.14
       + (this.deathStreak >= 2 ? 0.22 : 0) + (seenEnemy ? 0.16 : 0);

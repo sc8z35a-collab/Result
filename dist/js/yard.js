@@ -71,6 +71,14 @@ export const tankers = [
   {id: 1, label: 'CENTRAL TANKER', x: -6.5, z: -5.0, w: 2.4, h: 2.85, d: 5.6, radius: 4.6, facing: 1},
   {id: 2, label: 'NORTH TANKER', x: 12.0, z: -58.0, w: 2.4, h: 2.85, d: 5.6, radius: 4.6, facing: 1}
 ];
+export const baizerPickups = [
+  {id: 0, kind: 'BAIZER 200', amount: 20, x: -1.5, z: 68.0},
+  {id: 1, kind: 'BAIZER 400', amount: 40, x: 4.2, z: 38.0},
+  {id: 2, kind: 'BAIZER 200', amount: 20, x: -10.0, z: 20.0},
+  {id: 3, kind: 'BAIZER 400', amount: 40, x: 1.5, z: -2.0},
+  {id: 4, kind: 'BAIZER 200', amount: 20, x: 11.0, z: -35.0},
+  {id: 5, kind: 'BAIZER 400', amount: 40, x: -4.5, z: -66.0}
+];
 export const teams = [[[1, 84], [-16, 85], [6, 70], [-18, 56], [19, 61], [-2, 89]], [[0, -84], [18, -85], [-17, -73], [18, -61], [-3, -77], [4, -91]]];
 export const obstacles = [];
 function obstacle(x, z, w, d, y0, y1, mat = 'steel') {

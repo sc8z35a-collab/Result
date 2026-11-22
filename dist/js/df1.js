@@ -75,12 +75,12 @@ export function senseFocus(match, a, dt) {
   }
   const current = match.actors[d.focusId];
   const usable = (e, cone) => {
-    if (!e?.alive || e.team === a.team) return Infinity;
+    if (!e?.alive || e.team === a.team || (e.shafferTimer || 0) > 0) return Infinity;
     const s = aimAt(a, e);
     const sep = Math.hypot(angleDiff(s.yaw, a.yaw) * Math.cos(a.pitch), s.pitch - a.pitch);
     return s.range <= 104 && sep < cone && canSee(match, a, s.origin, s.raw) ? sep : Infinity;
   };
-  if (current && (!current.alive || current.spawnId !== d.focusSpawnId)) {
+  if (current && (!current.alive || current.spawnId !== d.focusSpawnId || (current.shafferTimer || 0) > 0)) {
     d.focusId = -1;
     d.focus = 0;
     d.locked = false;
@@ -119,7 +119,7 @@ export function senseFocus(match, a, dt) {
 export function assist(match, a) {
   if (a.human && match.autoAim === false) return null;
   const d = a.df, e = match.actors[d.focusId];
-  if (!d.locked || !e?.alive || e.team === a.team || e.spawnId !== d.focusSpawnId) return null;
+  if (!d.locked || !e?.alive || e.team === a.team || e.spawnId !== d.focusSpawnId || (e.shafferTimer || 0) > 0) return null;
   const raw = aimAt(a, e);
   const s = aimAt(a, e, true), yaw = angleDiff(s.yaw, a.yaw), pitch = s.pitch - a.pitch, ang = Math.hypot(yaw, pitch);
   const separation = Math.hypot(angleDiff(raw.yaw, a.yaw) * Math.cos(a.pitch), raw.pitch - a.pitch);
@@ -193,7 +193,7 @@ export function steerGuidedShot(match, s, dt) {
     return;
   }
   const e = match.actors[s.homingTargetId];
-  if (!e?.alive || e.team === s.team || (s.homingSpawnId !== undefined && e.spawnId !== s.homingSpawnId)) {
+  if (!e?.alive || e.team === s.team || (e.shafferTimer || 0) > 0 || (s.homingSpawnId !== undefined && e.spawnId !== s.homingSpawnId)) {
     s.homingBudget = 0;
     return
   }

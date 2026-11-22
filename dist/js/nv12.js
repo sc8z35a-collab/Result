@@ -109,7 +109,7 @@ export class NV12 extends NV11 {
     if (t - b.underFireAt < .22) return;
     const center = targetPoint(a);
     for (const s of this.match.shots) {
-      if (s.team === a.team || s.materialPass) continue;
+      if (s.team === a.team || s.materialPass || s.shafferCloaked) continue;
       const rx = center[0] - s.p[0], ry = center[1] - s.p[1], rz = center[2] - s.p[2];
       const forwardDist = rx * s.dir[0] + ry * s.dir[1] + rz * s.dir[2];
       if (forwardDist <= 0 || forwardDist > 26) continue;
@@ -149,8 +149,8 @@ export class NV12 extends NV11 {
     }
 
     for (const e of match.actors) {
-      if (!e.alive || e.team === a.team) {
-        if (e.team !== a.team && !e.alive) {
+      if (!e.alive || e.team === a.team || (e.shafferTimer || 0) > 0) {
+        if (e.team !== a.team && (!e.alive || (e.shafferTimer || 0) > 0)) {
           b.contacts.delete(e.id);
           teamIntel.delete(e.id);
         }
@@ -172,7 +172,7 @@ export class NV12 extends NV11 {
 
       const enemyToUs = Math.atan2(a.x - e.x, -(a.z - e.z));
       const aimingAtUs = Math.max(0, Math.cos(angleDiff(e.yaw, enemyToUs)));
-      const lowHpBonus = clamp((110 - (e.hp + e.shield)) / 110, 0, 1) * .044;
+      const lowHpBonus = clamp((125 - (e.hp + e.shield)) / 125, 0, 1) * .044;
       const gunThreat = e.gun === 'MS10' || e.gun === 'DF1 OUT' ? .012 : .004;
       let squadFocus = 0;
       for (const mate of match.actors) {

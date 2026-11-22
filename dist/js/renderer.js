@@ -298,15 +298,23 @@ export class Renderer {
         : [1.8, 1.2, .52];
       list.push({p: mp, i: f * 3.8, c: col, pri: 100});
     }
+    const viewerTeam = match.player?.team ?? 0;
     for (const e of match.effects) {
+      if (e.kind === 'muzzle' && e.shafferCloaked && e.team !== viewerTeam) continue;
+      if (e.kind === 'shaffer' && e.team !== viewerTeam) continue;
       const d = Math.hypot(e.p[0] - eye[0], e.p[1] - eye[1], e.p[2] - eye[2]);
       if (d > 48) continue;
       const frac = clamp(e.life / (e.max || .2), 0, 1);
       if (e.kind === 'kill') list.push({p: e.p, i: frac * 6.4, c: [2.0, 1.35, .52], pri: 94 - d});
+      else if (e.kind === 'baizerBreak') list.push({p: e.p, i: frac * 5.8, c: [1.55, .45, 2.35], pri: 89 - d});
       else if (e.kind === 'break') list.push({p: e.p, i: frac * 5.6, c: [.42, 1.85, 2.15], pri: 88 - d});
+      else if (e.kind === 'baizerPickup') list.push({p: e.p, i: frac * 5.2, c: [1.45, .42, 2.25], pri: 85 - d});
       else if (e.kind === 'tanker') list.push({p: e.p, i: frac * 6.0, c: [.55, 1.8, 1.55], pri: 86 - d});
+      else if (e.kind === 'heal') list.push({p: e.p, i: frac * 4.8, c: [.42, 2.15, 1.35], pri: 84 - d});
+      else if (e.kind === 'shaffer') list.push({p: e.p, i: frac * 4.2, c: [.68, .92, 2.15], pri: 82 - d});
       else if (e.kind === 'ricochet' || e.kind === 'penetrate') list.push({p: e.p, i: frac * 4.2, c: [1.98, 1.38, .48], pri: 76 - d});
       else if (e.kind === 'muzzle' && !e.human) list.push({p: e.p, i: frac * 3.4, c: e.gun === 'MS10' ? [.42, 1.5, 1.95] : e.gun === 'RD20' ? [.46, 1.52, 1.88] : e.gun === 'RD30' ? [1.90, 1.20, .44] : e.source === 'p1' ? [1.45, .65, 1.95] : [1.85, 1.15, .44], pri: 70 - d});
+      else if (e.kind === 'baizer') list.push({p: e.p, i: frac * 3.8, c: [1.45, .45, 2.20], pri: 69 - d});
       else if (e.kind === 'shield') list.push({p: e.p, i: frac * 3.4, c: [.42, 1.7, 1.95], pri: 68 - d});
       else if (e.kind === 'hit' || e.kind === 'wall') {
         const ic = e.source === 'p1' ? [1.45, .65, 1.95]
@@ -320,7 +328,7 @@ export class Renderer {
       }
     }
     for (const s of match.shots) {
-      if (s.materialPass) continue;
+      if (s.materialPass || (s.shafferCloaked && s.team !== viewerTeam)) continue;
       const d = Math.hypot(s.p[0] - eye[0], s.p[2] - eye[2]);
       if (d > 42) continue;
       const c = s.source === 'p1' ? [1.45, .68, 2.05]
@@ -340,6 +348,16 @@ export class Renderer {
         const ready = tk.cooldown <= 0;
         const pulse = ready ? (.95 + Math.sin(time * 3.6 + tk.id) * .25) : .45;
         list.push({p: [tk.x, 2.35, tk.z], i: (ready ? 2.8 : 1.1) * pulse, c: ready ? [.42, 1.35, 1.22] : [1.2, .75, .32], pri: 35 - d * .5});
+      }
+    }
+    if (match.baizers) {
+      for (const bz of match.baizers) {
+        if (bz.cooldown > 0) continue;
+        const d = Math.hypot(bz.x - eye[0], bz.z - eye[2]);
+        if (d > 38) continue;
+        const is400 = bz.amount >= 40;
+        const pulse = .92 + Math.sin(time * 4.4 + bz.id * 1.7) * .24;
+        list.push({p: [bz.x, 1.05, bz.z], i: (is400 ? 2.6 : 1.85) * pulse, c: is400 ? [1.35, .42, 2.15] : [1.05, .36, 1.85], pri: (is400 ? 40 : 34) - d * .6});
       }
     }
     list.sort((a, b) => b.pri - a.pri);
@@ -455,10 +473,12 @@ export class Renderer {
     this.actorData.fill(0);
     this.flirActors.fill(0);
     if (match && !lite) {
+      const viewerTeam = match.player?.team ?? 0;
       let fk = 0;
       match.actors.forEach((a, i) => {
-        this.actorData.set([a.x, a.y, a.z, a.alive ? 1 + (a.crouch || 0) : 0], i * 4);
-        if (a.alive && !a.human && fk < 6) {
+        const cloakedFromViewer = a.team !== viewerTeam && (a.shafferTimer || 0) > 0;
+        this.actorData.set([a.x, a.y, a.z, (a.alive && !cloakedFromViewer) ? 1 + (a.crouch || 0) : 0], i * 4);
+        if (a.alive && !a.human && !cloakedFromViewer && fk < 6) {
           const [cx, cz] = bodyCenter(a);
           const cy = a.y + 0.92 * torso(a);
           const bioHeat = clamp(0.86 + (a.sprintAmt || 0) * 0.14 + (a.flash > 0 ? 0.25 : 0) + (a.hitFlash || 0) * 0.22, 0.5, 1.35);
@@ -522,9 +542,11 @@ export class Renderer {
 
     const p = this.world;
     if (match) {
+      const viewerTeam = match.player?.team ?? 0;
       gl.uniform1i(p.uMode, 1);
       for (const a of match.actors) {
         if (!a.alive || (a.human && a.alive)) continue;
+        if (a.team !== viewerTeam && (a.shafferTimer || 0) > 0) continue;
         const sy = Math.sin(a.yaw), cy = Math.cos(a.yaw);
         const rVec = [cy, 0, sy], bVec = [-sy, 0, cy];
         let hitX = 0, hitZ = 1;
@@ -543,7 +565,7 @@ export class Renderer {
           const ex = a.expr;
           gl.uniform4f(p.uExpr, ex?.headYaw || 0, ex?.gestureEncoded || 0, ex?.tension || 0, ex?.breathWave || 0);
         }
-        gl.uniform2f(p.uHitFX, a.hitFlash || 0, a.shieldFlash || 0);
+        gl.uniform2f(p.uHitFX, a.hitFlash || 0, Math.max(a.shieldFlash || 0, a.baizerFlash || 0));
         this.draw(this.actorMesh(a, lite));
       }
     }
@@ -593,7 +615,7 @@ export class Renderer {
       this.sf.bindTextures(sfMode);
     }
 
-    // 5. First-person weapon with full kinematic spring recoil, blowback, RD40 lock/track/D01 gimbal choreography, reload & 3D muzzle flash.
+    // 5. First-person weapon with full kinematic spring recoil, blowback, RD40 lock/track/D01 gimbal choreography, 4-phase reload & 3D muzzle flash.
     if (match?.player.alive && view.firstPerson) {
       const a = match.player,
         motion = view.motion || {},
@@ -617,16 +639,22 @@ export class Renderer {
         rdD01 = motion.rdD01 || 0,
         rdLockPulse = motion.rdLockPulse || 0,
         rdBarrelPhase = motion.rdBarrelPhase || 0,
-        progress = a.reload > 0 ? 1 - a.reload / weapons[a.gun].reload : 0;
+        progress = a.reload > 0 ? clamp(1 - a.reload / weapons[a.gun].reload, 0, 1) : 0;
 
-      let relDrop = 0, relPitch = 0, relRoll = 0, relX = 0;
+      // Tactile 4-phase reload choreography: 1) cant & mag drop -> 2) swap dip -> 3) mag-seat punch -> 4) bolt-rack pullback
+      let relDrop = 0, relPitch = 0, relRoll = 0, relYaw = 0, relX = 0, relZ = 0;
       if (progress > 0) {
         const s = Math.sin(progress * Math.PI);
-        const slam = progress > .62 && progress < .82 ? Math.sin((progress - .62) / .20 * Math.PI) : 0;
-        relDrop = s * .15 - slam * .028;
-        relPitch = -s * .58 + slam * .14;
-        relRoll = s * .42;
-        relX = -s * .055;
+        const eject = progress < .24 ? Math.sin(progress / .24 * Math.PI) : 0;
+        const swapDip = progress > .20 && progress < .62 ? Math.sin((progress - .20) / .42 * Math.PI) : 0;
+        const slam = progress > .60 && progress < .80 ? Math.sin((progress - .60) / .20 * Math.PI) : 0;
+        const rack = progress > .79 && progress < .96 ? Math.sin((progress - .79) / .17 * Math.PI) : 0;
+        relDrop = s * .145 + swapDip * .085 - slam * .044 - rack * .016;
+        relPitch = -s * .52 - swapDip * .22 + eject * .12 + slam * .22 + rack * .09;
+        relRoll = s * .46 + swapDip * .16 - slam * .14 + rack * .18;
+        relYaw = s * .14 - rack * .12;
+        relX = -s * .060 - swapDip * .024 + rack * .018;
+        relZ = -swapDip * .048 + slam * .026 - rack * .048;
       }
 
       const stride = Math.sin(a.stride * 2.65),
@@ -635,10 +663,10 @@ export class Renderer {
         crouchX = -a.crouch * .022;
       const bx = .205 + stride * .010 * speed + swayX + relX + crouchX + rdX;
       const by = -.205 + Math.cos(a.stride * 5.3) * .006 * speed - relDrop + kY + swayY - landDrop + rdY;
-      const bz = .54 - kZ + rdZ;
+      const bz = .54 - kZ + relZ + rdZ;
 
       const base = add(eye, add(scale(right, bx), add(scale(up, by), scale(fwd, bz))));
-      const basis = rotateBasis(right, up, fwd, relPitch + kPitch + rdPitch - swayY * 1.4, kYaw + rdYaw + swayX * 1.6, relRoll + kRoll + rdRoll + crouchRoll - swayX * 2.2);
+      const basis = rotateBasis(right, up, fwd, relPitch + kPitch + rdPitch - swayY * 1.4, relYaw + kYaw + rdYaw + swayX * 1.6, relRoll + kRoll + rdRoll + crouchRoll - swayX * 2.2);
       const fpVP = multiply(perspective(66 * Math.PI / 180, this.aspect, .04, 50), lookAt(eye, cam.target));
       const modelM = matrix(basis.right, basis.up, basis.back, base);
 

@@ -534,8 +534,10 @@ export class ShadowFlame {
     if (!match) return;
     const gl = this.gl, d = this.depthProg;
     gl.uniform1i(d.uMode, 1);
+    const viewerTeam = match.player?.team ?? 0;
     for (const a of match.actors) {
       if (!a.alive || a.human) continue;
+      if (a.team !== viewerTeam && (a.shafferTimer || 0) > 0) continue;
       const sy = Math.sin(a.yaw), cy = Math.cos(a.yaw);
       const rVec = [cy, 0, sy], bVec = [-sy, 0, cy];
       let hitX = 0, hitZ = 1;

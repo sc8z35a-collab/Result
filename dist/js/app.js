@@ -2,7 +2,7 @@ import {PilotEquipment} from './df-hud.js';
 import {eyeOf} from './posture.js';
 import {Renderer, effectiveSize} from './renderer.js';
 import {titleCamera} from './harbor.js';
-import {Match, modes, weapons} from './match.js';
+import {Match, modes, weapons, BASE_SHIELD_MAX, MAX_SKILL_CHARGES, KILLS_PER_SKILL_CHARGE} from './match.js';
 import {forward, add, clamp} from './geometry.js';
 import {SoundEngin, SOUND_ENGIN_VERSION} from './audio.js';
 import {readPreferences, scoreMultiplier} from './preferences.js';
@@ -68,6 +68,7 @@ let screen = 'title',
   ready = false,
   gameKick = 0,
   hurt = 0,
+  healPulse = 0,
   noticeUntil = 0,
   timeNow = 0,
   tourTime = 0,
@@ -176,8 +177,9 @@ function kickWeapon(gun) {
     // Alternating twin-barrel harmonic roll polarity synced with shader barrel blowback!
     gunMotion.shotSide = a.rd.barrelPhase ? 1 : -1;
   } else if (gun === 'DF40 II' && a?.df40) {
-    // Cyclic tri-barrel harmonic roll cadence
-    gunMotion.shotSide = (a.df40.barrelPhase || 0) === 1 ? 0 : (a.df40.barrelPhase === 0 ? -1 : 1);
+    // Cyclic quad-barrel harmonic roll cadence (4 simultaneous barrels)
+    const quadRoll = [-1, 1, -.72, .72];
+    gunMotion.shotSide = quadRoll[(a.df40.barrelPhase || 0) % 4];
   } else {
     gunMotion.shotSide = Math.random() < .35 ? gunMotion.shotSide : -gunMotion.shotSide;
   }
@@ -353,10 +355,10 @@ function stepMotion(dt, a) {
 }
 
 function triggerHitUI(e) {
-  const kind = e.kill ? 'kill' : e.shieldBreak ? 'break' : e.shield ? 'shield' : 'hit';
+  const kind = e.kill ? 'kill' : e.baizerBreak ? 'baizer-break' : e.shieldBreak ? 'break' : e.baizer ? 'baizer' : e.shield ? 'shield' : 'hit';
   hitState.kind = kind;
   hitState.age = 0;
-  hitState.dur = kind === 'kill' ? .56 : kind === 'break' ? .44 : kind === 'shield' ? .32 : .25;
+  hitState.dur = kind === 'kill' ? .56 : (kind === 'break' || kind === 'baizer-break') ? .44 : (kind === 'shield' || kind === 'baizer') ? .32 : .25;
   hitState.rot = kind === 'kill' ? 54 : 45 + (Math.random() - .5) * 9;
   const hm = $('hitmark');
   hm.className = 'is-' + kind;
@@ -371,8 +373,8 @@ function triggerHitUI(e) {
     bn.className = 'is-wallbang';
     hitState.bannerAge = 0;
     hitState.bannerDur = e.kill ? .96 : .68;
-  } else if (kind === 'kill' || kind === 'break') {
-    bn.textContent = kind === 'kill' ? 'ELIMINATED' : 'SHIELD BREAK';
+  } else if (kind === 'kill' || kind === 'break' || kind === 'baizer-break') {
+    bn.textContent = kind === 'kill' ? 'ELIMINATED' : kind === 'baizer-break' ? 'BAIZER BREAK' : 'SHIELD BREAK';
     bn.className = 'is-' + kind;
     hitState.bannerAge = 0;
     hitState.bannerDur = kind === 'kill' ? .88 : .70;
@@ -380,7 +382,7 @@ function triggerHitUI(e) {
 }
 
 function triggerDamageUI(e, p) {
-  hurt = Math.min(1, hurt + (e.shieldBreak ? .96 : .64));
+  hurt = Math.min(1, hurt + (e.shieldBreak || e.baizerBreak ? .96 : .64));
   let dx = 0, dz = -1;
   if (!e.ricochet && e.actor && e.actor !== p) {
     dx = e.actor.x - p.x;
@@ -477,7 +479,7 @@ document.addEventListener('pointerdown', e => {
 }, true);
 coarsePointer.addEventListener?.('change', e => setInputType(e.matches));
 function controls() {
-  const rows = touch ? [['移動 / ダッシュ', '左スティック（強く前傾でダッシュ）'], ['視点', '右側スワイプ / 射撃長押しドラッグ / 右スティック'], ['発射 / 再装填', '射撃(長押しで連射)・R2 / R・X'], ['ジャンプ / しゃがみ', '↑・A / しゃがみ・B'], ['オートエイム / 全画面', '右上 AA ボタン / 全画面ボタン'], ['FLIR / 煙幕 / 解析', '左下 FLIR・煙幕・解析ボタン'], ['味方への指示（3v3）', '下部 同期突入・援護・罠待機ボタン']] : [['移動 / ダッシュ', 'WASD / Shift · 左スティック強前傾'], ['視点', 'マウス / 矢印キー / 右スティック'], ['発射 / 再装填', '左クリック(長押しで連射)・F・R2 / R・X'], ['ジャンプ / しゃがむ', 'Space・A / Ctrl・B'], ['オートエイム / 全画面', 'O (ON/OFF) · U (全画面切替)'], ['熱視界 / 煙幕 / 解析', 'T (FLIR) · G (煙幕) · L (弾道解析) · K (跳弾) · M (波動図)'], ['分隊コマンド（3v3）', '1 (3-2-1同期突入) · 2 (援護カバー) · 3 (罠待機)'], ['一時停止', 'Esc / P / Start']];
+  const rows = touch ? [['移動 / ダッシュ', '大型左スティック（強く前傾でダッシュ）'], ['視点', '右側スワイプ / 射撃長押しドラッグ / 右スティック'], ['発射 / 自動装填', '大型射撃ボタン(長押しで連射)・弾切れで自動装填 / R'], ['チャージ技（5撃破毎・最大3）', 'シャッファー(12秒不可視) / リチャージヒール(HP全回復)'], ['ジャンプ / しゃがみ', '↑・A / しゃがみ・B'], ['オートエイム / 全画面', '右上 AA ボタン / 全画面ボタン'], ['FLIR / 煙幕 / 解析', '左下 FLIR・煙幕・解析ボタン'], ['味方への指示（3v3）', '下部 同期突入・援護・罠待機ボタン']] : [['移動 / ダッシュ', 'WASD / Shift · 左スティック強前傾'], ['視点', 'マウス / 矢印キー / 右スティック'], ['発射 / 自動装填', '左クリック(長押しで連射)・F・R2 / 弾切れで自動装填・R'], ['チャージ技（5撃破毎・最大3）', '4 / Z (シャッファー 12秒不可視) · 5 / H (リチャージヒール全回復)'], ['分隊コマンド（3v3）', '1 (3-2-1同期突入) · 2 (援護カバー) · 3 (罠待機)'], ['ジャンプ / しゃがむ', 'Space・A / Ctrl・B'], ['オートエイム / 全画面', 'O (ON/OFF) · U (全画面切替)'], ['熱視界 / 煙幕 / 解析', 'T (FLIR) · G (煙幕) · L (弾道解析) · K (跳弾) · M (波動図)'], ['一時停止', 'Esc / P / Start']];
   if (match?.player.df)rows.push(...(touch ? [['DF1 OUT', '画面右の専用ボタン / L2・Y・LB・RB']] : [['中央集中 / 散弾', 'Q / Y'], ['P1 ブースト', 'X / LB'], ['照準 / レンズ切替', '右クリック・C・L2 / V・RB'], ['EVR1 購入', 'B']]));
   if (match?.player.df40)rows.push(...(touch ? [['DF40 II · AA1.4', '画面右 AA1.4 ボタン / LB（一時強化・過熱冷却あり）']] : [['オートエイム 1.4 起動/解除', 'X / E / LB（一時強化・オーバーヒートあり）']]));
   $('controls').innerHTML = rows.map(([a, b]) => `<span>${a}</span><b>${b}</b>`).join('')
@@ -612,9 +614,10 @@ function lobby() {
   const [a, b] = modes[rules.mode], v = rules.multiplier;
   $('targets').textContent = rules.limit === 'unlimited' ? '時間・得点ともに無制限' : `味方 ${a*v} 点先取　/　敵 ${b*v} 点先取　·　時間無制限`;
   const w = weapons[rules.loadout];
-  const modeLabel = w.auto && w.pellets > 1 ? `フルオート ${w.pellets}発同時` : w.auto && w.burst > 1 ? `フルオート ${w.burst}発連射` : w.auto ? 'フルオート連射' : w.burst > 1 ? w.burst + '発バースト' : '単発';
+  const modeLabel = rules.loadout === 'DF40 II' ? 'フルオート 4発同時(微散弾)' : w.auto && w.pellets > 1 ? `フルオート ${w.pellets}発同時` : w.auto && w.burst > 1 ? `フルオート ${w.burst}発連射` : w.auto ? 'フルオート連射' : w.burst > 1 ? w.burst + '発バースト' : '単発';
   const dmgLabel = w.pellets > 1 ? `威力 ${w.damage} × ${w.pellets}` : `威力 ${w.damage}`;
   const tags = [`弾倉 ${w.capacity} 発`, dmgLabel, modeLabel, `連射比 ${w.rate}`, `弾速比 ${w.velocity}`];
+  if (w.stockCap) tags.push(`ストック上限 ${w.stockCap} · ${w.stockRegen || 1}発/秒回復`);
   if (rules.loadout === 'MS10')tags.push('全武器最速弾速');
   if (rules.loadout === 'RD20')tags.push('オートエイム 1.1');
   if (rules.loadout === 'RD30')tags.push('オートエイム 1.1 mini · NPC開放');
@@ -1203,6 +1206,28 @@ function event(e) {
     $('combatNotice').textContent = '補給タンカー起動　·　弾丸 +100 / 精製能力 1.5×';
     noticeUntil = match.time + 2.8
   }
+  if (e.type === 'baizer' && e.actor === p) {
+    $('combatNotice').textContent = `${e.kind} 取得　·　紫 BAIZER シールド +${e.amount}（1回限り消費）`;
+    noticeUntil = match.time + 2.6;
+  }
+  if (e.type === 'skill_charge' && e.actor === p) {
+    $('combatNotice').textContent = `技チャージ完了 (${e.charges}/${MAX_SKILL_CHARGES}) · [4/Z] シャッファー / [5/H] リチャージヒール`;
+    noticeUntil = match.time + 2.8;
+  }
+  if (e.type === 'skill' && e.actor === p) {
+    if (e.skill === 'shaffer') {
+      $('combatNotice').textContent = `シャッファー発動 · ${(e.duration || 12).toFixed(0)}秒間 敵から体・武器・銃弾が完全不可視`;
+      noticeUntil = match.time + 2.8;
+    } else if (e.skill === 'heal') {
+      healPulse = 1;
+      $('combatNotice').textContent = 'リチャージヒール発動 · 体力 100 全回復';
+      noticeUntil = match.time + 2.2;
+    }
+  }
+  if (e.type === 'reload' && e.actor === p && e.auto) {
+    $('combatNotice').textContent = '弾切れ · 自動装填中';
+    noticeUntil = match.time + 1.1;
+  }
   if (e.type === 'point') {
     const aTag = e.actor.isSpy ? `${e.actor.name}<span class="tag-nv21">2.1</span>` : e.actor.name;
     const vTag = e.victim.isSpy ? `${e.victim.name}<span class="tag-nv21">2.1</span>` : e.victim.name;
@@ -1215,6 +1240,28 @@ function event(e) {
   }
   if (e.type === 'end') show('results');
 }
+function triggerSkill(skill) {
+  if (screen !== 'game' || !match || !match.player?.alive) return false;
+  const a = match.player;
+  if ((a.skillCharges || 0) <= 0) {
+    $('combatNotice').textContent = `チャージ不足 (${a.skillKills || 0}/${KILLS_PER_SKILL_CHARGE} 撃破で+1)`;
+    noticeUntil = match.time + 1.4;
+    return false;
+  }
+  if (skill === 'shaffer' && (a.shafferTimer || 0) > 0) {
+    $('combatNotice').textContent = `シャッファー発動中（残り ${a.shafferTimer.toFixed(1)}s）`;
+    noticeUntil = match.time + 1.2;
+    return false;
+  }
+  if (skill === 'heal' && a.hp >= 100) {
+    $('combatNotice').textContent = '体力は満タンです（消費しません）';
+    noticeUntil = match.time + 1.2;
+    return false;
+  }
+  const ok = match.useSkill(a, skill);
+  if (ok) hud();
+  return ok;
+}
 function hud() {
   if (!match)return;
   const a = match.player;
@@ -1223,12 +1270,52 @@ function hud() {
   $('hudRule').textContent = Number.isFinite(match.goals[0]) ? (match.goals[0] === match.goals[1] ? `${match.goals[0]} 点先取` : `${match.goals[0]} / ${match.goals[1]} 点先取`) : '無制限';
   $('hpVal').textContent = a.hp;
   $('shieldVal').textContent = a.shield;
-  $('hpBar').style.width = a.hp + '%';
-  $('shieldBar').style.width = a.shield * 10 + '%';
+  $('hpBar').style.width = clamp(a.hp, 0, 100) + '%';
+  $('shieldBar').style.width = clamp((a.shield / BASE_SHIELD_MAX) * 100, 0, 100) + '%';
+  const bzVal = Math.max(0, a.baizerShield || 0);
+  const bzRow = $('baizerRow');
+  if (bzRow) {
+    bzRow.hidden = bzVal <= 0;
+    if (bzVal > 0) {
+      $('baizerVal').textContent = bzVal;
+      $('baizerBar').style.width = clamp((bzVal / Math.max(20, a.baizerMax || 40)) * 100, 0, 100) + '%';
+    }
+  }
+  const shActive = a.alive && (a.shafferTimer || 0) > 0;
+  const shVeil = $('shafferVeil');
+  if (shVeil) {
+    shVeil.hidden = !shActive;
+    if (shActive) $('shafferBadge').textContent = `シャッファー発動中 · 敵不可視 ${a.shafferTimer.toFixed(1)}s`;
+  }
+  const charges = a.skillCharges || 0;
+  const kills = a.skillKills || 0;
+  const pips = $('skillPips');
+  if (pips) {
+    const kids = pips.children;
+    for (let i = 0; i < kids.length; i++) kids[i].classList.toggle('is-full', i < charges);
+  }
+  if ($('skillProg')) $('skillProg').textContent = charges >= MAX_SKILL_CHARGES ? `MAX ${charges}/${MAX_SKILL_CHARGES}` : `${kills}/${KILLS_PER_SKILL_CHARGE}`;
+  const btnSh = $('btnShaffer');
+  if (btnSh) {
+    btnSh.classList.toggle('is-ready', charges > 0 && !shActive && a.alive);
+    btnSh.classList.toggle('is-active', shActive);
+    btnSh.disabled = !a.alive || (!shActive && charges <= 0);
+    if ($('shafferLabel')) $('shafferLabel').textContent = shActive ? `シャッファー ${a.shafferTimer.toFixed(1)}s` : 'シャッファー';
+  }
+  const btnHl = $('btnHeal');
+  if (btnHl) {
+    btnHl.classList.toggle('is-ready', charges > 0 && a.hp < 100 && a.alive);
+    btnHl.disabled = !a.alive || charges <= 0 || a.hp >= 100;
+  }
   $('gunName').textContent = a.gun;
   $('magVal').textContent = a.mag;
   $('stockVal').textContent = a.stock;
-  $('reloadLabel').textContent = a.reload > 0 ? `再装填 ${a.reload.toFixed(1)} s` : a.mag > 0 ? '予備弾' : a.stock ? 'R · 再装填' : '予備弾を生成中';
+  const relWrap = $('reloadBarWrap');
+  if (relWrap) {
+    relWrap.hidden = !(a.reload > 0);
+    if (a.reload > 0) $('reloadBar').style.width = clamp((a.reloadFrac || 0) * 100, 0, 100) + '%';
+  }
+  $('reloadLabel').textContent = a.reload > 0 ? `${a.autoReloading ? '自動装填' : '再装填'} ${a.reload.toFixed(1)} s` : a.mag > 0 ? '予備弾' : a.stock ? '自動装填待機' : '予備弾を生成中';
   $('ammoBoost').hidden = !((a.ammoRate || 1) > 1.01);
   let nearestTk = null, nearestDist = 18;
   for (const tk of match.tankers || []) {
@@ -1239,6 +1326,18 @@ function hud() {
     }
   }
   $('tankerHint').textContent = !a.alive || !nearestTk ? '' : nearestTk.cooldown <= 0 ? `補給タンカー ${Math.round(nearestDist)}m · +100発 / 精製1.5×` : `補給タンカー再充填 ${Math.ceil(nearestTk.cooldown)}s`;
+  let nearestBz = null, nearestBzDist = 18;
+  for (const bz of match.baizers || []) {
+    if (bz.cooldown > 0) continue;
+    const d = Math.hypot(bz.x - a.x, bz.z - a.z);
+    if (d < nearestBzDist) {
+      nearestBzDist = d;
+      nearestBz = bz;
+    }
+  }
+  if ($('baizerHint')) {
+    $('baizerHint').textContent = !a.alive || !nearestBz ? '' : `${nearestBz.kind} ${Math.round(nearestBzDist)}m · 紫シールド +${nearestBz.amount}`;
+  }
   $('respawn').hidden = a.alive;
   $('reticle').hidden = !a.alive || !!a.df?.ads;
   $('reticle').classList.toggle('is-ms10', a.gun === 'MS10');
@@ -1425,7 +1524,7 @@ document.addEventListener('keydown', e => {
   }
   if (screen !== 'game' || !match || document.hidden || e.target?.closest?.('input, textarea, select, [contenteditable=true]')) return;
   if (e.code === 'Space' && e.target?.closest?.('button')) return;
-  if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyF', 'KeyR', 'KeyT', 'KeyG', 'KeyL', 'KeyK', 'KeyM', 'KeyO', 'KeyU', 'Digit1', 'Digit2', 'Digit3'].includes(e.code))e.preventDefault();
+  if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyF', 'KeyR', 'KeyT', 'KeyG', 'KeyL', 'KeyK', 'KeyM', 'KeyO', 'KeyU', 'Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'KeyZ', 'KeyH'].includes(e.code))e.preventDefault();
   keys.add(e.code);
   if (e.repeat) return;
   if (e.code === 'KeyF' && match.player.alive) holdFireKey = true;
@@ -1439,6 +1538,8 @@ document.addEventListener('keydown', e => {
   if (e.code === 'Digit3')triggerSquadOrder('TRAP');
   if (e.code === 'KeyO')setAutoAim(!(settings.autoAim !== false), true);
   if (e.code === 'KeyU')toggleFullscreen();
+  if (e.code === 'Digit4' || e.code === 'KeyZ')triggerSkill('shaffer');
+  if (e.code === 'Digit5' || e.code === 'KeyH')triggerSkill('heal');
   if (e.code === 'KeyK') {
     settings.fermatCore = !settings.fermatCore;
     save();
@@ -1552,7 +1653,7 @@ function stick(e) {
   stickSprint = mag >= .84 && stickZ >= .48;
   if (stickSprint && touchCrouch) setTouchCrouch(false);
   pad.classList.toggle('is-sprint', stickSprint);
-  const travel = Math.min(36, r.width * .28);
+  const travel = Math.min(82, r.width * .29);
   pad.firstElementChild.style.transform = `translate(${stickX * travel}px,${-stickZ * travel}px)`
 }
 pad.onpointerdown = e => {
@@ -1613,8 +1714,13 @@ for (const [id, action] of [
   ['touchCrouch', () => { setTouchCrouch(!touchCrouch); }],
   ['touchFlir', () => toggleFlir()],
   ['touchSmoke', () => triggerSmokeVent()],
-  ['touchChrono', () => toggleChrono()]
-]) $(id).onclick = () => { if (screen === 'game') action(); };
+  ['touchChrono', () => toggleChrono()],
+  ['btnShaffer', () => triggerSkill('shaffer')],
+  ['btnHeal', () => triggerSkill('heal')]
+]) {
+  const el = $(id);
+  if (el) el.onclick = () => { el.blur?.(); if (screen === 'game') action(); };
+}
 
 // Hardware Gamepad API support (Xbox / PlayStation / Mobile Controllers): strong left-stick forward tilt auto-dashes!
 function pollGamepad(dt) {
@@ -1685,6 +1791,8 @@ function pollGamepad(dt) {
   if (edge(3)) equipment.action('pattern');
   if (edge(4)) equipment.action('boost');
   if (edge(5)) equipment.action('scope');
+  if (edge(14)) triggerSkill('shaffer');
+  if (edge(15)) triggerSkill('heal');
 }
 
 function frame(ms) {
@@ -1738,9 +1846,11 @@ function frame(ms) {
     }
     gameKick *= Math.exp(-13 * dt);
     hurt = Math.max(0, hurt - dt * 1.9);
+    healPulse = Math.max(0, healPulse - dt * 1.65);
     stepMotion(dt, match.player);
     updateCombatUI(dt, match.player);
     $('damageVeil').style.opacity = hurt;
+    if ($('healFlash')) $('healFlash').style.opacity = healPulse;
     if (timeNow >= hudAt) {
       hud();
       hudAt = timeNow + (settings.lightMode ? .10 : .065)
