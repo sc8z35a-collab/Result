@@ -199,62 +199,63 @@ function rd20Device(m) {
   m.box(0, .132, -.08, .008, .008, .008, 'white', cyan, 0, 3);
 }
 
-// DF40 II: Player-only flagship tri-barrel smart carbine with 260-round triple-helix drum,
-// ARV1.3 convergent triangular accelerator array & Auto-Aim 1.4 overdrive thermal radiator pod.
+// DF40 II: Player-only flagship quad-barrel smart carbine with 350-round quad-helix drum,
+// ARV1.3 convergent 4-barrel accelerator array & Auto-Aim 1.4 overdrive thermal radiator pod.
 function df40iiDevice(m) {
   const obsidian = '#1f2830', ceramic = '#c8d0cc', titanium = '#768894', violet = '#8672ff', cyan = '#52f6ff', gold = '#ffd066';
   // Sculpted carbon-ceramic hybrid flagship receiver chassis
-  m.box(0, .022, -.11, .134, .108, .44, 'blackMetal', obsidian, .28, 1);
-  m.box(0, .080, -.10, .120, .036, .40, 'steel', ceramic, .22, 1);
-  // Tri-barrel triangular accelerator cluster (left-lower, top-apex, right-lower)
-  const triBarrels = [
-    [-.040, .012, -.82, -.79],
-    [0, .052, -.86, -.83],
-    [.040, .012, -.82, -.79]
+  m.box(0, .022, -.11, .142, .112, .44, 'blackMetal', obsidian, .28, 1);
+  m.box(0, .082, -.10, .126, .036, .40, 'steel', ceramic, .22, 1);
+  // Quad-barrel 2x2 accelerator cluster (upper-L, upper-R, lower-L, lower-R)
+  const quadBarrels = [
+    [-.036, .044, -.85, -.82],
+    [.036, .044, -.85, -.82],
+    [-.032, .004, -.82, -.79],
+    [.032, .004, -.82, -.79]
   ];
-  for (let b = 0; b < triBarrels.length; b++) {
-    const [bx, by, len, comp] = triBarrels[b];
-    const isApex = b === 1;
-    m.box(bx, by, -.48, isApex ? .040 : .036, isApex ? .044 : .042, .40, 'blackMetal', '#2e3a44', .18, 1);
-    m.tube([bx, by, -.28], [bx, by, len], .019, .017, 'steel', '#5b6c76', 10, 1);
-    m.box(bx, by, comp, .034, .034, .095, 'steel', '#a2b4bc', .16, 1);
-    m.tube([bx, by, len - .022], [bx, by, len - .040], .021, .019, 'blackMetal', obsidian, 8, 1);
-    // Glowing ARV1.3 plasma conduits running along each of the 3 barrels
-    for (let i = 0; i < 5; i++) {
-      const stripCol = isApex ? (i % 2 ? gold : cyan) : (i % 2 ? cyan : violet);
-      m.box(bx + (isApex ? 0 : Math.sign(bx) * .022), by + (isApex ? .024 : 0), -.33 - i * .076, isApex ? .014 : .008, isApex ? .008 : .016, .034, 'white', stripCol, 0, 3);
+  for (let b = 0; b < quadBarrels.length; b++) {
+    const [bx, by, len, comp] = quadBarrels[b];
+    const isTop = b < 2;
+    m.box(bx, by, -.48, .034, .034, .40, 'blackMetal', '#2e3a44', .18, 1);
+    m.tube([bx, by, -.28], [bx, by, len], .017, .015, 'steel', '#5b6c76', 9, 1);
+    m.box(bx, by, comp, .030, .030, .092, 'steel', '#a2b4bc', .16, 1);
+    m.tube([bx, by, len - .022], [bx, by, len - .038], .019, .017, 'blackMetal', obsidian, 8, 1);
+    // Glowing ARV1.3 plasma conduits running along each of the 4 barrels
+    for (let i = 0; i < 4; i++) {
+      const stripCol = isTop ? (i % 2 ? gold : cyan) : (i % 2 ? cyan : violet);
+      m.box(bx + Math.sign(bx) * .019, by + (isTop ? .012 : -.010), -.33 - i * .092, .008, .012, .034, 'white', stripCol, 0, 3);
     }
   }
-  // Central tri-convergence magnetic yoke & dorsal thermal cooling fins (expand on lock/AA1.4!)
-  m.box(0, .026, -.52, .054, .042, .42, 'steel', titanium, .16, 1);
-  m.box(0, .026, -.54, .020, .016, .36, 'white', cyan, 0, 3);
+  // Central quad-convergence magnetic yoke & dorsal thermal cooling fins (expand on lock/AA1.4!)
+  m.box(0, .024, -.52, .054, .044, .42, 'steel', titanium, .16, 1);
+  m.box(0, .024, -.54, .020, .016, .36, 'white', cyan, 0, 3);
   for (const sx of [-1, 1]) {
     // Flank overdrive thermal radiator fins (x > 0.05 -> animated by shaders.js uAnim rail pulse!)
-    m.box(sx * .068, .048, -.16, .014, .034, .28, 'steel', '#485862', .15, 1);
-    m.box(sx * .074, .054, -.16, .009, .014, .24, 'white', violet, 0, 3);
-    m.box(sx * .072, .028, -.16, .008, .010, .20, 'white', gold, 0, 3);
+    m.box(sx * .072, .048, -.16, .014, .034, .28, 'steel', '#485862', .15, 1);
+    m.box(sx * .078, .054, -.16, .009, .014, .24, 'white', violet, 0, 3);
+    m.box(sx * .076, .028, -.16, .008, .010, .20, 'white', gold, 0, 3);
   }
-  // 260-round triple-helix high-capacity drum magazine + ergonomic grip
+  // 350-round quad-helix high-capacity drum magazine + ergonomic grip
   for (const sx of [-1, 1]) {
-    m.tube([sx * .062, -.106, -.12], [sx * .062, -.106, -.27], .055, .055, 'blackMetal', '#2a353d', 10, 1);
-    m.box(sx * .102, -.106, -.195, .012, .030, .088, 'white', cyan, 0, 3);
+    m.tube([sx * .066, -.106, -.11], [sx * .066, -.106, -.28], .058, .058, 'blackMetal', '#2a353d', 10, 1);
+    m.box(sx * .108, -.106, -.195, .012, .032, .096, 'white', cyan, 0, 3);
   }
-  // Third central under-slung helical drum core
-  m.tube([0, -.122, -.13], [0, -.122, -.28], .046, .046, 'steel', '#3d4c55', 10, 1);
-  m.box(0, -.156, -.205, .032, .012, .092, 'white', gold, 0, 3);
-  m.box(0, -.070, -.195, .092, .084, .122, 'blackMetal', obsidian, 0, 1);
+  // Central twin under-slung helical drum cores
+  m.tube([0, -.126, -.12], [0, -.126, -.29], .050, .050, 'steel', '#3d4c55', 10, 1);
+  m.box(0, -.164, -.205, .036, .012, .100, 'white', gold, 0, 3);
+  m.box(0, -.070, -.195, .096, .084, .128, 'blackMetal', obsidian, 0, 1);
   m.beam([0, -.038, .024], [0, -.154, .078], .064, .086, 'rubber', rubber, 0);
   // Dual-strut ceramic-titanium counterbalance stock
   m.beam([0, .048, .098], [0, .022, .265], .042, .030, 'steel', ceramic, 1);
   m.beam([0, -.018, .098], [0, -.074, .252], .034, .026, 'blackMetal', obsidian, 1);
   m.box(0, -.026, .268, .070, .138, .048, 'rubber', '#1e262b', 0, 0);
   // Top ARV1.3 Optical Prism + Auto-Aim 1.4 Overdrive Core Pod (y > 0.095 -> animated by shader pod deploy!)
-  m.box(0, .116, -.10, .102, .038, .178, 'blackMetal', obsidian, 0, 1);
-  m.box(0, .152, -.10, .086, .038, .136, 'steel', '#465864', .16, 1);
-  m.tube([0, .154, -.152], [0, .154, -.186], .026, .022, 'white', cyan, 12, 3);
+  m.box(0, .118, -.10, .106, .038, .178, 'blackMetal', obsidian, 0, 1);
+  m.box(0, .154, -.10, .088, .038, .136, 'steel', '#465864', .16, 1);
+  m.tube([0, .156, -.152], [0, .156, -.186], .026, .022, 'white', cyan, 12, 3);
   for (const sx of [-1, 1]) {
-    m.box(sx * .048, .152, -.095, .011, .026, .096, 'white', violet, 0, 3);
-    m.box(sx * .034, .174, -.10, .010, .010, .082, 'white', gold, 0, 3);
+    m.box(sx * .050, .154, -.095, .011, .026, .096, 'white', violet, 0, 3);
+    m.box(sx * .034, .176, -.10, .010, .010, .082, 'white', gold, 0, 3);
   }
   m.box(0, .124, -.72, .024, .032, .038, 'white', cyan, 0, 3);
 }
@@ -334,7 +335,7 @@ function dfDevice(m) {
 
 export function muzzleOffset(gun) {
   if (gun === 'MS10') return [0, .024, -.86];
-  if (gun === 'DF40 II') return [0, .026, -.88];
+  if (gun === 'DF40 II') return [0, .024, -.88];
   if (gun === 'RD40') return [0, .026, -.85];
   if (gun === 'RD30') return [0, .025, -.75];
   if (gun === 'RD20') return [0, .024, -.67];
@@ -350,11 +351,11 @@ export function muzzleFlashMesh(gun, intensity, seed, extra = false, lite = fals
   if (intensity <= .01) return m;
   const [mx0, my0, mz0] = muzzleOffset(gun);
   const tips = gun === 'DF40 II'
-    ? [[mx0 - .040, .012, -.85], [mx0, .052, -.89], [mx0 + .040, .012, -.85]]
+    ? [[mx0 - .036, .044, -.87], [mx0 + .036, .044, -.87], [mx0 - .032, .004, -.84], [mx0 + .032, .004, -.84]]
     : gun === 'RD40' ? [[mx0 - .036, my0, mz0], [mx0 + .036, my0, mz0]]
     : gun === 'RD30' ? [[mx0 - .032, my0, mz0], [mx0 + .032, my0, mz0]]
     : [[mx0, my0, mz0]];
-  const s = intensity * (gun === 'MS10' ? 1.25 : gun === 'DF40 II' ? .80 : gun === 'RD40' ? .88 : gun === 'RD30' ? .78 : gun === 'D1' ? 1.05 : .95);
+  const s = intensity * (gun === 'MS10' ? 1.25 : gun === 'DF40 II' ? .72 : gun === 'RD40' ? .88 : gun === 'RD30' ? .78 : gun === 'D1' ? 1.05 : .95);
   const coreCol = gun === 'MS10' ? '#e8ffff' : gun === 'DF40 II' ? '#f4f0ff' : gun === 'RD40' ? '#fff4ea' : gun === 'RD30' ? '#fff6e4' : (gun === 'DF1 OUT' || gun === 'RD20') ? '#dcfff7' : '#fff8dc';
   const outerCol = gun === 'MS10' ? '#4de2ff' : gun === 'DF40 II' ? '#8c74ff' : gun === 'RD40' ? '#ff5c5c' : gun === 'RD30' ? '#ffad4e' : gun === 'RD20' ? '#58f0d8' : gun === 'DF1 OUT' ? '#6de8d5' : gun === 'SRA' ? '#ffcf76' : '#ffaa4e';
   const rot = (seed * 1.618) % 6.28;
@@ -870,6 +871,7 @@ export function movingDetails(match, time, extra = false, lite = false, opts = n
   if (!match) return m;
 
   // Supply tanker live status rings, beacon holograms, and recharge progress bars.
+  const viewerTeam = match.player?.team ?? 0;
   if (match.tankers) {
     for (const tk of match.tankers) {
       const ready = tk.cooldown <= 0;
@@ -904,6 +906,46 @@ export function movingDetails(match, time, extra = false, lite = false, opts = n
     }
   }
 
+  // Purple road pickups: BAIZER 200 (+20 purple shield) & BAIZER 400 (+40 purple shield)
+  if (match.baizers) {
+    for (const bz of match.baizers) {
+      if (bz.cooldown > 0) continue;
+      const is400 = bz.amount >= 40;
+      const bob = Math.sin(time * 3.4 + bz.id * 1.9) * .09;
+      const rot = time * (is400 ? 2.1 : 1.55) + bz.id * 1.1;
+      const haloCol = is400 ? '#e37cff' : '#b25cff';
+      const coreCol = is400 ? '#f0b4ff' : '#d28aff';
+      const darkCol = is400 ? '#5c1f8c' : '#431a6b';
+      const baseR = is400 ? 1.05 : .82;
+      ring(m, [bz.x, .08, bz.z], [0, 1, 0], baseR, is400 ? .060 : .046, lite ? 10 : 16, haloCol, 3);
+      if (is400 && !lite) {
+        const pulseR = .62 + ((time * .72 + bz.id * .4) % 1) * .72;
+        ring(m, [bz.x, .12, bz.z], [0, 1, 0], pulseR, .028, 16, '#f6c8ff', 3);
+      }
+      // Armored purple BAIZER shield capsule resting / hovering over the road
+      const cy = (is400 ? .76 : .62) + bob;
+      const rad = is400 ? .36 : .29;
+      const halfH = is400 ? .44 : .34;
+      const cr = Math.cos(rot) * rad, sr = Math.sin(rot) * rad;
+      const top = [bz.x, cy + halfH, bz.z], bot = [bz.x, cy - halfH, bz.z];
+      const q0 = [bz.x + cr, cy, bz.z + sr], q1 = [bz.x - sr, cy, bz.z + cr], q2 = [bz.x - cr, cy, bz.z - sr], q3 = [bz.x + sr, cy, bz.z - cr];
+      for (const [pa, pb] of [[q0, q1], [q1, q2], [q2, q3], [q3, q0]]) {
+        m.tri(pa, pb, top, 'white', coreCol, 3);
+        m.tri(pb, pa, bot, 'white', darkCol, 3);
+      }
+      // Ground armored base pad + luminous orbiting purple energy ring(s)
+      m.box(bz.x, .10, bz.z, is400 ? .64 : .52, .12, is400 ? .64 : .52, 'blackMetal', '#2e1846', 0, 1);
+      m.box(bz.x, .18, bz.z, is400 ? .46 : .36, .04, is400 ? .46 : .36, 'white', haloCol, 0, 3);
+      if (!lite) {
+        ring(m, [bz.x, cy, bz.z], [Math.sin(rot) * .45, 1, Math.cos(rot) * .45], rad * 1.48, .026, 12, haloCol, 3);
+        if (is400) {
+          ring(m, [bz.x, cy + .06, bz.z], [-Math.cos(rot) * .55, .85, Math.sin(rot) * .55], rad * 1.72, .022, 12, '#ffd6ff', 3);
+          m.beam([bz.x, .20, bz.z], [bz.x, cy + halfH + .42, bz.z], .042, .042, 'white', '#d578ff', 3);
+        }
+      }
+    }
+  }
+
   // Persistent cooling 3D bullet scorch craters & molten embers on struck containers/wharf.
   if (!lite && match.scorches) {
     for (const sc of match.scorches) {
@@ -931,6 +973,7 @@ export function movingDetails(match, time, extra = false, lite = false, opts = n
   // Ultra-detailed multi-layer 3D projectiles (or ultra-lightweight crisp beams in Lightweight Mode).
   for (const s of match.shots) {
     if (s.materialPass) continue;
+    if (s.shafferCloaked && s.team !== viewerTeam) continue;
     const pal = shotPalette(s);
     const isMS10 = s.gun === 'MS10';
     const isGuided = !!s.guided;
@@ -1077,6 +1120,7 @@ export function movingDetails(match, time, extra = false, lite = false, opts = n
   // Ejected spinning shell casings.
   if (!lite && match.casings) {
     for (const c of match.casings) {
+      if (c.shafferCloaked && c.team !== viewerTeam) continue;
       const ca = Math.cos(c.rot) * .038, sa = Math.sin(c.rot) * .038;
       const a = [c.p[0] - ca, c.p[1] - sa * .4, c.p[2] - sa];
       const b = [c.p[0] + ca, c.p[1] + sa * .4, c.p[2] + sa];
@@ -1086,8 +1130,10 @@ export function movingDetails(match, time, extra = false, lite = false, opts = n
   }
 
   // Deluxe multi-layered hit, geodesic shield-ripple, shield-shatter, kill-detonation,
-  // material-specific wall/metal/concrete/wood impact, muzzle-smoke & tanker effects.
+  // material-specific wall/metal/concrete/wood impact, muzzle-smoke, BAIZER & skill effects.
   for (const e of match.effects) {
+    if (e.kind === 'muzzle' && e.shafferCloaked && e.team !== viewerTeam) continue;
+    if (e.kind === 'shaffer' && e.team !== viewerTeam) continue;
     const progress = clamp(1 - e.life / (e.max || .2), 0, 1);
     const inv = 1 - progress;
     const seed = e.seed || 1;
@@ -1107,8 +1153,21 @@ export function movingDetails(match, time, extra = false, lite = false, opts = n
         ring(m, [e.p[0], .3 + progress * 2.5, e.p[2]], [0, 1, 0], 1.4 + progress * 4.0, .075 * inv, 12, '#78ffec', 3);
         continue;
       }
-      const isBreak = e.kind === 'break', isShield = e.kind === 'shield', isKill = e.kind === 'kill';
-      const col = isKill ? '#ffe078' : (isBreak || isShield) ? '#5cf4ff' : e.gun === 'MS10' ? '#68f2ff' : e.source === 'p1' ? '#d896ff' : '#ffd86b';
+      if (e.kind === 'baizerPickup') {
+        ring(m, [e.p[0], .25 + progress * 1.9, e.p[2]], [0, 1, 0], .75 + progress * 2.4, .07 * inv, 12, '#d978ff', 3);
+        continue;
+      }
+      if (e.kind === 'shaffer') {
+        ring(m, [e.p[0], .3 + progress * 1.8, e.p[2]], [0, 1, 0], .65 + progress * 2.0, .06 * inv, 12, '#9ec2ff', 3);
+        continue;
+      }
+      if (e.kind === 'heal') {
+        ring(m, [e.p[0], .25 + progress * 2.0, e.p[2]], [0, 1, 0], .70 + progress * 2.1, .065 * inv, 12, '#58ffba', 3);
+        continue;
+      }
+      const isBaizer = e.kind === 'baizer' || e.kind === 'baizerBreak';
+      const isBreak = e.kind === 'break' || e.kind === 'baizerBreak', isShield = e.kind === 'shield' || e.kind === 'baizer', isKill = e.kind === 'kill';
+      const col = isKill ? '#ffe078' : isBaizer ? '#d478ff' : (isBreak || isShield) ? '#5cf4ff' : e.gun === 'MS10' ? '#68f2ff' : e.source === 'p1' ? '#d896ff' : '#ffd86b';
       if (progress < .44) {
         const s = (isKill ? .34 : isBreak ? .24 : .16) * (1 - progress / .44);
         m.box(e.p[0], e.p[1], e.p[2], s, s, s, 'white', '#fffef0', 0, 3);
@@ -1159,6 +1218,40 @@ export function movingDetails(match, time, extra = false, lite = false, opts = n
         const px = e.p[0] + Math.cos(ang) * rad, pz = e.p[2] + Math.sin(ang) * rad;
         const py = .4 + progress * (2.6 + (k % 3) * .8);
         m.beam([px, py, pz], [px, py + .65 * inv, pz], .032 * inv, .032 * inv, 'white', k % 2 ? '#8effef' : '#ffe48f', 3);
+      }
+      continue;
+    }
+
+    if (e.kind === 'baizerPickup') {
+      const is400 = (e.amount || 20) >= 40;
+      ring(m, [e.p[0], .20 + progress * 2.2, e.p[2]], [0, 1, 0], .75 + progress * (is400 ? 3.2 : 2.3), .075 * inv, 16, '#d876ff', 3);
+      if (is400) ring(m, [e.p[0], .45 + progress * 1.7, e.p[2]], [0, 1, 0], .55 + progress * 2.1, .055 * inv, 14, '#f8d2ff', 3);
+      const nSp = is400 ? 12 : 8;
+      for (let k = 0; k < nSp; k++) {
+        const ang = k / nSp * Math.PI * 2 + progress * 3.0;
+        const rad = .75 + progress * (is400 ? 1.85 : 1.35);
+        const px = e.p[0] + Math.cos(ang) * rad, pz = e.p[2] + Math.sin(ang) * rad;
+        const py = .35 + progress * (2.1 + (k % 3) * .5);
+        m.beam([px, py, pz], [px, py + .48 * inv, pz], .028 * inv, .028 * inv, 'white', k % 2 ? '#e69aff' : '#b256ff', 3);
+      }
+      continue;
+    }
+
+    if (e.kind === 'shaffer') {
+      ring(m, [e.p[0], .25 + progress * 1.9, e.p[2]], [0, 1, 0], .55 + progress * 2.1, .062 * inv, 16, '#90b8ff', 3);
+      ring(m, [e.p[0], 1.75 - progress * 1.4, e.p[2]], [0, 1, 0], .85 + progress * 1.3, .044 * inv, 14, '#d8ecff', 3);
+      continue;
+    }
+
+    if (e.kind === 'heal') {
+      ring(m, [e.p[0], .18 + progress * 2.1, e.p[2]], [0, 1, 0], .65 + progress * 2.2, .068 * inv, 16, '#4cffb4', 3);
+      ring(m, [e.p[0], .52 + progress * 1.6, e.p[2]], [0, 1, 0], .48 + progress * 1.5, .048 * inv, 14, '#d8ffec', 3);
+      for (let k = 0; k < 10; k++) {
+        const ang = k / 10 * Math.PI * 2 + progress * 2.6;
+        const rad = .65 + progress * 1.1;
+        const px = e.p[0] + Math.cos(ang) * rad, pz = e.p[2] + Math.sin(ang) * rad;
+        const py = .30 + progress * (2.0 + (k % 3) * .45);
+        m.beam([px, py, pz], [px, py + .45 * inv, pz], .026 * inv, .026 * inv, 'white', k % 2 ? '#58ffba' : '#d2ffec', 3);
       }
       continue;
     }
@@ -1232,21 +1325,27 @@ export function movingDetails(match, time, extra = false, lite = false, opts = n
       continue;
     }
 
-    if (e.kind === 'break' || e.kind === 'shield') {
+    if (e.kind === 'break' || e.kind === 'shield' || e.kind === 'baizerBreak' || e.kind === 'baizer') {
       // Geodesic hexagonal energy shield dome ripple + shattering crystalline hex shards & electric arcs on break
-      const isBreak = e.kind === 'break';
+      const isBaizer = e.kind === 'baizer' || e.kind === 'baizerBreak';
+      const isBreak = e.kind === 'break' || e.kind === 'baizerBreak';
+      const colCore = isBaizer ? '#fae6ff' : '#e8ffff';
+      const colFlare = isBaizer ? '#e69cff' : '#9cfaff';
+      const colHexA = isBaizer ? '#f2ccff' : '#d8ffff';
+      const colHexB = isBaizer ? '#c860ff' : '#4ceeff';
+      const colRing = isBaizer ? '#cf6cff' : '#5cf4ff';
       const coreR = (isBreak ? .32 : .21) * inv;
       if (coreR > .02) {
-        m.ellipsoid(e.p[0], e.p[1], e.p[2], coreR, coreR, coreR, 'white', '#e8ffff', 3, 8, 4);
-        starFlare(m, e.p, norm, (isBreak ? .95 : .58) * inv, (isBreak ? .034 : .024) * inv, 2, '#9cfaff', seed + progress * 2.0, 3);
+        m.ellipsoid(e.p[0], e.p[1], e.p[2], coreR, coreR, coreR, 'white', colCore, 3, 8, 4);
+        starFlare(m, e.p, norm, (isBreak ? .95 : .58) * inv, (isBreak ? .034 : .024) * inv, 2, colFlare, seed + progress * 2.0, 3);
       }
       // Curved 7-cell geodesic hexagonal shield lattice expanding along surface normal
       if (progress < (isBreak ? .72 : .85)) {
         const hf = 1 - progress / (isBreak ? .72 : .85);
         const cellR = (.085 + progress * (isBreak ? .30 : .19));
-        hexPatch(m, add(e.p, scale(norm, .04)), norm, cellR, (isBreak ? .026 : .018) * hf, '#d8ffff', '#4ceeff', 3);
+        hexPatch(m, add(e.p, scale(norm, .04)), norm, cellR, (isBreak ? .026 : .018) * hf, colHexA, colHexB, 3);
       }
-      ring(m, e.p, norm, .16 + progress * (isBreak ? 1.85 : 1.05), (isBreak ? .068 : .046) * inv, 14, '#5cf4ff', 3);
+      ring(m, e.p, norm, .16 + progress * (isBreak ? 1.85 : 1.05), (isBreak ? .068 : .046) * inv, 14, colRing, 3);
       ring(m, add(e.p, scale(norm, .06)), norm, .10 + progress * (isBreak ? 1.25 : .70), .036 * inv, 10, '#ffffff', 3);
 
       // Shattering spinning hexagonal energy shards + jagged electric discharge bolts
@@ -1260,10 +1359,10 @@ export function movingDetails(match, time, extra = false, lite = false, opts = n
           // Spinning diamond/hex shield glass shard
           const shR = (.085 + (k % 3) * .025) * inv + .018;
           const spinA = [Math.cos(progress * 9 + k), Math.sin(progress * 7 + k), Math.cos(progress * 5 - k)];
-          ring(m, p0, spinA, shR, .018 * inv + .004, 6, k % 4 === 0 ? '#ffffff' : '#6af6ff', 3);
+          ring(m, p0, spinA, shR, .018 * inv + .004, 6, k % 4 === 0 ? '#ffffff' : colRing, 3);
         } else {
           const p1 = add(p0, scale(d, (isBreak ? .34 : .22) * inv + .04));
-          m.beam(p0, p1, (isBreak ? .034 : .024) * inv + .005, .024 * inv + .005, 'white', k % 2 ? '#76f8ff' : '#e0ffff', 3);
+          m.beam(p0, p1, (isBreak ? .034 : .024) * inv + .005, .024 * inv + .005, 'white', k % 2 ? colFlare : colCore, 3);
         }
       }
       // Crackling electric lightning arcs leaping off broken shield
@@ -1278,7 +1377,7 @@ export function movingDetails(match, time, extra = false, lite = false, opts = n
           const j1 = add(add(e.p, scale(dir, r1)), scale(norm, .16 * Math.sin(seed + a * 3.1)));
           const j2 = add(add(e.p, scale(dir, r2)), scale(norm, -.12 * Math.cos(seed + a * 2.3)));
           m.beam(e.p, j1, .022 * lf, .022 * lf, 'white', '#ffffff', 3);
-          m.beam(j1, j2, .016 * lf, .016 * lf, 'white', '#58f2ff', 3);
+          m.beam(j1, j2, .016 * lf, .016 * lf, 'white', colRing, 3);
         }
       }
       continue;

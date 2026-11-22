@@ -479,8 +479,10 @@ export class SoftwareRenderer {
     this.depth.fill(0);
     this.mesh(activeTerrain);
     if (match) {
+      const viewerTeam = match.player?.team ?? 0;
       for (const a of match.actors) {
         if (a.human || !a.alive)continue;
+        if (a.team !== viewerTeam && (a.shafferTimer || 0) > 0) continue;
         const cy = Math.cos(a.yaw), sy = Math.sin(a.yaw);
         this.mesh(this.actorMesh(a, lite), {pose: a, p: [a.x, a.y, a.z], r: [cy, 0, sy], u: [0, 1, 0], b: [-sy, 0, cy]}, Math.sin(a.stride * 2.75) * Math.min(1, Math.hypot(a.vx, a.vz) / 4))
       }
@@ -490,13 +492,23 @@ export class SoftwareRenderer {
     if (match?.player.alive && view.firstPerson) {
       const a = match.player,
         m = view.motion || {},
-        drop = a.reload ? Math.sin((1 - a.reload / weapons[a.gun].reload) * Math.PI) : 0;
+        prog = a.reload > 0 ? clamp(1 - a.reload / weapons[a.gun].reload, 0, 1) : 0;
+      let relDrop = 0, relX = 0, relZ = 0;
+      if (prog > 0) {
+        const s = Math.sin(prog * Math.PI);
+        const swapDip = prog > .20 && prog < .62 ? Math.sin((prog - .20) / .42 * Math.PI) : 0;
+        const slam = prog > .62 && prog < .80 ? Math.sin((prog - .62) / .18 * Math.PI) : 0;
+        const rack = prog > .80 && prog < .96 ? Math.sin((prog - .80) / .16 * Math.PI) : 0;
+        relDrop = s * .14 + swapDip * .09 - slam * .045 - rack * .018;
+        relX = -s * .065 - swapDip * .025 + rack * .016;
+        relZ = -swapDip * .045 - rack * .042;
+      }
       this.tanY = Math.tan(66 * Math.PI / 360);
       this.tanX = this.tanY * this.aspect;
       this.fy = this.h * .5 / this.tanY;
       this.fx = this.w * .5 / this.tanX;
       this.depth.fill(0);
-      const p = add(eye, add(scale(right, .205 + (m.swayX || 0)), add(scale(up, -.205 - drop * .14 + (m.kickY || 0) + (m.swayY || 0)), scale(dir, .54 - (m.kickZ ?? (view.kick || 0) * .062)))));
+      const p = add(eye, add(scale(right, .205 + relX + (m.swayX || 0)), add(scale(up, -.205 - relDrop + (m.kickY || 0) + (m.swayY || 0)), scale(dir, .54 + relZ - (m.kickZ ?? (view.kick || 0) * .062)))));
       const tr = {p, r: right, u: up, b: scale(dir, -1)};
       this.mesh(this.devices[a.gun], tr, null, true);
       if (a.flash > .005) this.mesh(chunk(muzzleFlashMesh(a.gun, clamp(a.flash / .11, 0, 1), a.shotCount || 1, extra, lite)), tr, null, true)

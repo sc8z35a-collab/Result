@@ -185,7 +185,7 @@ export function updateRD(match, a, dt) {
   // 1. Validate & maintain active target across the weapon's lock hold cone (plus D01 SENSOR on RD40)
   if (d.focusId >= 0) {
     const cur = match.actors[d.focusId];
-    if (!cur?.alive || cur.team === a.team || cur.spawnId !== d.focusSpawnId) {
+    if (!cur?.alive || cur.team === a.team || cur.spawnId !== d.focusSpawnId || (cur.shafferTimer || 0) > 0) {
       clearLock(d, t);
     } else {
       const s = aimAt(a, cur, spec.speed, false);
@@ -222,7 +222,7 @@ export function updateRD(match, a, dt) {
     d.scanAt = t + 0.04;
     let best = -1, bestCost = Infinity, bestOccluded = false, bestRange = 0;
     for (const e of match.actors) {
-      if (!e.alive || e.team === a.team) continue;
+      if (!e.alive || e.team === a.team || (e.shafferTimer || 0) > 0) continue;
       const s = aimAt(a, e, spec.speed, false);
       if (s.range > spec.maxRange) continue;
       const sep = Math.hypot(angleDiff(s.yaw, a.yaw) * Math.cos(a.pitch), s.pitch - a.pitch);
@@ -272,7 +272,7 @@ export function updateRD(match, a, dt) {
   let targetTrackYaw = 0, targetTrackPitch = 0;
   if (d.focusId >= 0) {
     const e = match.actors[d.focusId];
-    if (e?.alive && e.team !== a.team && e.spawnId === d.focusSpawnId) {
+    if (e?.alive && e.team !== a.team && e.spawnId === d.focusSpawnId && !(e.shafferTimer > 0)) {
       const s = aimAt(a, e, spec.speed, !d.occluded);
       const dyaw = angleDiff(s.yaw, a.yaw);
       const dpitch = s.pitch - a.pitch;
@@ -311,7 +311,7 @@ export function bulletGuidanceRD(match, a, barrelSide = 0) {
   const spec = RD_SPECS[d?.gun || a.gun] || RD_SPECS[RD];
   const microFan = barrelSide * (a.gun === RD ? 0.0022 : 0.0042);
   const e = d && d.focusId >= 0 ? match.actors[d.focusId] : null;
-  if ((a.human && match.autoAim === false) || !d || !d.locked || !e?.alive || e.team === a.team || e.spawnId !== d.focusSpawnId) {
+  if ((a.human && match.autoAim === false) || !d || !d.locked || !e?.alive || e.team === a.team || e.spawnId !== d.focusSpawnId || (e.shafferTimer || 0) > 0) {
     return {
       dir: forward(a.yaw + microFan, clamp(a.pitch, -1.31, 1.31)),
       guided: false,

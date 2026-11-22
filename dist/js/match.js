@@ -1,5 +1,5 @@
 import {clamp, forward, dot, sub, add, scale, random, cross, unit} from './geometry.js';
-import {teams, tankers, walkable, moveActor, floorAt, obstruction, raycastMaterial, waterCrossing} from './yard.js';
+import {teams, tankers, baizerPickups, walkable, moveActor, floorAt, obstruction, raycastMaterial, waterCrossing} from './yard.js';
 import {NV2} from './nv2.js';
 import {eyeOf, torso, bodyCenter, postureStep, vertical} from './posture.js';
 import {DF, initialDF, scheduleDF, bulletGuidanceDF, steerGuidedShot, spendP1, updateDF} from './df1.js';
@@ -15,6 +15,10 @@ import {ResonanceCore} from './resonance.js';
 import {ChronoTrace} from './chronotrace.js';
 import {FermatCore} from './fermat.js';
 const baseSpeed = 360, baseInterval = .24;
+export const BASE_SHIELD_MAX = 25;
+export const MAX_SKILL_CHARGES = 3;
+export const KILLS_PER_SKILL_CHARGE = 5;
+export const SHAFFER_DURATION = 12.0;
 export const weapons = {
   'SW T': {capacity: 10, damage: 9, rate: 100, velocity: 100, speed: baseSpeed, interval: baseInterval, burst: 1, reload: 1.4},
   SRA: {capacity: 30, damage: 6, rate: 120, velocity: 80, speed: baseSpeed * .8, interval: baseInterval / 1.2, burst: 1, reload: 1.65},
@@ -24,7 +28,7 @@ export const weapons = {
   [RD20]: {capacity: 20, damage: 6, rate: 110, velocity: 70, speed: baseSpeed * .7, interval: baseInterval / 1.1, burst: 1, pellets: 1, reload: 1.55, auto: true},
   [RD30]: {capacity: 80, damage: 3, rate: 100, velocity: 100, speed: baseSpeed * 1.0, interval: baseInterval, burst: 1, pellets: 2, reload: 1.75, auto: true},
   [RD]: {capacity: 130, damage: 3, rate: 170, velocity: 140, speed: baseSpeed * 1.4, interval: baseInterval / 1.7, burst: 1, pellets: 2, reload: 1.95, auto: true, playerOnly: true},
-  [DF40II]: {capacity: 260, damage: 2, rate: 225, velocity: 80, speed: baseSpeed * .8, interval: baseInterval / 2.25, burst: 1, pellets: 3, reload: 2.15, auto: true, playerOnly: true}
+  [DF40II]: {capacity: 350, damage: 2, rate: 260, velocity: 80, speed: baseSpeed * .8, interval: baseInterval / 2.6, burst: 1, pellets: 4, stockCap: 500, stockRegen: 2, reload: 2.15, auto: true, playerOnly: true}
 };
 export const modes = {'3v3': [3, 3], '1v2': [1, 2], '1v1': [1, 1]};
 const names = [['YOU', 'NAGI', 'KAI'], ['RIN', 'SORA', 'AO']];
@@ -78,6 +82,7 @@ export class Match {
     this.casings = [];
     this.scorches = [];
     this.tankers = tankers.map(t => ({...t, cooldown: 0, maxCooldown: 25, pulse: 0, lastTeam: -1}));
+    this.baizers = baizerPickups.map(b => ({...b, cooldown: 0, maxCooldown: 24, pulse: 0}));
     this.rng = random(1939);
     this.seq = 0;
     this.echoPulse = new EchoPulseField();
@@ -158,6 +163,7 @@ export class Match {
         }
       }
     }
+    const w = this.weapon(a);
     Object.assign(a, {
       x: p[0],
       y: 0,
@@ -165,10 +171,16 @@ export class Match {
       yaw: a.team ? Math.PI : 0,
       pitch: 0,
       hp: 100,
-      shield: 10,
+      shield: BASE_SHIELD_MAX,
       shieldClock: 0,
-      mag: this.weapon(a).capacity,
-      stock: 100,
+      baizerShield: 0,
+      baizerMax: 0,
+      baizerFlash: 0,
+      shafferTimer: 0,
+      skillKills: a.skillKills || 0,
+      skillCharges: a.skillCharges || 0,
+      mag: w.capacity,
+      stock: w.stockCap || 100,
       ammoClock: 0,
       ammoRate: 1,
       tankerUses: a.tankerUses || 0,
@@ -181,6 +193,7 @@ export class Match {
       burstLeft: 0,
       nextBurst: 0,
       reload: 0,
+      autoReloading: false,
       vx: 0,
       vz: 0,
       vy: 0,
@@ -215,6 +228,47 @@ export class Match {
   }
   toggleAA14(a = this.player) {
     return toggleAA14(this, a);
+  }
+  useSkill(a = this.player, skill = 'shaffer') {
+    if (!a?.alive || this.ended) return false;
+    if ((a.skillCharges || 0) <= 0) return false;
+    if (skill === 'shaffer') {
+      if ((a.shafferTimer || 0) > 0) return false;
+      a.skillCharges--;
+      a.shafferTimer = SHAFFER_DURATION;
+      this.nv.onShafferCloak?.(a);
+      this.effects.push({
+        kind: 'shaffer',
+        p: [a.x, a.y + 1.0, a.z],
+        dir: [0, 1, 0],
+        actor: a.id,
+        team: a.team,
+        life: .85,
+        max: .85,
+        seed: ++this.seq
+      });
+      this.event('skill', {actor: a, skill: 'shaffer', duration: SHAFFER_DURATION, charges: a.skillCharges});
+      return true;
+    }
+    if (skill === 'heal') {
+      if (a.hp >= 100) return false;
+      const healed = Math.round((100 - a.hp) * 10) / 10;
+      a.skillCharges--;
+      a.hp = 100;
+      this.effects.push({
+        kind: 'heal',
+        p: [a.x, a.y + 1.0, a.z],
+        dir: [0, 1, 0],
+        actor: a.id,
+        team: a.team,
+        life: .95,
+        max: .95,
+        seed: ++this.seq
+      });
+      this.event('skill', {actor: a, skill: 'heal', healed, charges: a.skillCharges});
+      return true;
+    }
+    return false;
   }
   setAutoAim(enabled) {
     this.autoAim = !!enabled;
@@ -257,11 +311,12 @@ export class Match {
     }
     return this.autoAim;
   }
-  reload(a) {
+  reload(a, auto = false) {
     if (!a.alive || this.ended || a.reload > 0 || a.burstLeft || a.mag >= this.weapon(a).capacity || a.stock <= 0)return false;
     a.reload = this.weapon(a).reload;
+    a.autoReloading = !!auto;
     this.nv.onReload?.(a);
-    this.event('reload', {actor: a});
+    this.event('reload', {actor: a, auto: !!auto});
     return true;
   }
   trigger(a) {
@@ -300,17 +355,19 @@ export class Match {
       a.rd.barrelPhase = 1 - (a.rd.barrelPhase || 0);
     }
     const firedAA14 = !!(a.df40?.aa14Active && !a.df40?.aa14Overheated);
+    const cloaked = (a.shafferTimer || 0) > 0;
     const p = eyeOf(a);
     const barrelLen = a.gun === 'MS10' ? .92 : a.gun === DF40II ? .90 : a.gun === RD ? .88 : a.gun === RD30 ? .80 : a.gun === RD20 ? .68 : a.gun === 'D1' ? .78 : a.gun === 'SW T' ? .60 : .74;
+    const quadOffsets = [[-1, .65], [1, .65], [-.85, -.65], [.85, -.65]];
     let firstDir = null, firstMuzzle = null;
     for (let k = 0; k < salvo; k++) {
-      const barrelSide = salvo === 3 ? (k - 1) : salvo === 2 ? (k === 0 ? -1 : 1) : 0;
-      const barrelVert = salvo === 3 ? (k === 1 ? 1 : -0.45) : 0;
+      const barrelSide = salvo === 4 ? quadOffsets[k][0] : salvo === 3 ? (k - 1) : salvo === 2 ? (k === 0 ? -1 : 1) : 0;
+      const barrelVert = salvo === 4 ? quadOffsets[k][1] : salvo === 3 ? (k === 1 ? 1 : -0.45) : 0;
       const guidedInfo = a.df ? bulletGuidanceDF(this, a) : a.df40 ? bulletGuidanceDF40II(this, a, barrelSide, barrelVert) : a.rd ? bulletGuidanceRD(this, a, barrelSide) : null;
       const dir = guidedInfo ? guidedInfo.dir : forward(a.yaw, a.pitch);
       const right = unit(cross(dir, [0, 1, 0]));
       const up = cross(right, dir);
-      const sideOff = (a.human ? .14 : .11) + barrelSide * (a.gun === DF40II ? .042 : .048);
+      const sideOff = (a.human ? .14 : .11) + barrelSide * (a.gun === DF40II ? .038 : .048);
       const upOff = (a.human ? -.12 : -.18) + barrelVert * .026;
       const muzzle = add(p, add(scale(dir, barrelLen), add(scale(right, sideOff), scale(up, upOff))));
       if (!firstDir) { firstDir = dir; firstMuzzle = muzzle; }
@@ -343,6 +400,7 @@ export class Match {
         penetrations: 0,
         ricocheted: false,
         penetrated: false,
+        shafferCloaked: cloaked,
         fermatLocked: this.fermat.isShotFermatAligned(a, dir, this) || !!a._fermatAiShot,
         damage: w.damage,
         speed: w.speed,
@@ -361,6 +419,7 @@ export class Match {
         team: a.team,
         source,
         aaTier: guidedInfo?.aaTier || null,
+        shafferCloaked: cloaked,
         actor: a.id,
         human: a.human,
         life: a.gun === 'MS10' ? .15 : .12,
@@ -376,26 +435,33 @@ export class Match {
         rot: this.rng() * 6.28,
         spin: (this.rng() > .5 ? 1 : -1) * (14 + this.rng() * 16),
         gun: a.gun,
+        team: a.team,
+        shafferCloaked: cloaked,
         life: .95,
         bounced: false
       });
       if (this.casings.length > 42)this.casings.shift();
     }
     if (a.df40) onFireDF40II(this, a, salvo);
-    this.echoPulse.emit(this, {
-      kind: 'fire',
-      pos: firstMuzzle || p,
-      actor: a,
-      team: a.team,
-      loudness: a.gun === 'MS10' ? 1.25 : a.gun === DF40II ? 1.18 : a.gun === RD ? 1.12 : 1.0,
-      gun: a.gun
-    });
-    if (firstMuzzle && firstDir) {
-      this.aeroVortex.injectSmoke(firstMuzzle[0], firstMuzzle[2], 0.11, 0.18, 1, firstDir[0] * 1.3, firstDir[2] * 1.3);
-      this.thermoFlux.depositHeat(a.x, a.z, 0.14, 0);
+    if (!cloaked) {
+      this.echoPulse.emit(this, {
+        kind: 'fire',
+        pos: firstMuzzle || p,
+        actor: a,
+        team: a.team,
+        loudness: a.gun === 'MS10' ? 1.25 : a.gun === DF40II ? 1.18 : a.gun === RD ? 1.12 : 1.0,
+        gun: a.gun
+      });
+      if (firstMuzzle && firstDir) {
+        this.aeroVortex.injectSmoke(firstMuzzle[0], firstMuzzle[2], 0.11, 0.18, 1, firstDir[0] * 1.3, firstDir[2] * 1.3);
+        this.thermoFlux.depositHeat(a.x, a.z, 0.14, 0);
+      }
+      this.nv.onShotFired?.(a, source);
     }
-    this.nv.onShotFired?.(a, source);
-    this.event('fire', {actor: a, source, gun: a.gun, p: firstMuzzle, dir: firstDir, speed: w.speed, pellets: salvo, burstIndex: a.shotCount, aa14: firedAA14});
+    this.event('fire', {actor: a, source, gun: a.gun, p: firstMuzzle, dir: firstDir, speed: w.speed, pellets: salvo, burstIndex: a.shotCount, aa14: firedAA14, shafferCloaked: cloaked});
+    if (a.mag <= 0 && !a.queue.length && a.stock > 0 && a.reload <= 0) {
+      this.reload(a, true);
+    }
     return true;
   }
   deploySmokeVent(a = this.player) {
@@ -416,41 +482,68 @@ export class Match {
   }
   damage(v, owner, power, dir = null, meta = null) {
     if (this.ended || !v.alive || !owner || owner.team === v.team || !Number.isFinite(power) || power <= 0) return null;
+    const hadBaizer = (v.baizerShield || 0) > 0;
+    const baizerAbsorbed = Math.min(v.baizerShield || 0, power);
+    v.baizerShield = Math.max(0, Math.round(((v.baizerShield || 0) - baizerAbsorbed) * 10) / 10);
+    if (v.baizerShield <= 0) v.baizerMax = 0;
+    const baizerBreak = hadBaizer && v.baizerShield <= 0;
+    const afterBaizer = Math.max(0, Math.round((power - baizerAbsorbed) * 10) / 10);
     const hadShield = v.shield > 0;
-    const absorbed = Math.min(v.shield, power);
-    v.shield = Math.round((v.shield - absorbed) * 10) / 10;
-    v.hp = Math.max(0, Math.round((v.hp - (power - absorbed)) * 10) / 10);
+    const absorbed = Math.min(v.shield, afterBaizer);
+    v.shield = Math.max(0, Math.round((v.shield - absorbed) * 10) / 10);
+    const hpLoss = Math.max(0, Math.round((afterBaizer - absorbed) * 10) / 10);
+    v.hp = Math.max(0, Math.round((v.hp - hpLoss) * 10) / 10);
     const shieldBreak = hadShield && v.shield <= 0;
+    const anyShieldHit = baizerAbsorbed > 0 || absorbed > 0;
+    const anyShieldBreak = baizerBreak || shieldBreak;
     const kill = v.hp <= 0;
     if (meta?.shot) {
-      const outcome = kill ? 'kill' : shieldBreak ? 'break' : absorbed > 0 ? 'shield' : 'hit';
+      const outcome = kill ? 'kill' : anyShieldBreak ? 'break' : anyShieldHit ? 'shield' : 'hit';
       this.chronoTrace.finishShot(meta.shot, meta.point, outcome, meta.time, v);
     } else if (kill && v.human) {
       this.chronoTrace.lastPlayerDeathTrace = null;
     }
     v.hitRecoil = Math.min(1, (v.hitRecoil || 0) + .58 + power * .038);
     v.hitFlash = 1;
-    if (absorbed > 0)v.shieldFlash = 1;
-    if (dir)v.hitDir = [...dir];
+    if (baizerAbsorbed > 0) v.baizerFlash = 1;
+    if (absorbed > 0) v.shieldFlash = 1;
+    if (dir) v.hitDir = [...dir];
     if (meta?.ricochet) this.techStats.ricochetHits++;
     if (meta?.wallbang) this.techStats.wallbangHits++;
-    if (shieldBreak) {
+    if (anyShieldBreak) {
       this.aeroVortex.injectBurst(v.x, v.z, {smoke: 0.95, heat: 1.12, force: 3.6, radius: 2});
       this.thermoFlux.depositHeat(v.x, v.z, 0.85, 2);
       this.resonance.exciteBlast([v.x, v.y + 1.0, v.z], 0.78);
     }
     this.nv.learn(v, false);
-    this.nv.onHit?.(v, owner, dir, power, shieldBreak);
-    this.event('hit', {victim: v, actor: owner, shield: absorbed > 0, shieldBreak, kill, damage: power, dir, ricochet: !!meta?.ricochet, wallbang: !!meta?.wallbang});
-    if (!kill)return {shield: absorbed > 0, shieldBreak, kill: false};
+    this.nv.onHit?.(v, owner, dir, power, anyShieldBreak);
+    this.event('hit', {
+      victim: v,
+      actor: owner,
+      shield: anyShieldHit,
+      shieldBreak,
+      baizer: baizerAbsorbed > 0,
+      baizerBreak,
+      kill,
+      damage: power,
+      dir,
+      ricochet: !!meta?.ricochet,
+      wallbang: !!meta?.wallbang
+    });
+    if (!kill) return {shield: absorbed > 0, shieldBreak, baizer: baizerAbsorbed > 0, baizerBreak, kill: false};
     this.aeroVortex.injectBurst(v.x, v.z, {smoke: 1.35, heat: 0.92, force: 4.8, radius: 3});
     this.thermoFlux.depositHeat(v.x, v.z, 1.15, 2);
     this.resonance.exciteBlast([v.x, v.y + 1.0, v.z], 1.15);
     v.alive = false;
     v.respawn = 3;
     v.reload = 0;
+    v.autoReloading = false;
     v.burstLeft = 0;
     v.queue.length = 0;
+    v.shafferTimer = 0;
+    v.baizerShield = 0;
+    v.baizerMax = 0;
+    v.baizerFlash = 0;
     if (v.df) {
       v.df.ads = false;
       v.df.locked = false;
@@ -477,13 +570,21 @@ export class Match {
     }
     v.deaths++;
     owner.kills++;
+    if ((owner.skillCharges || 0) < MAX_SKILL_CHARGES) {
+      owner.skillKills = (owner.skillKills || 0) + 1;
+      if (owner.skillKills >= KILLS_PER_SKILL_CHARGE) {
+        owner.skillKills -= KILLS_PER_SKILL_CHARGE;
+        owner.skillCharges = Math.min(MAX_SKILL_CHARGES, (owner.skillCharges || 0) + 1);
+        this.event('skill_charge', {actor: owner, charges: owner.skillCharges});
+      }
+    }
     if (owner.human) owner.earned += 10;
     this.nv.learn(owner, true);
     this.nv.onKill?.(owner, v);
     this.scores[owner.team]++;
     this.event('point', {actor: owner, victim: v, receipt: this.receiptId + '/' + owner.id + '/' + owner.kills});
     if (this.scores[owner.team] >= this.goals[owner.team]) this.end(owner.team);
-    return {shield: absorbed > 0, shieldBreak, kill: true}
+    return {shield: absorbed > 0, shieldBreak, baizer: baizerAbsorbed > 0, baizerBreak, kill: true}
   }
   end(winner = null) {
     if (this.ended) return;
@@ -538,6 +639,42 @@ export class Match {
       }
     }
   }
+  updateBaizers(dt) {
+    for (const bz of this.baizers) {
+      if (bz.cooldown > 0) bz.cooldown = bz.cooldown <= dt + 1e-8 ? 0 : bz.cooldown - dt;
+      if (bz.pulse > 0) bz.pulse = Math.max(0, bz.pulse - dt * 1.5);
+      if (bz.cooldown > 0) continue;
+      let recipient = null, best = 1.95;
+      for (const a of this.actors) {
+        if (!a.alive || a.y > 1.2) continue;
+        if ((a.baizerShield || 0) >= bz.amount) continue;
+        const distance = Math.hypot(a.x - bz.x, a.z - bz.z);
+        if (distance <= best && (!recipient || distance < best)) {
+          recipient = a;
+          best = distance;
+        }
+      }
+      if (recipient) {
+        recipient.baizerShield = bz.amount;
+        recipient.baizerMax = bz.amount;
+        recipient.baizerFlash = 1;
+        bz.cooldown = bz.maxCooldown;
+        bz.pulse = 1;
+        this.effects.push({
+          kind: 'baizerPickup',
+          p: [bz.x, .85, bz.z],
+          dir: [0, 1, 0],
+          actor: recipient.id,
+          team: recipient.team,
+          amount: bz.amount,
+          life: .85,
+          max: .85,
+          seed: ++this.seq
+        });
+        this.event('baizer', {actor: recipient, pickup: bz, kind: bz.kind, amount: bz.amount});
+      }
+    }
+  }
   updatePlayer(dt, input) {
     const a = this.player;
     if (!a.alive)return;
@@ -573,6 +710,10 @@ export class Match {
     a.seismicRattle = Math.max(0, (a.seismicRattle || 0) - dt * 1.4);
     a.hitFlash = Math.max(0, (a.hitFlash || 0) - dt * 5.2);
     a.shieldFlash = Math.max(0, (a.shieldFlash || 0) - dt * 4.2);
+    a.baizerFlash = Math.max(0, (a.baizerFlash || 0) - dt * 3.8);
+    if ((a.shafferTimer || 0) > 0) {
+      a.shafferTimer = a.shafferTimer <= dt + 1e-8 ? 0 : a.shafferTimer - dt;
+    }
     a.cooldown = Math.max(0, a.cooldown - dt);
     if (a.smokeCooldown > 0) a.smokeCooldown = Math.max(0, a.smokeCooldown - dt);
     // Smooth body-frame velocity & posture signals for the 16-joint articulated humanoid rig
@@ -588,21 +729,25 @@ export class Match {
     a.landCompress = Math.max(0, (a.landCompress || 0) * Math.exp(-9.5 * dt) - dt * 0.35);
     const sprintTarget = a.onGround && a.crouch < 0.25 && hSpd > 4.65 && localFwd > 2.2 ? clamp((hSpd - 4.4) / 1.4, 0, 1) : 0;
     a.sprintAmt = (a.sprintAmt || 0) + (sprintTarget - (a.sprintAmt || 0)) * (1 - Math.exp(-12 * dt));
-    const wReload = this.weapon(a).reload;
-    a.reloadFrac = a.reload > 0 ? clamp(1 - a.reload / wReload, 0, 1) : 0;
-    if (a.shield < 10) {
+    const w = this.weapon(a);
+    const wReload = w.reload;
+    if (a.shield < BASE_SHIELD_MAX) {
       a.shieldClock += dt;
-      if (a.shieldClock + 1e-8 >= 5) {
-        a.shield = Math.min(10, a.shield + 1);
-        a.shieldClock = Math.max(0, a.shieldClock - 5)
+      while (a.shieldClock + 1e-8 >= 5 && a.shield < BASE_SHIELD_MAX) {
+        a.shield = Math.min(BASE_SHIELD_MAX, a.shield + 1);
+        a.shieldClock = Math.max(0, a.shieldClock - 5);
       }
+      if (a.shield >= BASE_SHIELD_MAX) a.shieldClock = 0;
     } else a.shieldClock = 0;
-    if (a.stock < 100) {
-      a.ammoClock += dt * (a.ammoRate || 1);
-      if (a.ammoClock + 1e-8 >= 1) {
-        a.stock = Math.min(100, a.stock + 1);
-        a.ammoClock = Math.max(0, a.ammoClock - 1)
+    const stockCap = w.stockCap || 100;
+    const stockRegen = w.stockRegen || 1;
+    if (a.stock < stockCap) {
+      a.ammoClock += dt * stockRegen * (a.ammoRate || 1);
+      while (a.ammoClock + 1e-8 >= 1 && a.stock < stockCap) {
+        a.stock = Math.min(stockCap, a.stock + 1);
+        a.ammoClock = Math.max(0, a.ammoClock - 1);
       }
+      if (a.stock >= stockCap) a.ammoClock = 0;
     } else a.ammoClock = 0;
     if (a.df)updateDF(this, a, dt);
     if (a.rd)updateRD(this, a, dt);
@@ -616,19 +761,24 @@ export class Match {
       if (a.burstLeft && a.nextBurst <= 1e-7) {
         this.fire(a, a.queue.shift());
         a.burstLeft = a.queue.length;
-        a.nextBurst += this.weapon(a).interval
+        a.nextBurst += w.interval
       }
+    }
+    if (a.mag <= 0 && !a.burstLeft && a.reload <= 0 && a.stock > 0) {
+      this.reload(a, true);
     }
     if (a.reload > 0) {
       a.reload -= dt;
       if (a.reload <= 1e-7) {
-        const take = Math.min(this.weapon(a).capacity - a.mag, a.stock);
+        const take = Math.min(w.capacity - a.mag, a.stock);
         a.stock -= take;
         a.mag += take;
         a.reload = 0;
+        a.autoReloading = false;
         this.event('loaded', {actor: a})
       }
     }
+    a.reloadFrac = a.reload > 0 ? clamp(1 - a.reload / wReload, 0, 1) : 0;
   }
   beginPenetration(s, ball, normal, mat, time) {
     const entry = ball.entryPos;
@@ -728,7 +878,7 @@ export class Match {
     this.aeroVortex.injectProjectileWake(a, point, s.speed, s.gun);
     // Detect close bullet flyby near the human player for diverse spatial whiz/crack audio.
     const pl = this.player;
-    if (pl && pl.alive && s.owner !== pl && !s.whizzed && target !== pl) {
+    if (pl && pl.alive && s.owner !== pl && !s.whizzed && target !== pl && !(s.shafferCloaked && s.team !== pl.team)) {
       const eye = eyeOf(pl);
       const ab = sub(b, a), ab2 = dot(ab, ab);
       if (ab2 > 1e-8) {
@@ -761,7 +911,7 @@ export class Match {
       }
     }
     // Notify NPCs of close enemy bullet flybys (<2.2m) for realistic suppression startle/flinch
-    if (this.nv.onBulletWhiz && (s.age || 0) < 0.45) {
+    if (this.nv.onBulletWhiz && !s.shafferCloaked && (s.age || 0) < 0.45) {
       const ab = sub(b, a), ab2 = dot(ab, ab);
       if (ab2 > 1e-8) {
         let mask = s.whizNpcMask || 0;
@@ -802,8 +952,8 @@ export class Match {
       const p = point;
       if (target) {
         const res = this.damage(target, s.owner, s.damage, s.dir, {ricochet: s.ricocheted, wallbang: s.penetrated, shot: s, point: p, time: impactTime});
-        const kind = res?.kill ? 'kill' : res?.shieldBreak ? 'break' : res?.shield ? 'shield' : 'hit';
-        const dur = kind === 'kill' ? .78 : kind === 'break' ? .58 : kind === 'shield' ? .42 : .36;
+        const kind = res?.kill ? 'kill' : res?.baizerBreak ? 'baizerBreak' : res?.shieldBreak ? 'break' : res?.baizer ? 'baizer' : res?.shield ? 'shield' : 'hit';
+        const dur = kind === 'kill' ? .78 : (kind === 'break' || kind === 'baizerBreak') ? .58 : (kind === 'shield' || kind === 'baizer') ? .42 : .36;
         const bc = bodyCenter(target);
         const outN = unit([p[0] - bc[0] - s.dir[0] * .25, (p[1] - (target.y + .95)) * .35 - s.dir[1] * .25, p[2] - bc[1] - s.dir[2] * .25]);
         this.effects.push({
@@ -938,9 +1088,10 @@ export class Match {
     this.updatePlayer(dt, input);
     const arrivedEchoes = this.echoPulse.step(this);
     for (const rep of arrivedEchoes) {
-      this.nv.onEchoArrival?.(rep);
       const listener = this.actors[rep.listenerId];
       const src = rep.sourceActor;
+      if (src && (src.shafferTimer || 0) > 0 && listener && listener.team !== src.team && rep.kind !== 'ricochet' && rep.kind !== 'penetrate') continue;
+      this.nv.onEchoArrival?.(rep);
       const staleSource = src && (!src.alive || (rep.sourceSpawnId !== undefined && src.spawnId !== rep.sourceSpawnId));
       if (listener?.alive && !staleSource) {
         this.spectraField.observe(listener.team, rep.perceivedPos[0], rep.perceivedPos[2], {
@@ -956,7 +1107,7 @@ export class Match {
           w.specFed = true;
           const srcActor = w.actorId >= 0 ? this.actors[w.actorId] : null;
           const staleSrc = w.actorId >= 0 && (!srcActor?.alive || srcActor.spawnId !== w.actorSpawnId);
-          if (!staleSrc) {
+          if (!staleSrc && !((srcActor?.shafferTimer || 0) > 0 && w.kind !== 'ricochet' && w.kind !== 'penetrate')) {
             this.spectraField.observe(0, w.pos[0], w.pos[2], {sigma: w.occluded ? 7.2 : 4.6, weight: 0.58});
             if (srcActor && srcActor.team === 1 && w.kind !== 'smoke') {
               this.fermat.recordIntel(0, srcActor, this.time, 'echo', [w.pos[0], Math.max(1.15, w.pos[1]), w.pos[2]]);
@@ -970,7 +1121,7 @@ export class Match {
     for (let i = 0; i < this.actors.length; i++) {
       const a = this.actors[i];
       const prevStride = prevStrides[i];
-      if (!a.alive || !a.onGround) continue;
+      if (!a.alive || !a.onGround || (a.shafferTimer || 0) > 0) continue;
       if (Math.floor((a.stride || 0) / 1.15) > Math.floor(prevStride / 1.15)) {
         const intensity = (a.sprintAmt || 0) > 0.35 ? 0.56 : 0.38;
         this.thermoFlux.stampFootprint(a.x, a.z, a.team, this.time, intensity);
@@ -986,6 +1137,7 @@ export class Match {
       }
     }
     this.updateTankers(dt);
+    this.updateBaizers(dt);
     this.aeroVortex.tick(dt);
     this.thermoFlux.tick(dt, this.tankers);
     this.spectraField.tick(dt, this);
@@ -1013,8 +1165,8 @@ export class Match {
         c.v[0] *= .68;
         c.v[2] *= .68;
         c.spin *= .65;
-        if (!c.bounced) this.thermoFlux.depositHeat(c.p[0], c.p[2], 0.24, 0);
-        if ((c.bounces || 0) < 2 && impactVy > .55) {
+        if (!c.bounced && !c.shafferCloaked) this.thermoFlux.depositHeat(c.p[0], c.p[2], 0.24, 0);
+        if ((c.bounces || 0) < 2 && impactVy > .55 && !(c.shafferCloaked && c.team !== this.player?.team)) {
           this.event('casing', {point: [...c.p], gun: c.gun, speed: impactVy, bounce: c.bounces || 0});
           c.bounces = (c.bounces || 0) + 1
         }

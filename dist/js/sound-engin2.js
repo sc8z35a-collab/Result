@@ -2213,18 +2213,18 @@ export class SoundEngin2 {
         this._playTone({f0: (3650 + this.barrelHeat * 420) * j, f1: 5280 * j, dur: 0.056, gain: 0.044, type: 'sine', pan: boltPan, bus: this.foleyBus, priority: 3, start: start + 0.020});
       }
     } else if (gun === 'DF40 II') {
-      // Tri-barrel staggered harmonic cascade (3 simultaneous smart rounds + ARV1.3 / AA1.4 overdrive shimmer)
-      const pellets = Math.min(3, Math.max(1, e.pellets || 3));
-      const offsets = pellets === 3 ? [0, 0.0045, 0.009] : pellets === 2 ? [0, 0.006] : [0];
-      const pans = pellets === 3 ? [-0.07, 0.04, 0.15] : pellets === 2 ? [-0.04, 0.14] : [muzzlePan];
+      // Quad-barrel staggered harmonic cascade (4 simultaneous smart scatter rounds + ARV1.3 / AA1.4 overdrive shimmer)
+      const pellets = Math.min(4, Math.max(1, e.pellets || 4));
+      const offsets = pellets === 4 ? [0, 0.0036, 0.0072, 0.0108] : pellets === 3 ? [0, 0.0045, 0.009] : pellets === 2 ? [0, 0.006] : [0];
+      const pans = pellets === 4 ? [-0.09, -0.02, 0.06, 0.16] : pellets === 3 ? [-0.07, 0.04, 0.15] : pellets === 2 ? [-0.04, 0.14] : [muzzlePan];
       for (let bi = 0; bi < offsets.length; bi++) {
         this._playBuffer({
           buffer: this.crackBuf,
-          rate: (1.06 + bi * 0.06 + (e.aa14 ? 0.08 : 0)) * j,
-          dur: 0.042,
-          gain: (bi === 1 ? 0.24 : 0.19) * vol * (1 - distNorm * 0.40),
+          rate: (1.04 + bi * 0.05 + (e.aa14 ? 0.08 : 0)) * j,
+          dur: 0.040,
+          gain: (bi === 1 || bi === 2 ? 0.21 : 0.17) * vol * (1 - distNorm * 0.40),
           filterType: 'bandpass',
-          f0: ((e.aa14 ? 5200 : 4150) + bi * 420) * j,
+          f0: ((e.aa14 ? 5200 : 4150) + bi * 340) * j,
           f1: 960 * j,
           q: 1.45,
           lpf,
@@ -2892,7 +2892,11 @@ export class SoundEngin2 {
     const now = this.ctx.currentTime;
     const a = e.actor;
 
-    if (e.type === 'fire') { this.playFire(e, player); return; }
+    if (e.type === 'fire') {
+      if (e.shafferCloaked && a && a.team !== player.team) return;
+      this.playFire(e, player);
+      return;
+    }
     if (e.type === 'whiz') { this.playWhiz(e); return; }
     if (e.type === 'impact') { this.playImpact(e); return; }
     if (e.type === 'casing') { this.playCasing(e); return; }
@@ -2917,6 +2921,7 @@ export class SoundEngin2 {
       return;
     }
     if (e.type === 'reload' && a) {
+      if ((a.shafferTimer || 0) > 0 && a.team !== player.team) return;
       const st = this.actorState.get(a.id);
       if (st) st.reloadStage = 1;
       const isP = a === player;
@@ -2924,7 +2929,11 @@ export class SoundEngin2 {
       if (isP || d < 26) this._playReloadStage(a, isP, 1, now);
       return;
     }
-    if (e.type === 'loaded') { this._playLoadedBoltRack(a, a === player, now); return; }
+    if (e.type === 'loaded') {
+      if (a && (a.shafferTimer || 0) > 0 && a.team !== player.team) return;
+      this._playLoadedBoltRack(a, a === player, now);
+      return;
+    }
     if (e.type === 'dry' && a === player) {
       this._playTone({f0: 2180, f1: 760, dur: 0.022, attack: 0.001, gain: 0.075, type: 'triangle', pan: 0.12, bus: this.foleyBus, priority: 3, start: now});
       this._playTone({f0: 192, f1: 108, dur: 0.032, attack: 0.001, gain: 0.070, type: 'square', pan: 0.10, bus: this.foleyBus, priority: 3, start: now});
@@ -2936,6 +2945,31 @@ export class SoundEngin2 {
       return;
     }
     if (e.type === 'tanker') { this._playTankerActivate(e, player, now); return; }
+    if (e.type === 'baizer' && a === player) {
+      const hi = (e.amount || 20) >= 40;
+      this._playTone({f0: hi ? 523.3 : 440, f1: hi ? 784 : 659.3, dur: 0.14, gain: 0.11, type: 'triangle', bus: this.uiBus, priority: 4, start: now});
+      this._playTone({f0: hi ? 784 : 659.3, f1: hi ? 1174.7 : 987.8, dur: 0.22, gain: 0.095, type: 'sine', bus: this.uiBus, priority: 4, start: now + 0.06});
+      if (hi) this._playTone({f0: 1174.7, f1: 1568, dur: 0.24, gain: 0.08, type: 'sine', bus: this.uiBus, priority: 4, start: now + 0.12});
+      return;
+    }
+    if (e.type === 'skill_charge' && a === player) {
+      [587.3, 880, 1174.7].forEach((f, idx) => {
+        this._playTone({f0: f, f1: f * 1.03, dur: 0.14, gain: 0.095, type: 'triangle', bus: this.uiBus, priority: 4, start: now + idx * 0.055});
+      });
+      return;
+    }
+    if (e.type === 'skill' && a === player) {
+      if (e.skill === 'shaffer') {
+        this._playBuffer({buffer: this.whiteNoiseBuf, loop: true, dur: 0.42, attack: 0.02, gain: 0.10, filterType: 'bandpass', f0: 2600, f1: 420, q: 2.2, bus: this.uiBus, priority: 4, start: now});
+        this._playTone({f0: 740, f1: 240, dur: 0.34, gain: 0.10, type: 'sine', bus: this.uiBus, priority: 4, start: now});
+        this._playTone({f0: 1480, f1: 980, dur: 0.24, gain: 0.06, type: 'triangle', bus: this.uiBus, priority: 4, start: now + 0.04});
+      } else if (e.skill === 'heal') {
+        [523.3, 659.3, 784, 1046.5].forEach((f, idx) => {
+          this._playTone({f0: f, f1: f * 1.015, dur: 0.24, gain: 0.09, type: 'sine', bus: this.uiBus, priority: 4, start: now + idx * 0.05});
+        });
+      }
+      return;
+    }
     if (e.type === 'point' && a === player) {
       this._playTone({f0: 587.3, f1: 880, dur: 0.11, gain: 0.11, type: 'triangle', bus: this.uiBus, priority: 4, start: now});
       this._playTone({f0: 880, f1: 1174.7, dur: 0.17, gain: 0.10, type: 'sine', bus: this.uiBus, priority: 4, start: now + 0.08});
@@ -2961,10 +2995,13 @@ export class SoundEngin2 {
       this._playBuffer({buffer: this.whiteNoiseBuf, loop: true, dur: 0.048, gain: 0.11, filterType: 'bandpass', f0: 4600, f1: 1800, q: 1.9, bus: this.uiBus, priority: 4, start: now});
       this._playTone({f0: 932, f1: 1397, dur: 0.085, gain: 0.145, type: 'triangle', bus: this.uiBus, priority: 4, start: now});
       this._playTone({f0: 1397, f1: 1864, dur: 0.165, gain: 0.135, type: 'sine', bus: this.uiBus, priority: 4, start: now + 0.052});
-    } else if (e.shieldBreak) {
+    } else if (e.baizerBreak || e.shieldBreak) {
       // 12-Shard Physical Glass/Energy Shield Shatter Cascade + Sub Discharge
-      this._playBuffer({buffer: this.sub300Buf, rate: 0.88, dur: 0.16, gain: 0.20, bus: this.uiBus, priority: 4, start: now});
-      this._playBuffer({buffer: this.glassBuf, rate: 1.04, dur: 0.31, gain: 0.28, bus: this.uiBus, priority: 4, start: now});
+      this._playBuffer({buffer: this.sub300Buf, rate: e.baizerBreak ? 0.78 : 0.88, dur: 0.16, gain: 0.20, bus: this.uiBus, priority: 4, start: now});
+      this._playBuffer({buffer: this.glassBuf, rate: e.baizerBreak ? 1.18 : 1.04, dur: 0.31, gain: 0.28, bus: this.uiBus, priority: 4, start: now});
+    } else if (e.baizer) {
+      this._playTone({f0: 1480, f1: 920, dur: 0.068, gain: 0.125, type: 'triangle', bus: this.uiBus, priority: 4, start: now});
+      this._playTone({f0: 2960, f1: 2040, dur: 0.050, gain: 0.072, type: 'sine', bus: this.uiBus, priority: 4, start: now + 0.004});
     } else if (e.shield) {
       this._playTone({f0: 1290, f1: 790, dur: 0.065, gain: 0.125, type: 'triangle', bus: this.uiBus, priority: 4, start: now});
       this._playTone({f0: 2580, f1: 1840, dur: 0.045, gain: 0.070, type: 'sine', bus: this.uiBus, priority: 4, start: now + 0.004});

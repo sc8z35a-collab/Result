@@ -1063,7 +1063,7 @@ export class NV2 extends NV13Pro {
     if (ref) {
       const w = this.match.weapon(ref);
       tok[8] = ref.hp / 100;
-      tok[9] = ref.shield / 10;
+      tok[9] = clamp((ref.shield + (ref.baizerShield || 0)) / 25, 0, 2.6);
       tok[10] = ref.mag / Math.max(1, w.capacity);
       tok[11] = (ref.ammoRate || 1) > 1.01 ? 1.0 : 0.0;
       tok[12] = clamp(ref.x / 24, -1, 1);
@@ -1099,6 +1099,32 @@ export class NV2 extends NV13Pro {
     tok[22] = enemyReloading;
     tok[23] = clamp((this.match.scores[teamIdx] - this.match.scores[1 - teamIdx]) / 6, -1, 1);
     return tok;
+  }
+
+  // Purge enemy visual locks, contact memories, and spy sightings the instant an actor activates Shaffer cloak!
+  onShafferCloak(cloaked) {
+    if (!cloaked) return;
+    const enemyTeam = 1 - cloaked.team;
+    this.intel[enemyTeam]?.delete?.(cloaked.id);
+    this.nv2Teams[enemyTeam]?.enemyTrack?.delete?.(cloaked.id);
+    if (this.nv2Teams[enemyTeam]?.executeTargetId === cloaked.id) {
+      this.nv2Teams[enemyTeam].executeTargetId = -1;
+      this.nv2Teams[enemyTeam].executeUntil = -10;
+    }
+    for (const a of this.match.actors) {
+      if (a.team === cloaked.team || a.human) continue;
+      const b = this.brains.get(a.id);
+      if (!b) continue;
+      b.contacts?.delete?.(cloaked.id);
+      if (b.visibleEnemies) b.visibleEnemies = b.visibleEnemies.filter(e => e.id !== cloaked.id);
+      if (b.targetId === cloaked.id || b.target?.id === cloaked.id) {
+        b.seen = false;
+        b.target = null;
+        b.targetId = -1;
+      }
+      if (b.vision?.workingMemory) b.vision.workingMemory.delete(cloaked.id);
+      if (b.spy?.dossier) b.spy.dossier.delete(cloaked.id);
+    }
   }
 
   // Classify ground-truth enemy tactical intent between two observations (for online LLM Cross-Entropy backprop!)
@@ -1244,7 +1270,8 @@ export class NV2 extends NV13Pro {
       || (bVPre.exposedSince > 0 && t - bVPre.exposedSince < 2.6)
     ));
     const from = eyeOf(victim);
-    const to = attacker?.alive ? targetPoint(attacker) : null;
+    const attackerCloaked = (attacker?.shafferTimer || 0) > 0;
+    const to = attacker?.alive && !attackerCloaked ? targetPoint(attacker) : null;
     const bearing = to && sub(to, from);
     const visible = bearing && Math.hypot(...bearing) <= 85 &&
       dot(forward(victim.yaw, victim.pitch), unit(bearing)) > .12 &&
@@ -1325,7 +1352,7 @@ export class NV2 extends NV13Pro {
     const t = this.match.time;
     const bV = this.brains.get(victim.id);
     let victimSawKiller = false;
-    if (killer) {
+    if (killer && !((killer.shafferTimer || 0) > 0)) {
       if (bV && (bV.contacts?.get(killer.id)?.seen || (bV.targetId === killer.id && bV.seen))) {
         victimSawKiller = true;
       } else if (killer.alive) {
@@ -1644,7 +1671,7 @@ export class NV2 extends NV13Pro {
 
     for (let i = 0; i < shots.length; i++) {
       const s = shots[i];
-      if (s.team === a.team) continue;
+      if (s.team === a.team || s.shafferCloaked) continue;
       const rx = ax - s.p[0], ry = ay - s.p[1], rz = az - s.p[2];
       const d2 = rx * rx + ry * ry + rz * rz;
       if (d2 > 1024 || d2 < 2.2) continue; // >32m or too close for human reaction
@@ -1748,6 +1775,7 @@ export class NV2 extends NV13Pro {
     };
     let anyPrimed = false;
     const recognize = enemy => {
+      if ((enemy.shafferTimer || 0) > 0) return false;
       if (!b.vision) return true;
       visExtra.nearSmokeEdge = !!(av?.stats.totalSmoke > 1.8 && av.smokeOcclusion(eye, targetPoint(enemy)) > 0.28);
       const res = b.vision.evaluateSighting(a, enemy, visDt, t, b.mind, prevTargetId, this.metrics, visExtra);
@@ -1761,7 +1789,7 @@ export class NV2 extends NV13Pro {
     b.visibleEnemies.length = 0;
 
     for (const e of this.match.actors) {
-      if (e.alive && e.team !== a.team && b.contacts.get(e.id)?.seen) {
+      if (e.alive && e.team !== a.team && !((e.shafferTimer || 0) > 0) && b.contacts.get(e.id)?.seen) {
         b.visibleEnemies.push(e);
         this.recordEnemyObservation(a.team, e);
         this.match.spectraField?.observe(a.team, e.x, e.z, {sigma: 2.5, weight: 0.90});

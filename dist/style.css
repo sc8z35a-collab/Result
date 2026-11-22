@@ -2671,181 +2671,471 @@ body.touch #app[data-flir-active="true"] #chronoBanner {
   top: calc(max(4px, env(safe-area-inset-top)) + 42px);
 }
 
-/* Ergonomic Touch Controls: Generous Control Stick (#pad) & Fire Button (#touchFire),
-   Compact Out-of-the-Way Secondary Buttons */
-#pad {
-  width: 108px;
-  height: 108px;
-  left: max(14px, calc(env(safe-area-inset-left) + 12px));
-  bottom: max(14px, calc(env(safe-area-inset-bottom) + 12px));
+/* ==========================================================================
+   3× Fire Button, ~2.5× Control Stick, Clean Ergonomic HUD,
+   Purple BAIZER Shield, Auto-Reload Progress Bar & Charge Skill Bar
+   ========================================================================== */
+
+:root {
+  --baizer: #d074ff;
+  --baizer-bright: #f0bcff;
+  --shaffer: #8eb6ff;
+  --heal: #4ef5b0;
+  --ctrl-l: max(12px, calc(env(safe-area-inset-left) + 10px));
+  --ctrl-r: max(12px, calc(env(safe-area-inset-right) + 10px));
+  --ctrl-b: max(12px, calc(env(safe-area-inset-bottom) + 10px));
+  --pad-sz: clamp(152px, min(42vw, 36vh), 268px);
+  --fire-sz: clamp(138px, min(40vw, 34vh), 234px);
 }
-#pad:before { inset: 9px; }
+
+/* Purple BAIZER Shield Row & Hit Feedback */
+.vrow.baizer {
+  color: var(--baizer-bright);
+  margin-top: 2px;
+}
+.vrow.baizer svg {
+  filter: drop-shadow(0 0 5px #b958ff99);
+}
+.vrow.baizer strong {
+  font-size: 13px;
+  color: #f3c8ff;
+  text-shadow: 0 0 8px #b54dffaa;
+}
+.vrow.baizer .meter {
+  background: #c86dff30;
+}
+.vrow.baizer .meter i {
+  background: linear-gradient(90deg, #9842ff, #e498ff);
+  box-shadow: 0 0 8px #c968ff99;
+}
+body.touch #vitals .vrow.baizer strong {
+  font-size: 8.5px;
+}
+
+#hitmark.is-baizer {
+  --hcol: #e7adff;
+  --hglow: #b84eff;
+  --hlen: 11px;
+  --hthk: 2.5px;
+}
+#hitmark.is-baizer-break {
+  --hcol: #f8dbff;
+  --hglow: #c65aff;
+  --hlen: 15px;
+  --hthk: 2.9px;
+}
+#hitBanner.is-baizer-break {
+  color: #f2c4ff;
+  text-shadow: 0 0 12px #be4eff, 0 1px 3px #180822;
+}
+
+#baizerHint {
+  display: block;
+  margin-top: 2px;
+  font-size: 8.5px;
+  color: #dfa2ff;
+  letter-spacing: .04em;
+  text-shadow: 0 0 6px #9e3cff66;
+}
+#baizerHint:empty { display: none; }
+body.touch #baizerHint { font-size: 6.5px; margin-top: 0; }
+
+/* Auto-Reload Progress Bar */
+.reload-line {
+  width: 100%;
+  height: 3.5px;
+  margin: 3px 0 2px;
+  border-radius: 999px;
+  background: #ffffff24;
+  overflow: hidden;
+}
+.reload-line i {
+  display: block;
+  height: 100%;
+  width: 0%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #f0c264, #7cf5e6);
+  box-shadow: 0 0 8px #7cf5e688;
+  transition: width .05s linear;
+}
+
+/* Shaffer Optical-Stealth Cloak Overlay & Recharge Heal Flash */
+#shafferVeil {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(ellipse at 50% 50%, transparent 46%, #4a6ed630 82%, #7da6ff5c 100%);
+  box-shadow: inset 0 0 38px #6f98ff45;
+}
+#shafferBadge {
+  position: absolute;
+  left: 50%;
+  top: calc(max(8px, env(safe-area-inset-top)) + 36px);
+  transform: translateX(-50%);
+  padding: 3px 10px;
+  border-radius: 999px;
+  font: 700 9.5px/1.2 var(--mono);
+  letter-spacing: .08em;
+  color: #e4f0ff;
+  background: #142240d4;
+  border: 1px solid #8eb8ff99;
+  box-shadow: 0 0 16px #5d8cff55;
+  white-space: nowrap;
+}
+#healFlash {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  background: radial-gradient(ellipse at 50% 50%, transparent 34%, #38f2a840 78%, #68ffbe78 100%);
+}
+
+/* Charge Skill Bar (Shaffer & Recharge Heal — 5 kills = 1 charge, max 3) */
+#skillBar {
+  position: absolute;
+  left: 50%;
+  bottom: max(10px, env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 7px;
+  border-radius: 8px;
+  background: #0f1e22c8;
+  border: 1px solid #bfd2cc38;
+  backdrop-filter: blur(6px);
+  box-shadow: 0 4px 16px #050f1266;
+  pointer-events: auto;
+  z-index: 5;
+}
+.skill-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 0 4px 0 2px;
+  border-right: 1px solid #bfd2cc2a;
+}
+.skill-pips {
+  display: flex;
+  gap: 3px;
+}
+.skill-pips i {
+  display: block;
+  width: 7px;
+  height: 7px;
+  transform: rotate(45deg);
+  border: 1px solid #96b0ac7a;
+  background: #15262a;
+  transition: background .16s, border-color .16s, box-shadow .16s;
+}
+.skill-pips i.is-full {
+  border-color: #f6dc90;
+  background: linear-gradient(135deg, #7cf5e8, #ffd978);
+  box-shadow: 0 0 8px #7cf5e899;
+}
+#skillProg {
+  font: 700 8px/1 var(--mono);
+  color: #b7cbc4;
+  letter-spacing: .04em;
+  white-space: nowrap;
+}
+.skill-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 9px;
+  border-radius: 5px;
+  border: 1px solid #9db4b042;
+  background: #142428c4;
+  color: #a8bbb6;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .03em;
+  white-space: nowrap;
+  pointer-events: auto;
+  transition: background .15s, border-color .15s, color .15s, box-shadow .15s, transform .1s;
+}
+.skill-btn small {
+  display: inline-grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  font: 700 8.5px/1 var(--mono);
+  background: #ffffff14;
+  color: #d6e4e0;
+}
+.skill-btn:disabled {
+  opacity: .50;
+  cursor: default;
+}
+.skill-btn.is-shaffer.is-ready {
+  border-color: #8cb8ffba;
+  background: linear-gradient(135deg, #223c70d6, #182745d6);
+  color: #e6f0ff;
+  box-shadow: 0 0 12px #6d9bff48;
+}
+.skill-btn.is-shaffer.is-active {
+  opacity: 1;
+  border-color: #c2dcff;
+  background: linear-gradient(135deg, #355cb0e6, #243b70e6);
+  color: #ffffff;
+  box-shadow: 0 0 16px #78a8ff88;
+}
+.skill-btn.is-heal.is-ready {
+  border-color: #5bf2b4ba;
+  background: linear-gradient(135deg, #164f3cd6, #12342cd6);
+  color: #dffff0;
+  box-shadow: 0 0 12px #44eba448;
+}
+.skill-btn:not(:disabled):active {
+  transform: scale(.95);
+}
+
+/* Desktop startHint sits cleanly above #skillBar */
+#startHint {
+  bottom: calc(max(10px, env(safe-area-inset-bottom)) + 44px);
+}
+
+/* ==========================================================================
+   Ergonomic Touch Layout:
+   - Giant 3× Fire Button (#touchFire) & ~2.5× Control Stick (#pad)
+   - Compact Single-Line Top-Center Weapon Pill & Zero-Overlap Secondary Row
+   ========================================================================== */
+
+body.touch #weaponHud {
+  top: calc(max(4px, env(safe-area-inset-top)) + 26px);
+  bottom: auto;
+  left: 50%;
+  right: auto;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  min-width: 0;
+  max-width: 62vw;
+  border-radius: 999px;
+  text-align: left;
+  background: #0e1c1f9c;
+}
+body.touch #weaponHud .round-count { gap: 2px; }
+body.touch #weaponHud .round-count b { font-size: 12.5px; }
+body.touch #weaponHud .round-count strong { font-size: 8.5px; }
+body.touch #weaponHud > span { font-size: 7px; white-space: nowrap; }
+body.touch #weaponHud .reload-line {
+  width: 34px;
+  height: 3px;
+  margin: 0;
+}
+body.touch #ammoBoost { font-size: 6.5px; padding: 1px 4px; margin: 0; }
+body.touch #tankerHint,
+body.touch #baizerHint { font-size: 6.5px; margin: 0; }
+
+body.touch #shafferBadge {
+  top: calc(max(4px, env(safe-area-inset-top)) + 52px);
+  font-size: 7.5px;
+  padding: 2px 7px;
+}
+body.touch #startHint {
+  top: calc(max(4px, env(safe-area-inset-top)) + 52px);
+  bottom: auto;
+  max-width: 64vw;
+  font-size: 7px;
+  padding: 1.5px 6px;
+}
+body.touch #flirFrame span {
+  top: calc(max(4px, env(safe-area-inset-top)) + 52px);
+}
+body.touch #chronoBanner {
+  top: calc(max(4px, env(safe-area-inset-top)) + 52px);
+}
+body.touch #app[data-flir-active="true"] #chronoBanner {
+  top: calc(max(4px, env(safe-area-inset-top)) + 68px);
+}
+
+/* ~2.5× Control Stick (#pad) with Translucent Sightline Ring */
+#pad {
+  width: var(--pad-sz);
+  height: var(--pad-sz);
+  left: var(--ctrl-l);
+  bottom: var(--ctrl-b);
+  border: 2px solid #eef5e368;
+  background: radial-gradient(circle at 50% 50%, #10202226 0%, #162b2c44 68%, #223c3c68 100%);
+  box-shadow: 0 6px 24px #04101338, inset 0 0 18px #ffffff12;
+  backdrop-filter: blur(2px);
+}
+#pad:before {
+  inset: 11%;
+  border: 1.5px dashed #d8eadc48;
+}
 #pad i {
-  width: 40px;
-  height: 40px;
+  width: calc(var(--pad-sz) * .36);
+  height: calc(var(--pad-sz) * .36);
+  border: 2px solid #f4f7df99;
+  background: radial-gradient(circle at 35% 30%, #e1f2e670, #8db7b038);
+  box-shadow: 0 4px 16px #07161952;
 }
 .pad-sprint {
-  top: 5px;
-  font-size: 7.5px;
+  top: 7%;
+  font-size: clamp(8px, calc(var(--pad-sz) * .055), 11px);
+  letter-spacing: .16em;
 }
 
+/* 3× Fire Button (#touchFire) with Translucent Ergonomic Ring */
 #touchFire {
-  width: 78px;
-  height: 78px;
-  right: max(16px, calc(env(safe-area-inset-right) + 12px));
-  bottom: max(16px, calc(env(safe-area-inset-bottom) + 12px));
-  font-size: 13px;
-  letter-spacing: .06em;
-  border-width: 2px;
+  width: var(--fire-sz);
+  height: var(--fire-sz);
+  right: var(--ctrl-r);
+  bottom: var(--ctrl-b);
+  font-size: clamp(16px, calc(var(--fire-sz) * .125), 26px);
+  font-weight: 800;
+  letter-spacing: .09em;
+  border: 2.5px solid #f5ce74ad;
+  background: radial-gradient(circle at 38% 32%, #e8b95836 0%, #1a2d305c 68%, #10202282 100%);
+  box-shadow: 0 6px 26px #0612164a, 0 0 18px #edc1662c, inset 0 1px 0 #ffefc044;
+  backdrop-filter: blur(2px);
+}
+#touchFire.is-active {
+  transform: scale(.95);
+  border-color: #fff2be;
+  color: #fffbe6;
+  background: radial-gradient(circle at 50% 50%, #f5c85c66 0%, #24383aa8 75%);
+  box-shadow: 0 0 26px #f5ca6472, 0 0 12px #7bf2e350;
 }
 
+/* Secondary Touch Buttons Mathematically Stacked ABOVE --pad-sz & --fire-sz (Zero Overlap!) */
 #touchReload {
-  width: 28px;
-  height: 28px;
-  right: calc(max(16px, calc(env(safe-area-inset-right) + 12px)) + 25px);
-  bottom: calc(max(16px, calc(env(safe-area-inset-bottom) + 12px)) + 88px);
-  font-size: 10px;
+  width: 30px;
+  height: 30px;
+  right: var(--ctrl-r);
+  bottom: calc(var(--ctrl-b) + var(--fire-sz) + 8px);
+  font-size: 10.5px;
 }
 #touchJump {
-  width: 28px;
-  height: 28px;
-  right: calc(max(16px, calc(env(safe-area-inset-right) + 12px)) + 86px);
-  bottom: calc(max(16px, calc(env(safe-area-inset-bottom) + 12px)) + 48px);
-  font-size: 11px;
+  width: 30px;
+  height: 30px;
+  right: calc(var(--ctrl-r) + 36px);
+  bottom: calc(var(--ctrl-b) + var(--fire-sz) + 8px);
+  font-size: 11.5px;
 }
 #touchCrouch {
   width: auto;
-  min-width: 38px;
-  height: 24px;
-  padding: 0 6px;
+  min-width: 40px;
+  height: 26px;
+  padding: 0 7px;
   border-radius: 999px;
-  right: calc(max(16px, calc(env(safe-area-inset-right) + 12px)) + 86px);
-  bottom: calc(max(16px, calc(env(safe-area-inset-bottom) + 12px)) + 12px);
-  font-size: 7.5px;
+  right: calc(var(--ctrl-r) + 72px);
+  bottom: calc(var(--ctrl-b) + var(--fire-sz) + 10px);
+  font-size: 8px;
 }
 
 #touchTac {
-  left: max(10px, calc(env(safe-area-inset-left) + 8px));
-  bottom: calc(max(14px, calc(env(safe-area-inset-bottom) + 12px)) + 116px);
+  left: var(--ctrl-l);
+  bottom: calc(var(--ctrl-b) + var(--pad-sz) + 8px);
   gap: 3px;
 }
 #touchTac button,
 body.touch #touchTac button {
-  min-width: 26px;
-  height: 20px;
-  padding: 0 5px;
+  min-width: 28px;
+  height: 22px;
+  padding: 0 6px;
   border-radius: 4px;
   font-size: 7.5px;
 }
 
-#touchDF {
-  right: max(10px, calc(env(safe-area-inset-right) + 8px));
-  bottom: calc(max(16px, calc(env(safe-area-inset-bottom) + 12px)) + 124px);
+#touchDF,
+#touchDF40 {
+  right: var(--ctrl-r);
+  bottom: calc(var(--ctrl-b) + var(--fire-sz) + 44px);
   gap: 3px;
 }
 #touchDF button {
-  min-width: 26px;
-  height: 20px;
-  padding: 0 5px;
+  min-width: 28px;
+  height: 22px;
+  padding: 0 6px;
   border-radius: 4px;
   font-size: 7.5px;
 }
+#touchDF40 button {
+  min-width: 44px;
+  height: 22px;
+  padding: 0 7px;
+  border-radius: 4px;
+  font-size: 8px;
+}
 
-#touchDF40 {
-  right: max(10px, calc(env(safe-area-inset-right) + 8px));
-  bottom: calc(max(16px, calc(env(safe-area-inset-bottom) + 12px)) + 124px);
+/* Touch Skill Bar Positioning (Compact, Always Tappable, Zero Overlap) */
+body.touch #skillBar {
+  bottom: max(6px, env(safe-area-inset-bottom));
+  gap: 4px;
+  padding: 3px 5px;
+  border-radius: 7px;
+}
+body.touch .skill-btn {
+  height: 24px;
+  padding: 0 6px;
+  font-size: 8.5px;
   gap: 3px;
 }
-#touchDF40 button {
-  min-width: 40px;
-  height: 21px;
-  padding: 0 6px;
-  border-radius: 4px;
-  font-size: 7.8px;
+body.touch .skill-btn small { display: none; }
+body.touch .skill-pips i { width: 5.5px; height: 5.5px; }
+body.touch #skillProg { font-size: 7px; }
+
+/* Portrait / Narrow Touch Screens: Lift Skill Bar cleanly above the Giant Controls & DF Row */
+@media (max-width: 680px) {
+  body.touch #skillBar {
+    bottom: calc(var(--ctrl-b) + max(var(--pad-sz), var(--fire-sz)) + 72px);
+  }
 }
 
-@media (max-width: 600px) {
+@media (max-width: 520px) {
+  :root {
+    --ctrl-l: max(8px, calc(env(safe-area-inset-left) + 6px));
+    --ctrl-r: max(8px, calc(env(safe-area-inset-right) + 6px));
+    --ctrl-b: max(8px, calc(env(safe-area-inset-bottom) + 6px));
+    --pad-sz: clamp(144px, 44vw, 220px);
+    --fire-sz: clamp(134px, 41vw, 206px);
+  }
   body.touch #startHint {
-    top: calc(max(4px, env(safe-area-inset-top)) + 68px);
-    max-width: 82vw;
+    top: calc(max(4px, env(safe-area-inset-top)) + 56px);
+    max-width: 84vw;
   }
 }
 
-@media (max-width: 440px) {
-  #pad { width: 98px; height: 98px; }
-  #pad i { width: 36px; height: 36px; }
-  #touchFire { width: 72px; height: 72px; font-size: 12px; }
-  #touchReload {
-    width: 26px; height: 26px;
-    right: calc(max(16px, calc(env(safe-area-inset-right) + 12px)) + 23px);
-    bottom: calc(max(16px, calc(env(safe-area-inset-bottom) + 12px)) + 80px);
-  }
-  #touchJump {
-    width: 26px; height: 26px;
-    right: calc(max(16px, calc(env(safe-area-inset-right) + 12px)) + 78px);
-    bottom: calc(max(16px, calc(env(safe-area-inset-bottom) + 12px)) + 44px);
-  }
-  #touchCrouch {
-    min-width: 34px; height: 22px; padding: 0 5px; font-size: 7px;
-    right: calc(max(16px, calc(env(safe-area-inset-right) + 12px)) + 78px);
-    bottom: calc(max(16px, calc(env(safe-area-inset-bottom) + 12px)) + 10px);
-  }
-  #touchTac { bottom: calc(max(14px, calc(env(safe-area-inset-bottom) + 12px)) + 106px); }
-  #touchDF, #touchDF40 { bottom: calc(max(16px, calc(env(safe-area-inset-bottom) + 12px)) + 114px); }
-}
-
+/* Landscape Mobile (short viewport height): Preserve Massive Ergonomic Controls + Full Headroom */
 @media (max-height: 580px) {
-  #pad {
-    width: 96px;
-    height: 96px;
-    left: max(12px, calc(env(safe-area-inset-left) + 10px));
-    bottom: max(10px, calc(env(safe-area-inset-bottom) + 8px));
+  :root {
+    --ctrl-l: max(10px, calc(env(safe-area-inset-left) + 8px));
+    --ctrl-r: max(10px, calc(env(safe-area-inset-right) + 8px));
+    --ctrl-b: max(8px, calc(env(safe-area-inset-bottom) + 6px));
+    --pad-sz: clamp(136px, 45vh, 232px);
+    --fire-sz: clamp(128px, 42vh, 214px);
   }
-  #pad i { width: 35px; height: 35px; }
-  #touchFire {
-    width: 70px;
-    height: 70px;
-    right: max(12px, calc(env(safe-area-inset-right) + 10px));
-    bottom: max(10px, calc(env(safe-area-inset-bottom) + 8px));
-    font-size: 12px;
-  }
-  #touchReload {
-    width: 26px;
-    height: 26px;
-    right: calc(max(12px, calc(env(safe-area-inset-right) + 10px)) + 22px);
-    bottom: calc(max(10px, calc(env(safe-area-inset-bottom) + 8px)) + 78px);
-    font-size: 9.5px;
-  }
-  #touchJump {
-    width: 26px;
-    height: 26px;
-    right: calc(max(12px, calc(env(safe-area-inset-right) + 10px)) + 78px);
-    bottom: calc(max(10px, calc(env(safe-area-inset-bottom) + 8px)) + 42px);
-    font-size: 10.5px;
-  }
+  #touchReload, #touchJump { width: 26px; height: 26px; font-size: 9.5px; }
+  #touchJump { right: calc(var(--ctrl-r) + 32px); }
   #touchCrouch {
     min-width: 36px;
     height: 22px;
     padding: 0 6px;
-    right: calc(max(12px, calc(env(safe-area-inset-right) + 10px)) + 78px);
-    bottom: calc(max(10px, calc(env(safe-area-inset-bottom) + 8px)) + 10px);
     font-size: 7px;
+    right: calc(var(--ctrl-r) + 64px);
   }
-  #touchTac {
-    left: max(10px, calc(env(safe-area-inset-left) + 8px));
-    bottom: calc(max(10px, calc(env(safe-area-inset-bottom) + 8px)) + 104px);
+  #touchDF, #touchDF40 {
+    bottom: calc(var(--ctrl-b) + var(--fire-sz) + 38px);
   }
   #touchTac button,
-  body.touch #touchTac button {
+  body.touch #touchTac button,
+  #touchDF button,
+  #touchDF40 button {
     height: 19px;
     font-size: 7px;
   }
-  #touchDF,
-  #touchDF40 {
-    bottom: calc(max(10px, calc(env(safe-area-inset-bottom) + 8px)) + 110px);
+  body.touch #skillBar {
+    bottom: max(6px, env(safe-area-inset-bottom));
   }
-  #touchDF button { min-width: 24px; height: 19px; font-size: 7px; }
-  #touchDF40 button { min-width: 38px; height: 20px; font-size: 7.5px; }
 }
 
 @media (max-height: 500px) {
@@ -2856,9 +3146,13 @@ body.touch #touchTac button {
   body.touch #spectraCanvas { width: 28px; height: 56px; }
 }
 
-body.light-mode .hud-actions button {
+body.light-mode .hud-actions button,
+body.light-mode #skillBar,
+body.light-mode #pad,
+body.light-mode #touchFire {
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
   box-shadow: none !important;
 }
+
 

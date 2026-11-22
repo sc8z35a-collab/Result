@@ -95,7 +95,7 @@ export const DF40II_TIERS = {
     wallProxRange: AA13_WALL_PROX_RANGE,
     velWeight: 0.94,
     accelWeight: 0.45,
-    fanScale: 0.28,
+    fanScale: 0.46,
     chainPrecharge: AA13_CHAIN_PRECHARGE
   },
   [AA14_VERSION]: {
@@ -119,7 +119,7 @@ export const DF40II_TIERS = {
     wallProxRange: AA14_WALL_PROX_RANGE,
     velWeight: 1.0,
     accelWeight: 0.60,
-    fanScale: 0.0,
+    fanScale: 0.18,
     chainPrecharge: AA14_CHAIN_PRECHARGE
   }
 };
@@ -313,13 +313,13 @@ export function toggleAA14(match, a) {
   return {ok: true, active: true, state: 'on', heat: d.aa14Heat};
 }
 
-export function onFireDF40II(match, a, salvo = 3) {
+export function onFireDF40II(match, a, salvo = 4) {
   const d = a?.df40;
   if (!d) return;
   d.firePulse = 1;
-  d.barrelPhase = ((d.barrelPhase || 0) + 1) % 3;
+  d.barrelPhase = ((d.barrelPhase || 0) + 1) % 4;
   if (d.aa14Active && !d.aa14Overheated) {
-    d.aa14Heat = Math.min(100, d.aa14Heat + AA14_HEAT_PER_SALVO * (salvo / 3));
+    d.aa14Heat = Math.min(100, d.aa14Heat + AA14_HEAT_PER_SALVO * (salvo / 4));
     if (d.aa14Heat >= 100 - 1e-6) {
       triggerAA14Overheat(match, a);
     }
@@ -390,7 +390,7 @@ export function updateDF40II(match, a, dt) {
   // 2. Validate & maintain active ARV1.3 target lock (plus zero-deadtime handoff on elimination)
   if (d.focusId >= 0) {
     const cur = match.actors[d.focusId];
-    if (!cur?.alive || cur.team === a.team || cur.spawnId !== d.focusSpawnId) {
+    if (!cur?.alive || cur.team === a.team || cur.spawnId !== d.focusSpawnId || (cur.shafferTimer || 0) > 0) {
       if (d.locked && cur && !cur.alive) chainPrecharge = spec.chainPrecharge;
       clearLock(d, t);
     } else {
@@ -429,7 +429,7 @@ export function updateDF40II(match, a, dt) {
     d.scanAt = t + (d.aa14Active ? 0.025 : 0.035);
     let best = -1, bestCost = Infinity, bestOccluded = false, bestRange = 0;
     for (const e of match.actors) {
-      if (!e.alive || e.team === a.team) continue;
+      if (!e.alive || e.team === a.team || (e.shafferTimer || 0) > 0) continue;
       const s = aimAt(a, e, spec, null, false);
       if (s.range > spec.maxRange) continue;
       const sep = Math.hypot(angleDiff(s.yaw, a.yaw) * Math.cos(a.pitch), s.pitch - a.pitch);
@@ -437,7 +437,7 @@ export function updateDF40II(match, a, dt) {
       const hasLOS = clearOpticalPath(s.origin, s.raw, match.aeroVortex);
       if (hasLOS) {
         // ARV1.3 threat-weighted angular priority (favors closest angular match & low-HP finish)
-        const cost = sep * (1 - clamp((110 - (e.hp + e.shield)) / 110, 0, 1) * 0.12);
+        const cost = sep * (1 - clamp((125 - (e.hp + e.shield)) / 125, 0, 1) * 0.12);
         if (cost < bestCost) {
           best = e.id;
           bestCost = cost;
@@ -482,7 +482,7 @@ export function updateDF40II(match, a, dt) {
   let targetTrackYaw = 0, targetTrackPitch = 0;
   if (d.focusId >= 0) {
     const e = match.actors[d.focusId];
-    if (e?.alive && e.team !== a.team && e.spawnId === d.focusSpawnId) {
+    if (e?.alive && e.team !== a.team && e.spawnId === d.focusSpawnId && !(e.shafferTimer > 0)) {
       const s = aimAt(a, e, spec, d.targetAccel, !d.occluded);
       const dyaw = angleDiff(s.yaw, a.yaw);
       const dpitch = s.pitch - a.pitch;
@@ -514,14 +514,18 @@ export function updateDF40II(match, a, dt) {
   d.trackPitch += (targetTrackPitch - d.trackPitch) * kGimbal;
 }
 
-// ARV1.3 Tri-Barrel Convergent Smart Launch Solver (Auto-Aim 1.3 base / Auto-Aim 1.4 Overdrive).
+// ARV1.3 Quad-Barrel Subtle-Spread Smart Launch Solver (4-round shotgun-like cluster; AA1.3 base / AA1.4 Overdrive).
 export function bulletGuidanceDF40II(match, a, barrelSide = 0, barrelVert = 0) {
   const d = a.df40;
   const spec = activeDF40Spec(d);
-  const baseFanYaw = barrelSide * 0.0044;
-  const baseFanPitch = barrelVert * 0.0028;
+  const rng = match?.rng || Math.random;
+  // Subtle shotgun-like 4-pellet cone (~1.3° total unlocked, tightened cleanly under AA1.3 / AA1.4 lock)
+  const jitterYaw = (rng() - 0.5) * 0.0044;
+  const jitterPitch = (rng() - 0.5) * 0.0036;
+  const baseFanYaw = barrelSide * 0.0115 + jitterYaw;
+  const baseFanPitch = barrelVert * 0.0085 + jitterPitch;
   const e = d && d.focusId >= 0 ? match.actors[d.focusId] : null;
-  if ((a.human && match.autoAim === false) || !d || !d.locked || !e?.alive || e.team === a.team || e.spawnId !== d.focusSpawnId) {
+  if ((a.human && match.autoAim === false) || !d || !d.locked || !e?.alive || e.team === a.team || e.spawnId !== d.focusSpawnId || (e.shafferTimer || 0) > 0) {
     return {
       dir: forward(a.yaw + baseFanYaw, clamp(a.pitch + baseFanPitch, -1.31, 1.31)),
       guided: false,
@@ -554,7 +558,7 @@ export function bulletGuidanceDF40II(match, a, barrelSide = 0, barrelVert = 0) {
     };
   }
   const gain = Math.min(spec.launchGain, spec.launchStep / Math.max(0.00001, ang));
-  // ARV1.3 converges tri-barrel rounds tightly; AA1.4 collapses dispersion to zero pinpoint convergence!
+  // Subtle shotgun-like quad pattern tightened dynamically by ARV1.3 / AA1.4 lock!
   const shotYaw = a.yaw + yaw * gain + baseFanYaw * spec.fanScale;
   const shotPitch = clamp(a.pitch + pitch * gain + baseFanPitch * spec.fanScale, -1.31, 1.31);
   return {
