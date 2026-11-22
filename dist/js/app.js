@@ -522,7 +522,7 @@ function lobby() {
   const isHuman = rules.aiModel !== 'classic';
   if ($('aiModelHint')) {
     $('aiModelHint').textContent = isHuman
-      ? '14次元個性(NAGI/KAI/RIN/SORA/AO) · 生体心拍＆呼吸停止照準 · 心の理論(ToM/トリガー規律/足音フェイント) · 戦術煙幕展開 · 解剖学リーン · プレイヤー援護連携'
+      ? '16次元個性 · 自由エネルギー能動推論 · DDM迷い＆判断変更 · 眼球先行＆2段階マウスリフト · 情動評価＆深呼吸リセット · 負傷ベイト罠 · 同期ダブルスイング · プレイヤー連動援護'
       : '従来の NV2 Transformer 戦術AI（均質反応・標準照準）で対戦します';
   }
   const is3v3 = rules.mode === '3v3';
@@ -534,18 +534,18 @@ function lobby() {
   });
   $('allyNv21Hint').textContent = rules.allyNv21 === 1
     ? isHuman
-      ? 'NAGI（D1）に NV 2.4 Manusia 生体・心の理論・煙幕・無音接近＋NV2.1 スパイ裏どりを統合'
+      ? 'NAGI（D1）に NV2.5 humain 能動推論・DDM・戦術煙幕・同期スイング＋NV2.1 スパイ裏どりを統合'
       : 'NAGI（D1）を NV2.1 に強化 · 高速反応 / 多弾同時回避 / 目視予測スパイ裏どり'
     : rules.allyNv21 === 2
       ? isHuman
-        ? 'KAI（MS10）に NV 2.4 Manusia 生体・心の理論・煙幕・プレイヤー援護＋NV2.1 スパイ裏どりを統合'
+        ? 'KAI（MS10）に NV2.5 humain 能動推論・DDM・プレイヤー並走援護＋NV2.1 スパイ裏どりを統合'
         : 'KAI（MS10）を NV2.1 に強化 · 高速反応 / 多弾同時回避 / 目視予測スパイ裏どり'
       : isHuman
-        ? '味方NPC2体は NV 2.4 Manusia（生体心拍・心の理論・戦術煙幕・あなたの援護連携）で出撃します'
+        ? '味方NPC2体は NV2.5 humain（能動推論・DDM・同期ダブルスイング・あなたの押し上げ並走）で出撃します'
         : '味方NPC2体は標準NV2（人間的な照準・戦術連携）で出撃します';
-  const baseAiLabel = isHuman ? 'NV 2.4 Manusia' : 'NV2 Deep Tactical';
+  const baseAiLabel = isHuman ? 'NV2.5 humain' : 'NV2 Deep Tactical';
   $('lobbyAiLabel').textContent = is3v3 && rules.allyNv21 > 0
-    ? `${isHuman ? 'NV 2.4 Manusia' : 'NV2'} + SPY (${rules.allyNv21 === 1 ? 'NAGI' : 'KAI'})`
+    ? `${isHuman ? 'NV2.5 humain' : 'NV2'} + SPY (${rules.allyNv21 === 1 ? 'NAGI' : 'KAI'})`
     : baseAiLabel;
   group('limit', rules.limit, k => {
     rules.limit = k;
@@ -1027,8 +1027,8 @@ function resultUI() {
     const tag = a.human
       ? ' · 自分'
       : a.isSpy
-        ? `<span class="tag-nv21">NV2.1 SPY${a.humanPersona ? ' × Manusia · ' + a.humanPersona : ''}</span>`
-        : (a.aiVersion === 'NV 2.4 Manusia' || a.aiVersion === 'NV2.3 HUMAN' || a.aiVersion === 'NV2 Human')
+        ? `<span class="tag-nv21">NV2.1 SPY${a.humanPersona ? ' × humain · ' + a.humanPersona : ''}</span>`
+        : (a.aiVersion === 'NV2.5 humain' || a.aiVersion === 'NV 2.4 Manusia' || a.aiVersion === 'NV2.3 HUMAN' || a.aiVersion === 'NV2 Human')
           ? `<span class="tag-human">${a.aiVersion}${a.humanPersona ? ' · ' + a.humanPersona : ''}</span>`
           : '';
     return `<div class="roster-row"><span class="${a.team?'orange':'cyan'}">${a.name}${tag}</span><span>${a.kills}</span><span>${a.deaths}</span></div>`;
@@ -1065,7 +1065,7 @@ function resultUI() {
         `<span>構造ノック <b>${rc.seismicKnocks}</b></span>` +
         `<span>最長キル <b>${ct.longestKillM > 0 ? ct.longestKillM.toFixed(1) + 'm' : '—'}</b></span>` +
         `<span>鏡像跳弾解 <b>${fc.solutionsFound}</b>${fc.aiBankShots ? ` / AI跳弾${fc.aiBankShots}` : ''}</span>` +
-        (match.aiModel !== 'classic' ? `<span>NV 2.4 Manusia <b>呼吸停止${nm.manusiaBreathHolds || 0} / 戦術煙幕${nm.manusiaSmokeDeploys || 0} / 規律待機${nm.manusiaTriggerDisciplines || 0} / トレード${nm.humanTradeSwings || 0} / 通話${nm.humanCallouts || 0}</b></span>` : '') +
+        (match.aiModel !== 'classic' ? `<span>NV2.5 humain <b>能動探索${nm.humainEpistemicScans || 0} / 判断変更${nm.humainChangeOfMinds || 0} / 罠${nm.humainBaitTraps || 0} / 同期突入${nm.humainSyncSwings || 0} / 戦術煙幕${nm.manusiaSmokeDeploys || 0} / 通話${nm.humanCallouts || 0}</b></span>` : '') +
         `<span>ベイズ確定 <b>${sp.peakCertaintyPct}%</b></span>` +
       `</div>`;
   } else if (synEl) {

@@ -26,6 +26,12 @@ import {
   ManusiaNeuromotorAimV24,ManusiaGazeV24,ManusiaTacticsV24,ManusiaSocialSquadV24
 } from '../dist/js/nv24-manusia.js';
 import {
+  NV25_HUMAIN_VERSION,CALLSIGN_PROFILES_V25,COMMS_CHANNELS_V25,
+  HumainActiveInferenceV25,HumainDecisionDDM_V25,HumainAffectivePsycheV25,
+  HumainMetaMindV25,HumainMultisensoryV25,HumainSensorimotorV25,
+  HumainFixationGazeV25,HumainEmbodiedTacticsV25,HumainSocialMindV25
+} from '../dist/js/nv25-humain.js';
+import {
   NV2_HUMAN_VERSION,HUMAN_ARCHETYPES,HumanMind,HumanVisionModel,HumanMotorAim,HumanGazeDirector,HumanCommsRelay
 } from '../dist/js/nv2-human.js';
 import {
@@ -427,8 +433,9 @@ for (const [mode,counts] of Object.entries(modes)) {
  });
 }
 {
- // NV 2.4 Manusia (Default Flagship AI) + NV2.3 HUMAN + NV2 Classic + NV2.1 Spy Unified Fusion,
- // 8-Core Somatic/Theory-of-Mind/Psychophysics Suite, Zero-Wallhack Proof, Fair Benchmark & 360Hz CPU Budget
+ // NV2.5 humain (Default Flagship AI) + NV 2.4 Manusia + NV2.3 HUMAN + NV2 Classic + NV2.1 Spy Unified Fusion,
+ // 8-Core Embodied Cognitive-Neuroscience Suite, Zero-Wallhack Proof, Fair Benchmark & 360Hz CPU Budget
+ assert.equal(NV25_HUMAIN_VERSION,'NV2.5 humain');
  assert.equal(NV24_MANUSIA_VERSION,'NV 2.4 Manusia');
  assert.equal(NV23_HUMAN_VERSION,'NV2.3 HUMAN');
  assert.equal(NV2_HUMAN_VERSION,NV23_HUMAN_VERSION,'nv2-human.js backward-compat shim must preserve NV2.3 HUMAN version');
@@ -441,32 +448,34 @@ for (const [mode,counts] of Object.entries(modes)) {
 
  const mHuman=new Match({mode:'3v3',limit:'points',multiplier:2,loadout:'DF1 OUT',allyNv21:0});
  assert.equal(mHuman.aiModel,'human');
- assert.equal(mHuman.nv.version,NV24_MANUSIA_VERSION);
+ assert.equal(mHuman.nv.version,NV25_HUMAIN_VERSION);
  assert.equal(mHuman.allyNv21Slot,0);assert.equal(mHuman.spyActor,null);
- assert(mHuman.actors.filter(a=>!a.human).every(a=>a.aiVersion===NV24_MANUSIA_VERSION&&!a.isSpy&&typeof a.humanPersona==='string'&&a.humanPersona.length>0),'Default NPCs must run NV 2.4 Manusia with distinct personas');
+ assert(mHuman.actors.filter(a=>!a.human).every(a=>a.aiVersion===NV25_HUMAIN_VERSION&&!a.isSpy&&typeof a.humanPersona==='string'&&a.humanPersona.length>0),'Default NPCs must run NV2.5 humain with distinct personas');
  const archetypes=new Set(mHuman.actors.filter(a=>!a.human).map(a=>a.humanArchetype));
- assert(archetypes.size>=3,`3v3 NV 2.4 Manusia match must showcase >=3 distinct human archetypes (got ${[...archetypes]})`);
+ assert(archetypes.size>=3,`3v3 NV2.5 humain match must showcase >=3 distinct human archetypes (got ${[...archetypes]})`);
 
- // Classic NV2 & NV2.3 HUMAN fallbacks preserved for A/B/C comparison
+ // Classic NV2, NV2.3 HUMAN & NV 2.4 Manusia fallbacks preserved for 4-generation A/B/C/D comparison
  const mClassic=new Match({mode:'3v3',limit:'points',multiplier:2,loadout:'DF1 OUT',allyNv21:0,aiModel:'classic'});
  assert.equal(mClassic.nv.version,'NV2');
  assert(mClassic.actors.filter(a=>!a.human).every(a=>a.aiVersion==='NV2'&&!a.isSpy));
+ const mManusia=new Match({mode:'3v3',limit:'points',multiplier:2,loadout:'DF1 OUT',allyNv21:0,aiModel:'manusia'});
+ assert.equal(mManusia.nv.version,NV24_MANUSIA_VERSION);
 
- // Bottleneck Fix #1: NV2.1 Spy Ally Selector (3V3-only) ALSO fuses full NV 2.4 Manusia cognitive/somatic/ToM cores!
+ // Bottleneck Fix #1: NV2.1 Spy Ally Selector (3V3-only) ALSO fuses full NV2.5 humain cognitive/neuroscience cores!
  const mNagi=new Match({mode:'3v3',limit:'points',multiplier:2,loadout:'DF1 OUT',allyNv21:1});
  assert.equal(mNagi.allyNv21Slot,1);assert.equal(mNagi.spyActor,mNagi.actors[1]);
  assert.equal(mNagi.actors[1].name,'NAGI');assert.equal(mNagi.actors[1].aiVersion,'NV2.1');assert.equal(mNagi.actors[1].isSpy,true);
- assert.equal(mNagi.actors[2].aiVersion,NV24_MANUSIA_VERSION);assert.equal(mNagi.actors[2].isSpy,false);
- assert(mNagi.actors.filter(a=>a.team===1).every(a=>a.aiVersion===NV24_MANUSIA_VERSION&&!a.isSpy));
+ assert.equal(mNagi.actors[2].aiVersion,NV25_HUMAIN_VERSION);assert.equal(mNagi.actors[2].isSpy,false);
+ assert(mNagi.actors.filter(a=>a.team===1).every(a=>a.aiVersion===NV25_HUMAIN_VERSION&&!a.isSpy));
  const nagiB=mNagi.nv.brains.get(mNagi.actors[1].id);
- assert(nagiB.spy&&nagiB.mind instanceof ManusiaSomaPsycheV24&&nagiB.tom instanceof ManusiaTheoryOfMindV24&&nagiB.vision instanceof ManusiaPerceptionV24&&nagiB.gaze instanceof ManusiaGazeV24&&nagiB.humanAim instanceof ManusiaNeuromotorAimV24&&nagiB.tactics instanceof ManusiaTacticsV24,'3v3 Spy ally NAGI must integrate all NV 2.4 Manusia cores alongside SpyEngine');
+ assert(nagiB.spy&&nagiB.inference instanceof HumainActiveInferenceV25&&nagiB.ddm instanceof HumainDecisionDDM_V25&&nagiB.mind instanceof HumainAffectivePsycheV25&&nagiB.tom instanceof HumainMetaMindV25&&nagiB.vision instanceof HumainMultisensoryV25&&nagiB.gaze instanceof HumainFixationGazeV25&&nagiB.humanAim instanceof HumainSensorimotorV25&&nagiB.tactics instanceof HumainEmbodiedTacticsV25,'3v3 Spy ally NAGI must integrate all NV2.5 humain cores alongside SpyEngine');
 
  const mKai=new Match({mode:'3v3',limit:'points',multiplier:2,loadout:'DF1 OUT',allyNv21:2});
  assert.equal(mKai.allyNv21Slot,2);assert.equal(mKai.spyActor,mKai.actors[2]);
  assert.equal(mKai.actors[2].name,'KAI');assert.equal(mKai.actors[2].aiVersion,'NV2.1');assert.equal(mKai.actors[2].isSpy,true);
- assert.equal(mKai.actors[1].aiVersion,NV24_MANUSIA_VERSION);assert.equal(mKai.actors[1].isSpy,false);
+ assert.equal(mKai.actors[1].aiVersion,NV25_HUMAIN_VERSION);assert.equal(mKai.actors[1].isSpy,false);
  const kaiB=mKai.nv.brains.get(mKai.actors[2].id);
- assert(kaiB.spy&&kaiB.mind instanceof ManusiaSomaPsycheV24&&kaiB.tom instanceof ManusiaTheoryOfMindV24&&kaiB.vision instanceof ManusiaPerceptionV24&&kaiB.gaze instanceof ManusiaGazeV24&&kaiB.humanAim instanceof ManusiaNeuromotorAimV24&&kaiB.tactics instanceof ManusiaTacticsV24,'3v3 Spy ally KAI must integrate all NV 2.4 Manusia cores alongside SpyEngine');
+ assert(kaiB.spy&&kaiB.inference instanceof HumainActiveInferenceV25&&kaiB.ddm instanceof HumainDecisionDDM_V25&&kaiB.mind instanceof HumainAffectivePsycheV25&&kaiB.tom instanceof HumainMetaMindV25&&kaiB.vision instanceof HumainMultisensoryV25&&kaiB.gaze instanceof HumainFixationGazeV25&&kaiB.humanAim instanceof HumainSensorimotorV25&&kaiB.tactics instanceof HumainEmbodiedTacticsV25,'3v3 Spy ally KAI must integrate all NV2.5 humain cores alongside SpyEngine');
 
  for (const non3v3 of ['1v1','1v2']) {
   const mIso=new Match({mode:non3v3,limit:'points',multiplier:2,loadout:'DF1 OUT',allyNv21:1});
@@ -475,16 +484,35 @@ for (const [mode,counts] of Object.entries(modes)) {
   assert(mIso.actors.every(a=>!a.isSpy));
  }
 
- // NV 2.4 Manusia 8-Core Somatic / Theory-of-Mind / Psychophysics Unit Verification:
- // Core 1 (ManusiaSomaPsycheV24): 14-dim distinct callsigns, BPM, Stamina, Breath-Hold, Adrenaline Dump, Yerkes-Dodson, Clutch, Respawn Episodic Memory
+ // NV2.5 humain 8-Core Embodied Cognitive-Neuroscience Unit Verification:
+ // Core 1 & 2 (HumainActiveInferenceV25 + HumainDecisionDDM_V25): Free-Energy Entropy, Surprise & Mid-Motion Change-of-Mind
+ {
+  const inf=new HumainActiveInferenceV25(random(701),CALLSIGN_PROFILES_V25.NAGI);
+  inf.reset(0,0);
+  const sBlind=inf.observeEvidence(-14,52,0.9,2.0);
+  const sFront=inf.observeEvidence(-14,-45,0.9,2.1);
+  assert(sBlind>sFront,'Active Inference must assign higher Free-Energy surprise to blind rear flank than expected front');
+  const ddm=new HumainDecisionDDM_V25(random(702),CALLSIGN_PROFILES_V25.KAI);
+  const actD={hp:100,shield:10,mag:20,reload:0};
+  const bD={visibleEnemies:[{id:3}],seen:true,targetId:3,underFireAt:-10,recentDamage:0,state:'一斉突入',peekPhase:'peek'};
+  const mD={challengeBalance:0.6,hotHand:0.4,matchPointIntensity:0,isSuppressed:()=>false};
+  const tD={getEnemyShieldWindow:()=>2.0,predictEnemyReloadSoon:()=>({imminent:true}),getEnemyPreAimRisk:()=>0.1};
+  for (let i=0;i<90;i++) ddm.step(actD,bD,1/60,i/60,mD,tD,null);
+  assert.equal(ddm.decision,'COMMIT');
+  actD.hp=42;actD.shield=0;bD.visibleEnemies=[{id:3},{id:4}];bD.underFireAt=1.6;bD.recentDamage=32;
+  const cm={humainChangeOfMinds:0,humainHesitations:0};
+  for (let i=0;i<120;i++) ddm.step(actD,bD,1/60,1.6+i/60,mD,tD,cm);
+  assert(cm.humainChangeOfMinds>=1,'Ratcliff DDM must trigger mid-motion Change-of-Mind abort under sudden 1v2 pressure');
+ }
+ // Core 3 (HumainAffectivePsycheV25): 16-dim personas, Blascovich Challenge/Threat, BPM, Stamina, Breath-Hold, Adrenaline Dump, Nemesis Respect
  {
   for (const cs of ['NAGI','KAI','RIN','SORA','AO']) {
-   assert(CALLSIGN_PROFILES_V24[cs]&&typeof CALLSIGN_PROFILES_V24[cs].ja==='string'&&CALLSIGN_PROFILES_V24[cs].utilityIQ>0,`Callsign ${cs} must have unique 14-dim Manusia persona`);
+   assert(CALLSIGN_PROFILES_V25[cs]&&typeof CALLSIGN_PROFILES_V25[cs].ja==='string'&&CALLSIGN_PROFILES_V25[cs].epistemicCuriosity>0,`Callsign ${cs} must have unique 16-dim humain persona`);
   }
-  assert.notEqual(CALLSIGN_PROFILES_V24.NAGI.aggression,CALLSIGN_PROFILES_V24.KAI.aggression,'NAGI and KAI must have distinct personalities');
+  assert.notEqual(CALLSIGN_PROFILES_V25.NAGI.aggression,CALLSIGN_PROFILES_V25.KAI.aggression,'NAGI and KAI must have distinct personalities');
   const dummyA={id:1,team:0,name:'NAGI',gun:'SRA',x:0,y:0,z:20,yaw:0,hp:100,shield:10,vx:5.4,vz:0,crouch:0,onGround:true};
   const dummyBack={id:4,team:1,x:0,y:0,z:32};
-  const mind=new ManusiaSomaPsycheV24(dummyA,random(77),false);
+  const mind=new HumainAffectivePsycheV25(dummyA,random(77),false);
   mind.arousal=0.56;mind.stress=0.12;mind.confidence=0.35;
   const flowGood=mind.getFlowFactor();
   assert(flowGood>1.0&&mind.isInFlow(),'Optimal arousal + confidence must produce Flow State (>1.0)');
@@ -500,17 +528,18 @@ for (const [mode,counts] of Object.entries(modes)) {
   assert(mind.heartRate>100&&mind.stamina<0.80&&mind.matchPointIntensity>0.7,'Somatic heart rate, stamina drain & match-point focus must evolve organically');
   mind.stress=0.68;
   mind.onKill(10.5,dummyBack,{manusiaAdrenalineDumps:0});
-  assert(mind.postFightShake>0.40,'High-stress/clutch kill must trigger Post-Clutch Adrenaline Dump hand shake');
+  assert(mind.postFightShake>0.40&&mind.hotHand>0.3,'High-stress/clutch kill must trigger Post-Clutch Adrenaline Dump & Hot-Hand momentum');
   mind.onDeath(dummyA,dummyBack,12.0);
   mind.onDeath(dummyA,dummyBack,24.0);
   assert.equal(mind.nemesisId,4,'Repeated killer must become episodic Nemesis');
+  assert(mind.getNemesisRespect(4)>=0.8,'Repeated deaths to same killer must build Nemesis Tactical Respect');
   mind.reset();
   assert.equal(mind.nemesisId,4,'Nemesis episodic memory must survive respawn reset()');
   assert(mind.traumaAngles.length>=1,'Trauma danger angles must survive respawn reset()');
  }
- // Core 2 (ManusiaTheoryOfMindV24): Self-Exposure Pre-Aim Risk, Trigger Discipline, Fair-Play Mental Ammo Counter & 5s Shield Clock
+ // Core 4 (HumainMetaMindV25): Self-Exposure Pre-Aim Risk, Trigger Discipline, Fair-Play Mental Ammo Counter, 5s Shield Clock, Anti-Pattern & Bait Trap
  {
-  const tom=new ManusiaTheoryOfMindV24(random(77),CALLSIGN_PROFILES_V24.NAGI,true);
+  const tom=new HumainMetaMindV25(random(77),CALLSIGN_PROFILES_V25.NAGI,true);
   const me={id:1,x:0,y:0,z:20,yaw:0,hp:95};
   tom.recordSelfExposed(0,20,4,10.0);
   assert(tom.getEnemyPreAimRisk(me,10.5)>0.65,'Self-exposure at corner must elevate enemy pre-aim risk');
@@ -522,10 +551,12 @@ for (const [mode,counts] of Object.entries(modes)) {
   assert(tom.predictEnemyReloadSoon(4,17.6,{manusiaAmmoReads:0}).imminent,'Fair-play mental ammo counter must predict imminent SW T reload');
   tom.onEnemyShieldBroken(4,18.0);
   assert(tom.getEnemyShieldWindow(4,20.0)>2.5&&tom.getEnemyShieldWindow(4,23.5)===0,'5.0s enemy shield-recovery mental clock must track vulnerability window');
+  assert.equal(tom.recordOwnPeek(PEEK_STYLES.WIDE,19.0,null),false);
+  assert.equal(tom.recordOwnPeek(PEEK_STYLES.WIDE,20.0,null),true,'Repeating peek style must trigger Mix-Up pattern-break detection');
  }
- // Core 3 (ManusiaPerceptionV24): 3-Zone Retinal Vision, Saccadic Suppression, +38% Priming, Hick-Hyman, Cowan K=4, Smoke-Emergence Lag, Whiz, Rooftop, Steel Knock
+ // Core 5 (HumainMultisensoryV25): 3-Zone Retinal Vision, Cross-Modal Binding, Static Camo Delay, Saccadic Suppression, +38% Priming, Hick-Hyman, Cowan K=4
  {
-  const vis=new ManusiaPerceptionV24(random(99),false);
+  const vis=new HumainMultisensoryV25(random(99),false);
   const obs={id:1,x:0,y:0,z:20,yaw:0};
   const fovealE={id:2,x:0,y:0,z:6,vx:0,vz:0,crouch:0,flash:0};
   const periphStill={id:3,x:14,y:0,z:12,vx:0,vz:0,crouch:1,flash:0};
@@ -536,17 +567,17 @@ for (const [mode,counts] of Object.entries(modes)) {
   assert(rFov.recognized&&rFov.zone==='foveal','Close dead-center foveal target must recognize immediately');
   assert(!rStill.recognized&&rStill.zone==='peripheral','Crouched stationary peripheral enemy must NOT instant-snap on 1 frame');
   assert(rFlash.progress>rStill.progress*2.0,'Muzzle flash in peripheral vision must dramatically accelerate visual salience');
-  const visCalm=new ManusiaPerceptionV24(random(101),false);
-  const visWhip=new ManusiaPerceptionV24(random(101),false);
+  const visCalm=new HumainMultisensoryV25(random(101),false);
+  const visWhip=new HumainMultisensoryV25(random(101),false);
   const paraE={id:6,x:5.5,y:0,z:8,vx:0,vz:0,crouch:0,flash:0};
   const rCalm=visCalm.evaluateSighting(obs,paraE,0.04,1.0,null,-1,null,{yawRate:0.4,visibleCount:1});
   const rWhip=visWhip.evaluateSighting(obs,paraE,0.04,1.0,null,-1,null,{yawRate:7.5,visibleCount:1});
   assert(rWhip.saccadicSuppressed&&rWhip.progress<rCalm.progress,'High yaw-rate head whip must trigger saccadic suppression');
-  const visPrime=new ManusiaPerceptionV24(random(102),false);
+  const visPrime=new HumainMultisensoryV25(random(102),false);
   visPrime.primeAttention(Math.atan2(paraE.x-obs.x,-(paraE.z-obs.z)),0,paraE.x,paraE.z,2.0,'callout',1.0);
   const rPrime=visPrime.evaluateSighting(obs,paraE,0.04,1.05,null,-1,null,{yawRate:0.2,visibleCount:1});
   assert(rPrime.primed&&rPrime.progress>rCalm.progress*1.30,'Attention priming must accelerate recognition by ~38%');
-  const visHick=new ManusiaPerceptionV24(random(103),false);
+  const visHick=new HumainMultisensoryV25(random(103),false);
   const rHick3=visHick.evaluateSighting(obs,paraE,0.04,1.0,null,-1,null,{yawRate:0.2,visibleCount:3});
   assert(rHick3.progress<rCalm.progress,'Hick-Hyman multi-enemy load (N=3) must slow per-target reaction slightly');
   for (let id=10;id<16;id++) vis.upsertWorkingMemory(id,{x:id,y:1.2,z:0,confidence:0.4+(id-10)*0.1,source:'visual'},2.0+id*0.1);
@@ -558,16 +589,19 @@ for (const [mode,counts] of Object.entries(modes)) {
   vis.onSeismicKnockVictim(obs,{id:5},[1,1,19],7.0,{humanKnockRepositions:0});
   assert(vis.needsKnockReposition(7.2)&&vis.knockedContainerId===5,'Steel knock must trigger container reposition directive');
  }
- // Core 4 (ManusiaNeuromotorAimV24): Fitts+Min-Jerk flick, Meyer Dual-Submovement, 1/f Pink-Noise, Smooth Pursuit steady vs A-D swim
+ // Core 6 (HumainSensorimotorV25): Fitts+Min-Jerk flick, 2-Stroke Mouse-Lift 180-deg Whip, Meyer Submove, Smooth Pursuit
  {
-  const motor=new ManusiaNeuromotorAimV24(random(55),false,HUMAN_ARCHETYPES.DUELIST);
+  const motor=new HumainSensorimotorV25(random(55),false,HUMAN_ARCHETYPES.DUELIST);
   assert(motor.triggerBallisticFlick(0,0,0.28,0,1.0,0,false,null));
   const durSmall=motor.flickDur;
   motor.motorPhase='PURSUIT';
   assert(motor.triggerBallisticFlick(0,0,1.15,0,2.0,0,false,null));
   const durLarge=motor.flickDur;
   assert(durLarge>durSmall,'Fitts Law ballistic flick duration must grow logarithmically with angle amplitude');
-  const ofca=new ManusiaNeuromotorAimV24(random(71),false,CALLSIGN_PROFILES_V24.RIN);
+  motor.motorPhase='PURSUIT';
+  const ml={humainMouseLifts:0,humanFlicks:0,humanOvershoots:0};
+  assert(motor.triggerBallisticFlick(0,0,2.85,0,4.0,0.1,false,ml)&&motor.liftPending&&ml.humainMouseLifts===1,'Large >112 deg rear whip must trigger 2-stroke mouse-lift reset');
+  const ofca=new HumainSensorimotorV25(random(71),false,CALLSIGN_PROFILES_V25.RIN);
   const act={id:1,x:0,y:0,z:20,yaw:0,pitch:0,vx:0,vz:0,crouch:0,aimPose:1,onGround:true,gun:'SRA',rd:null,df:null};
   const tgt={id:2,x:-3,y:0,z:0,yaw:0,vx:4.2,vy:0,vz:0,crouch:0,lean:0,onGround:true};
   let tSim=1.0,steadyErr=0,revErr=0;
@@ -578,9 +612,9 @@ for (const [mode,counts] of Object.entries(modes)) {
   revErr/=12;
   assert(steadyErr<0.12&&revErr>steadyErr,'Smooth pursuit must track steady velocity crisply yet authentically lag/swim on sudden A-D reversal');
  }
- // Core 5 & 6 (ManusiaGazeV24 + ManusiaTacticsV24): 5 Peek Styles, Silent Walk, Anatomical Cover-Edge Lean
+ // Core 7 & 8 (HumainEmbodiedTacticsV25 + HumainSocialMindV25): 5 Peek Styles, Silent Walk, Anatomical Lean & 10-Channel Delayed Comms
  {
-  const tac=new ManusiaTacticsV24(random(88),CALLSIGN_PROFILES_V24.NAGI,false);
+  const tac=new HumainEmbodiedTacticsV25(random(88),CALLSIGN_PROFILES_V25.NAGI,false);
   const seenStyles=new Set();
   const a={id:1,x:0,y:0,z:20,hp:85,shield:5,crouch:0,aimPose:0};
   const e={id:4,gun:'SRA',hp:80,shield:5,reload:0};
@@ -591,15 +625,13 @@ for (const [mode,counts] of Object.entries(modes)) {
   const leanA={id:9,x:7.1,y:0,z:83.6,yaw:0,crouch:0,onGround:true};
   const anLean=tac.computeAnatomicalLean(leanA,{cover:{x:7.1,z:83.6},state:'ピーク射撃'},0.25,10.0,null);
   assert(anLean<0,`Anatomical cover-edge lean must lean strictly OUT away from solid steel (got ${anLean})`);
- }
- // Core 7 (ManusiaSocialSquadV24): All 8 channels (+ SMOKE_OUT) with realistic speech delay (zero 0ms telepathy!)
- {
-  const comms=new ManusiaSocialSquadV24(random(123));
-  const chs=Object.values(COMMS_CHANNELS_V24);
-  assert.equal(chs.length,8);
+
+  const comms=new HumainSocialMindV25(random(123));
+  const chs=Object.values(COMMS_CHANNELS_V25);
+  assert.equal(chs.length,10);
   for (let i=0;i<chs.length;i++) comms.emitCallout(0,1,3,5+i,10,chs[i],10.0,null);
   assert.equal(comms.drainReady(0,10.18).length,0,'Human voice callouts must NOT teleport instantaneously in <180ms');
-  assert.equal(comms.drainReady(0,11.0).length,8,'All 8 NV 2.4 Manusia squad comms channels must deliver after human speech delay');
+  assert.equal(comms.drainReady(0,11.0).length,10,'All 10 NV2.5 humain squad comms channels must deliver after human speech delay');
  }
 
  // HumanAimController: NV2.1 strictly faster visual reaction, acquisition & tracking than NV2
@@ -622,7 +654,7 @@ for (const [mode,counts] of Object.entries(modes)) {
   assert(walkable(npc.x+bD.dodgeVec[0]*0.72,npc.z+bD.dodgeVec[1]*0.72,0.42,npc.y),'Chosen dodge vector MUST be walkable (zero wall-slamming!)');
  }
 
- // 100% Fair-Play Zero-Wallhack Proof (BOTH NV 2.4 Manusia & NV2.1 Spy: zero sightings/workingMemory/ToM behind steel container!)
+ // 100% Fair-Play Zero-Wallhack Proof (BOTH NV2.5 humain & NV2.1 Spy: zero sightings/workingMemory/ToM behind steel container!)
  const mFair=new Match({mode:'3v3',limit:'unlimited',multiplier:2,loadout:'DF1 OUT',allyNv21:1});
  const spy=mFair.spyActor;
  const stdAlly=mFair.actors[2];
@@ -634,16 +666,16 @@ for (const [mode,counts] of Object.entries(modes)) {
  assert(obstruction(eyeOf(spy),targetPoint(mFair.actors[3]))<=1,'Test geometry must be occluded by steel container');
  for (let i=0;i<24;i++) mFair.step(h,{});
  assert.equal(spyBrain.spy.sightings.size,0,'Spy Engine must NOT record occluded enemies (zero wallhack)');
- assert.equal(spyBrain.vision.workingMemory.size,0,'NV 2.4 Manusia Spy workingMemory must NOT record occluded enemies (zero wallhack)');
- assert.equal(stdBrain.vision.workingMemory.size,0,'NV 2.4 Manusia standard workingMemory must NOT record occluded enemies (zero wallhack)');
- assert.equal(stdBrain.tom.enemyAmmo.size,0,'NV 2.4 Manusia ToM ammo tracker must NOT see occluded enemies (zero wallhack)');
+ assert.equal(spyBrain.vision.workingMemory.size,0,'NV2.5 humain Spy workingMemory must NOT record occluded enemies (zero wallhack)');
+ assert.equal(stdBrain.vision.workingMemory.size,0,'NV2.5 humain standard workingMemory must NOT record occluded enemies (zero wallhack)');
+ assert.equal(stdBrain.tom.enemyAmmo.size,0,'NV2.5 humain ToM ammo tracker must NOT see occluded enemies (zero wallhack)');
  Object.assign(spy,{x:2,y:0,z:85,yaw:0,pitch:0,vx:0,vz:0});
  Object.assign(mFair.actors[3],{x:2,y:0,z:73,yaw:Math.PI,vx:0,vz:0});
  assert(obstruction(eyeOf(spy),targetPoint(mFair.actors[3]))>1,'Direct LOS test geometry must be unobstructed');
  for (let i=0;i<36;i++) mFair.step(h,{});
- assert(spyBrain.spy.sightings.size>=1&&spyBrain.vision.workingMemory.size>=1,'NV 2.4 Manusia + Spy must record enemy upon direct unobstructed visual LOS');
+ assert(spyBrain.spy.sightings.size>=1&&spyBrain.vision.workingMemory.size>=1,'NV2.5 humain + Spy must record enemy upon direct unobstructed visual LOS');
 
- // Full 3V3 NV 2.4 Manusia + NV2.1 NAGI simulation + KAI Spy operational check
+ // Full 3V3 NV2.5 humain + NV2.1 NAGI simulation + KAI Spy operational check
  for (let i=0;i<360*250&&!mNagi.ended;i++) mNagi.step(h,{});
  const nagiMetrics=mNagi.nv.metrics;
  const nagiStatus=mNagi.nv.getSpyStatus();
@@ -651,10 +683,11 @@ for (const [mode,counts] of Object.entries(modes)) {
  assert(nagiMetrics.spySightings>5&&nagiMetrics.spyPredictions>5&&nagiMetrics.spyFlanks>5&&nagiMetrics.spyDodges>10,'NV2.1 NAGI Spy Engine must visually sight, predict, flank, and dodge');
  assert(nagiMetrics.spyBackstabs>0,'NV2.1 NAGI Spy Engine must achieve rear/flank ambush hits');
  assert(nagiMetrics.nv21Shots>20&&nagiMetrics.nv21Hits>0,'NV2.1 NAGI must actively engage and score hits');
- assert(nagiMetrics.humanFlicks>10&&nagiMetrics.humanCornerScans>30&&nagiMetrics.humanCornerEdges>10&&nagiMetrics.humanCheckSix>5&&nagiMetrics.humanCallouts>5,'NV 2.4 Manusia cognitive/motor/gaze/comms behaviors must actively run in live combat');
+ assert(nagiMetrics.humanFlicks>10&&nagiMetrics.humanCornerScans>30&&nagiMetrics.humanCornerEdges>10&&nagiMetrics.humanCheckSix>5&&nagiMetrics.humanCallouts>5,'NV2.5 humain cognitive/motor/gaze/comms behaviors must actively run in live combat');
  assert(nagiMetrics.humanRepeekAborts>0&&nagiMetrics.shoulderBait>0,`Bottleneck Fix #3: repeekAborts (${nagiMetrics.humanRepeekAborts}) & shoulderBait (${nagiMetrics.shoulderBait}) must fire in live 3v3 combat`);
- assert(nagiMetrics.humanQuietEyeShots>20&&nagiMetrics.humanSilentSteps>0&&nagiMetrics.humanTradeSwings>0,'NV 2.4 Manusia Quiet Eye, Silent Walk & Delayed Trade Swings must activate in live combat');
- assert(nagiMetrics.manusiaBreathHolds>0&&nagiMetrics.manusiaAnatomicalLeans>0&&nagiMetrics.manusiaCurvedTurns>0,'NV 2.4 Manusia Somatic Breath-Hold, Anatomical Cover Lean & Curved Corner-Rounding must activate in live combat');
+ assert(nagiMetrics.humanQuietEyeShots>20&&nagiMetrics.humanSilentSteps>0&&nagiMetrics.humanTradeSwings>0,'NV2.5 humain Quiet Eye, Silent Walk & Delayed Trade Swings must activate in live combat');
+ assert(nagiMetrics.manusiaBreathHolds>0&&nagiMetrics.manusiaAnatomicalLeans>0&&nagiMetrics.manusiaCurvedTurns>0,'Inherited NV 2.4 Somatic Breath-Hold, Anatomical Cover Lean & Curved Corner-Rounding must activate');
+ assert(nagiMetrics.humainEpistemicScans>0&&nagiMetrics.humainAsymStrafes>0&&nagiMetrics.humainCrossModalLocks>0&&nagiMetrics.humainPostKillChecks>0&&nagiMetrics.humainBuddyGlances>0,'NV2.5 humain Active Inference, Asymmetric Strafes, Cross-Modal Binding, Post-Kill Checks & Buddy Glances must activate in live combat');
  const nagiHitRate=nagiMetrics.nv21Hits/nagiMetrics.nv21Shots;
  assert(nagiHitRate>0.10&&nagiHitRate<0.75,`NV2.1 NAGI hit rate must remain human-realistic (got ${(nagiHitRate*100).toFixed(1)}%)`);
 
@@ -663,7 +696,7 @@ for (const [mode,counts] of Object.entries(modes)) {
  assert(kaiMetrics.spySightings>5&&kaiMetrics.spyPredictions>5&&kaiMetrics.spyFlanks>5&&kaiMetrics.spyDodges>10,'NV2.1 KAI Spy Engine must visually sight, predict, flank, and dodge');
  assert(kaiMetrics.nv21Shots>15&&kaiMetrics.nv21Hits>0,'NV2.1 KAI must actively engage and score hits');
 
- // Fair Side-Swapped NV 2.4 Manusia vs NV2 Classic 3v3 Benchmark + 360Hz CPU Budget Verification
+ // Fair Side-Swapped NV2.5 humain vs NV2 Classic 3v3 Benchmark + 360Hz CPU Budget Verification (100% pure symmetric allNpc!)
  let benchHumanWins=0,benchClassicWins=0,benchHumanKills=0,benchClassicKills=0,benchTicks=0,benchMs=0;
  const benchGuns=['MS10','RD30','D1'];
  for (let g=0;g<4;g++) {
@@ -681,10 +714,20 @@ for (const [mode,counts] of Object.entries(modes)) {
  }
  const avgMsPerTick=benchMs/Math.max(1,benchTicks);
  const budget360Pct=(avgMsPerTick/(1000/360))*100;
- assert(benchHumanWins>=benchClassicWins&&benchHumanKills>benchClassicKills,`NV 2.4 Manusia must outperform NV2 Classic in fair equal-weapon 3v3 (wins ${benchHumanWins}-${benchClassicWins}, kills ${benchHumanKills}-${benchClassicKills})`);
+ assert(benchHumanWins>=benchClassicWins&&benchHumanKills>benchClassicKills,`NV2.5 humain must outperform NV2 Classic in fair equal-weapon 3v3 (wins ${benchHumanWins}-${benchClassicWins}, kills ${benchHumanKills}-${benchClassicKills})`);
  assert(avgMsPerTick<1.0,`360Hz CPU budget exceeded: ${avgMsPerTick.toFixed(4)} ms/tick (${budget360Pct.toFixed(1)}% of 2.778ms budget)`);
 
- console.log('NV 2.4 Manusia + NV2.1 Spy OK:',{
+ console.log('NV2.5 humain + NV2.1 Spy OK:',{
+  humain:{
+   epistemicScans:nagiMetrics.humainEpistemicScans,changeOfMinds:nagiMetrics.humainChangeOfMinds,
+   hesitations:nagiMetrics.humainHesitations,mouseLifts:nagiMetrics.humainMouseLifts,
+   recoilOverpulls:nagiMetrics.humainRecoilOverpulls,crosshairIntercepts:nagiMetrics.humainCrosshairIntercepts,
+   crossModalLocks:nagiMetrics.humainCrossModalLocks,camoDelays:nagiMetrics.humainCamoDelays,
+   patternBreaks:nagiMetrics.humainPatternBreaks,baitTraps:nagiMetrics.humainBaitTraps,
+   postKillChecks:nagiMetrics.humainPostKillChecks,syncSwings:nagiMetrics.humainSyncSwings,
+   asymStrafes:nagiMetrics.humainAsymStrafes,breathResets:nagiMetrics.humainBreathResets,
+   buddyGlances:nagiMetrics.humainBuddyGlances
+  },
   manusia:{
    flicks:nagiMetrics.humanFlicks,submoves:nagiMetrics.manusiaSubmovements,breathHolds:nagiMetrics.manusiaBreathHolds,
    adrenalineDumps:nagiMetrics.manusiaAdrenalineDumps,triggerDisc:nagiMetrics.manusiaTriggerDisciplines,
@@ -1175,6 +1218,6 @@ for (const [mode,counts] of Object.entries(modes)) {
   console.log('FermatCore 1.0 OK:',{faces:STEEL_MANIFOLD.faces.length,oneBounceHit:true,twoBounceHit:true,zeroWallhack:true,avgSolveUs:+avgUs.toFixed(1)});
  }
 }
-console.log('360Hz sim, weapon specs (DF1 OUT 95-mag 2x rate, MS10, RD20/30/40), FluxGI 1.0, SchlierenOptics 1.0, BallisticCore-X, EchoPulse 1.0, NV-Synapse 1.0, AeroVortex 1.0, ThermoFlux 1.0, SpectraField 1.0, ResonanceCore 1.0, ChronoTrace 1.0, FermatCore 1.0, Lightweight Mode LOD, 16-joint sculpted rig, KHDR, Shadow Flame 1.0 Flash/Pro, Sound Engin 2.0 (300Hz-Class), NV 2.4 Manusia Cognitive AI (NV2.3 HUMAN compat), NV2.1 Spy Engine, and all matches passed.');
+console.log('360Hz sim, weapon specs (DF1 OUT 95-mag 2x rate, MS10, RD20/30/40), FluxGI 1.0, SchlierenOptics 1.0, BallisticCore-X, EchoPulse 1.0, NV-Synapse 1.0, AeroVortex 1.0, ThermoFlux 1.0, SpectraField 1.0, ResonanceCore 1.0, ChronoTrace 1.0, FermatCore 1.0, Lightweight Mode LOD, 16-joint sculpted rig, KHDR, Shadow Flame 1.0 Flash/Pro, Sound Engin 2.0 (300Hz-Class), NV2.5 humain Cognitive AI (NV 2.4 Manusia & NV2.3 HUMAN compat), NV2.1 Spy Engine, and all matches passed.');
 
 

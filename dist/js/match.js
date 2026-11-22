@@ -90,7 +90,13 @@ export class Match {
     const counts = modes[mode], multiplier = Number(config.multiplier ?? 5);
     this.goals = counts.map(n => config.limit === 'unlimited' ? Infinity : n * clamp(Number.isFinite(multiplier) ? Math.round(multiplier) : 5, 1, 99));
     this.receiptId = globalThis.crypto?.randomUUID?.() || Date.now().toString(36) + Math.random().toString(36).slice(2);
-    this.aiModel = config.aiModel === 'classic' ? 'classic' : config.aiModel === 'nv23' ? 'nv23' : 'human';
+    this.aiModel = config.aiModel === 'classic'
+      ? 'classic'
+      : config.aiModel === 'nv23'
+        ? 'nv23'
+        : (config.aiModel === 'manusia' || config.aiModel === 'nv24')
+          ? 'manusia'
+          : 'human';
     this.teamAiModels = Array.isArray(config.teamAiModels) && config.teamAiModels.length === 2 ? [...config.teamAiModels] : null;
     this.nv = new NV2(this);
     const rawSpy = config.allyNv21 === true ? 1 : Number(config.allyNv21 || 0);
@@ -104,9 +110,19 @@ export class Match {
         : benchGuns && Object.hasOwn(weapons, benchGuns[slot % benchGuns.length])
           ? benchGuns[slot % benchGuns.length]
           : npcWeapons[(slot + team + 1) % npcWeapons.length];
-      const isSpy = !human && team === 0 && slot === this.allyNv21Slot;
+      const isSpy = !human && team === 0 && this.allyNv21Slot > 0 && slot === this.allyNv21Slot;
       const teamModel = this.teamAiModels ? this.teamAiModels[team] : this.aiModel;
-      const aiVersion = human ? 'HUMAN' : isSpy ? 'NV2.1' : (teamModel === 'classic' ? 'NV2' : teamModel === 'nv23' ? 'NV2.3 HUMAN' : 'NV 2.4 Manusia');
+      const aiVersion = human
+        ? 'HUMAN'
+        : isSpy
+          ? 'NV2.1'
+          : teamModel === 'classic'
+            ? 'NV2'
+            : teamModel === 'nv23'
+              ? 'NV2.3 HUMAN'
+              : (teamModel === 'manusia' || teamModel === 'nv24')
+                ? 'NV 2.4 Manusia'
+                : 'NV2.5 humain';
       const a = {id: this.actors.length, team, slot, human, name: names[team][slot], gun, aiVersion, isSpy, kills: 0, deaths: 0, earned: 0};
       this.actors.push(a);
       this.spawn(a, true)
