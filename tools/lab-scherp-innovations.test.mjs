@@ -277,10 +277,11 @@ test('L04 | Auto-Aim 1.5 Scherp estimator, intercept, smoke-piercing, ZEM-APN cu
 // ============================================================================
 // 5. Lab Mode 10-Generation AI Arena & Spectator / Custom Physics
 // ============================================================================
-test('L05 | Lab Mode supports all 10 AI generations head-to-head, spectator mode, and custom rules', () => {
-  assert.equal(AI_VERSION_LIST.length, 10);
-  // Test cross-generation pairings across all 10 AI generations!
+test('L05 | Lab Mode supports all 12 AI generations head-to-head, spectator mode, and custom rules', () => {
+  assert.equal(AI_VERSION_LIST.length, 12);
+  // Test cross-generation pairings across all 12 AI generations!
   const pairs = [
+    ['nv3', 'rnv1'],
     ['nv1', 'human'],
     ['nv11', 'humain'],
     ['nv12', 'manusia'],
