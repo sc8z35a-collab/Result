@@ -1,6 +1,6 @@
 // Multi-Generation AI Arena Orchestrator (実験場 / Lab Head-to-Head Engine)
-// Supports ALL 11 authentic AI generations in Result battling side-by-side in the same match:
-//   RNV1 | NV1 | NV1.1 | NV1.2 | NV1.3 Pro | NV2 | NV2.1 SPY | NV2.3 | NV2.4 | NV2.5 | NV2.6 Force
+// Supports ALL 12 authentic AI generations in Result battling side-by-side in the same match:
+//   NV 3 | RNV1 FAST | NV1 | NV1.1 | NV1.2 | NV1.3 Pro | NV2 | NV2.1 SPY | NV2.3 | NV2.4 | NV2.5 | NV2.6 Force
 
 import {NV1} from './nv1.js';
 import {NV11} from './nv11.js';
@@ -8,9 +8,11 @@ import {NV12} from './nv12.js';
 import {NV13Pro} from './nv13pro.js';
 import {NV2} from './nv2.js';
 import {RNV1} from './rnv1.js';
+import {NV3} from './nv3.js';
 
 export const AI_VERSION_LIST = [
-  {id: 'rnv1',    label: 'RNV1',        family: 'rnv1'},
+  {id: 'nv3',     label: 'NV 3',        family: 'nv3'},
+  {id: 'rnv1',    label: 'RNV1 FAST',   family: 'rnv1'},
   {id: 'human',   label: 'NV2.6 Force', family: 'nv2'},
   {id: 'humain',  label: 'NV2.5',       family: 'nv2'},
   {id: 'manusia', label: 'NV2.4',       family: 'nv2'},
@@ -26,7 +28,8 @@ export const AI_VERSION_LIST = [
 export const AI_VERSION_MAP = Object.fromEntries(AI_VERSION_LIST.map(v => [v.id, v]));
 
 export function normalizeAiModelId(raw, fallback = 'human') {
-  if (raw === 'RNV1' || raw === 'rnv1') return 'rnv1';
+  if (raw === 'NV 3' || raw === 'NV3' || raw === 'nv3') return 'nv3';
+  if (raw === 'RNV1' || raw === 'RNV1 FAST' || raw === 'rnv1') return 'rnv1';
   if (raw === 'force' || raw === 'nv26') return 'human';
   if (raw === 'nv25') return 'humain';
   if (raw === 'nv24') return 'manusia';
@@ -37,7 +40,8 @@ export function normalizeAiModelId(raw, fallback = 'human') {
 
 export function aiVersionDisplay(id) {
   switch (normalizeAiModelId(id)) {
-    case 'rnv1': return 'RNV1';
+    case 'nv3': return 'NV 3';
+    case 'rnv1': return 'RNV1 FAST';
     case 'nv1': return 'NV1';
     case 'nv11': return 'NV1.1';
     case 'nv12': return 'NV1.2';
@@ -57,13 +61,14 @@ export function isLegacyAiId(id) {
 
 export function isStandaloneAiId(id) {
   const fam = AI_VERSION_MAP[normalizeAiModelId(id)]?.family;
-  return fam === 'legacy' || fam === 'rnv1';
+  return fam === 'legacy' || fam === 'rnv1' || fam === 'nv3';
 }
 
 function buildEngineForTeam(match, modelId, teamIdx) {
   const id = normalizeAiModelId(modelId);
   let eng;
-  if (id === 'rnv1') eng = new RNV1(match);
+  if (id === 'nv3') eng = new NV3(match);
+  else if (id === 'rnv1') eng = new RNV1(match);
   else if (id === 'nv1') eng = new NV1(match);
   else if (id === 'nv11') eng = new NV11(match);
   else if (id === 'nv12') eng = new NV12(match);
@@ -193,6 +198,7 @@ export function createMatchAI(match) {
   if (tm) {
     const m0 = normalizeAiModelId(tm[0]);
     const m1 = normalizeAiModelId(tm[1]);
+    if (m0 === 'nv3' && m1 === 'nv3') return new NV3(match);
     if (m0 === 'rnv1' && m1 === 'rnv1') return new RNV1(match);
     if (isStandaloneAiId(m0) || isStandaloneAiId(m1)) {
       return new ArenaCompositeAI(match, [m0, m1]);
@@ -200,6 +206,7 @@ export function createMatchAI(match) {
     return new NV2(match);
   }
   const single = normalizeAiModelId(match.aiModel);
+  if (single === 'nv3') return new NV3(match);
   if (single === 'rnv1') return new RNV1(match);
   if (isLegacyAiId(single)) {
     return new ArenaCompositeAI(match, [single, single]);

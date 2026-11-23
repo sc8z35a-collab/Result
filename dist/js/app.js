@@ -11,6 +11,9 @@ import {aiVersionDisplay} from './ai-arena.js';
 import {
   getRNV1Status, importRNV1WeightsJSON, resetRNV1Weights, preloadBundledRNV1Weights, onRNV1WeightsChange
 } from './rnv1.js';
+import {
+  getNV3Status, importNV3WeightsJSON, resetNV3Weights, loadNV3WeightsFromUrl, onNV3WeightsChanged
+} from './nv3.js';
 const $ = s => document.getElementById(s),
   views = {title: 'titleView', lobby: 'lobby', settings: 'settings', game: 'hud', pause: 'pause', results: 'results'};
 // Optically exact +2/3 wider view width relative to 24.7° / 13.0° FOV:
@@ -612,9 +615,9 @@ function syncRnv1UI() {
     badge.classList.toggle('is-trained', !!st.trained);
     if (st.trained) {
       const kd = Number.isFinite(st.evalKD) ? ` · K/D ${st.evalKD.toFixed(2)}` : '';
-      badge.textContent = `RNV1 A100学習済 · ${formatRnv1Steps(st.steps)} steps${kd}`;
+      badge.textContent = `RNV1 FAST · A100学習済 · ${formatRnv1Steps(st.steps)} steps${kd}`;
     } else {
-      badge.textContent = 'RNV1 初期モデル（Colab A100で一から高速学習）';
+      badge.textContent = 'RNV1 FAST 初期モデル（Colab A100で一から高速学習）';
     }
   }
   const stdBtn = $('rnv1StdBtn');
@@ -622,7 +625,7 @@ function syncRnv1UI() {
     const on = !!rules.useRnv1Standard;
     stdBtn.setAttribute('aria-pressed', String(on));
     stdBtn.classList.toggle('is-on', on);
-    stdBtn.textContent = on ? '通常戦RNV1 ON' : '通常戦RNV1 OFF';
+    stdBtn.textContent = on ? '通常戦RNV1 FAST ON' : '通常戦RNV1 FAST OFF';
   }
   const resetBtn = $('rnv1ResetBtn');
   if (resetBtn) {
@@ -630,10 +633,36 @@ function syncRnv1UI() {
   }
 }
 
+function syncNv3UI() {
+  const st = getNV3Status();
+  const badge = $('nv3StatusBadge');
+  if (badge) {
+    badge.classList.toggle('is-trained', !!st.trained);
+    if (st.trained) {
+      const kd = Number.isFinite(st.evalKD) ? ` · K/D ${st.evalKD.toFixed(2)}` : '';
+      badge.textContent = `NV 3 Omega · A100学習済 · ${formatRnv1Steps(st.steps)} steps${kd}`;
+    } else {
+      badge.textContent = 'NV 3 初期コア（Colab A100 Omegaで超大規模学習）';
+    }
+  }
+  const stdBtn = $('nv3StdBtn');
+  if (stdBtn) {
+    const on = !!rules.useNv3Standard;
+    stdBtn.setAttribute('aria-pressed', String(on));
+    stdBtn.classList.toggle('is-on', on);
+    stdBtn.textContent = on ? '通常戦NV 3 ON' : '通常戦NV 3 OFF';
+  }
+  const resetBtn = $('nv3ResetBtn');
+  if (resetBtn) {
+    resetBtn.hidden = st.source !== 'custom';
+  }
+}
+
 function lobby() {
   rules.lab = normalizeLabConfig(rules.lab);
-  rules.useRnv1Standard = !!rules.useRnv1Standard;
-  rules.aiModel = rules.useRnv1Standard ? 'rnv1' : 'human';
+  rules.useNv3Standard = !!rules.useNv3Standard;
+  rules.useRnv1Standard = !rules.useNv3Standard && !!rules.useRnv1Standard;
+  rules.aiModel = rules.useNv3Standard ? 'nv3' : (rules.useRnv1Standard ? 'rnv1' : 'human');
   rules.allyNv21 = 0;
   const lab = rules.lab;
   const isLab = rules.mode === 'lab';
@@ -689,6 +718,50 @@ function lobby() {
         npcSk.textContent = lab.npcSkills ? 'NPC技 ON' : 'NPC技 OFF';
         npcSk.onclick = () => setLab({npcSkills: !lab.npcSkills});
       }
+      const nLoad = $('nv3LoadBtn'), nFile = $('nv3File');
+      if (nLoad && nFile) {
+        nLoad.onclick = () => nFile.click();
+        nFile.onchange = async () => {
+          const file = nFile.files?.[0];
+          nFile.value = '';
+          if (!file) return;
+          try {
+            const text = await file.text();
+            const res = importNV3WeightsJSON(text, true);
+            if (res.ok) {
+              if (res.status.trained) {
+                rules.useNv3Standard = true;
+                rules.useRnv1Standard = false;
+                rules.lab = normalizeLabConfig({...rules.lab, teamBAi: 'nv3'});
+                save();
+              }
+              if ($('lobbyNotice')) $('lobbyNotice').textContent = `NV 3 重みを読み込みました (${formatRnv1Steps(res.status.steps)} steps)`;
+              lobby();
+            } else if ($('lobbyNotice')) {
+              $('lobbyNotice').textContent = `NV 3 読込エラー: ${res.error}`;
+            }
+          } catch (err) {
+            if ($('lobbyNotice')) $('lobbyNotice').textContent = `NV 3 読込失敗: ${err?.message || err}`;
+          }
+        };
+      }
+      const nStd = $('nv3StdBtn');
+      if (nStd) {
+        nStd.onclick = () => {
+          rules.useNv3Standard = !rules.useNv3Standard;
+          if (rules.useNv3Standard) rules.useRnv1Standard = false;
+          save();
+          lobby();
+        };
+      }
+      const nReset = $('nv3ResetBtn');
+      if (nReset) {
+        nReset.onclick = () => {
+          resetNV3Weights();
+          if ($('lobbyNotice')) $('lobbyNotice').textContent = 'NV 3 を初期コアに戻しました';
+          lobby();
+        };
+      }
       const rLoad = $('rnv1LoadBtn'), rFile = $('rnv1File');
       if (rLoad && rFile) {
         rLoad.onclick = () => rFile.click();
@@ -702,16 +775,17 @@ function lobby() {
             if (res.ok) {
               if (res.status.trained) {
                 rules.useRnv1Standard = true;
+                rules.useNv3Standard = false;
                 rules.lab = normalizeLabConfig({...rules.lab, teamBAi: 'rnv1'});
                 save();
               }
-              if ($('lobbyNotice')) $('lobbyNotice').textContent = `RNV1 重みを読み込みました (${formatRnv1Steps(res.status.steps)} steps)`;
+              if ($('lobbyNotice')) $('lobbyNotice').textContent = `RNV1 FAST 重みを読み込みました (${formatRnv1Steps(res.status.steps)} steps)`;
               lobby();
             } else if ($('lobbyNotice')) {
-              $('lobbyNotice').textContent = `RNV1 読込エラー: ${res.error}`;
+              $('lobbyNotice').textContent = `RNV1 FAST 読込エラー: ${res.error}`;
             }
           } catch (err) {
-            if ($('lobbyNotice')) $('lobbyNotice').textContent = `RNV1 読込失敗: ${err?.message || err}`;
+            if ($('lobbyNotice')) $('lobbyNotice').textContent = `RNV1 FAST 読込失敗: ${err?.message || err}`;
           }
         };
       }
@@ -719,6 +793,7 @@ function lobby() {
       if (rStd) {
         rStd.onclick = () => {
           rules.useRnv1Standard = !rules.useRnv1Standard;
+          if (rules.useRnv1Standard) rules.useNv3Standard = false;
           save();
           lobby();
         };
@@ -727,10 +802,11 @@ function lobby() {
       if (rReset) {
         rReset.onclick = () => {
           resetRNV1Weights();
-          if ($('lobbyNotice')) $('lobbyNotice').textContent = 'RNV1 を初期モデルに戻しました';
+          if ($('lobbyNotice')) $('lobbyNotice').textContent = 'RNV1 FAST を標準A100モデルに戻しました';
           lobby();
         };
       }
+      syncNv3UI();
       syncRnv1UI();
       const isSpec = lab.playerRole === 'spectate';
       if ($('labAaP')) $('labAaP').hidden = isSpec;
@@ -740,9 +816,11 @@ function lobby() {
   if ($('loadoutField')) $('loadoutField').hidden = isLab && lab.playerRole === 'spectate';
   $('lobbyAiLabel').textContent = isLab
     ? `${aiVersionDisplay(lab.teamAAi)} vs ${aiVersionDisplay(lab.teamBAi)}`
-    : rules.useRnv1Standard
-      ? 'RNV1'
-      : 'NV2.6 Force';
+    : rules.useNv3Standard
+      ? 'NV 3'
+      : rules.useRnv1Standard
+        ? 'RNV1 FAST'
+        : 'NV2.6 Force';
   group('limit', rules.limit, k => {
     rules.limit = k;
     save();
@@ -1256,7 +1334,7 @@ function startMatch() {
   spectateCam = 'tps';
   spectateIdx = 0;
   rules.lab = normalizeLabConfig(rules.lab);
-  rules.aiModel = rules.useRnv1Standard ? 'rnv1' : 'human';
+  rules.aiModel = rules.useNv3Standard ? 'nv3' : (rules.useRnv1Standard ? 'rnv1' : 'human');
   rules.allyNv21 = 0;
   liveSimSpeed = rules.mode === 'lab' ? (rules.lab.simSpeed || 1) : 1;
   resetMotion();
@@ -1674,13 +1752,15 @@ function resultUI() {
       : '';
     const tag = a.human
       ? ` · 自分${aaChip}`
-      : a.aiVersion === 'RNV1'
-        ? `<span class="tag-rnv1">RNV1</span>${aaChip}`
-        : a.isSpy
-          ? `<span class="tag-nv21">${a.aiVersion || 'NV2.1 SPY'}</span>${aaChip}`
-          : a.aiVersion
-            ? `<span class="tag-human">${a.aiVersion}</span>${aaChip}`
-            : aaChip;
+      : a.aiVersion === 'NV 3'
+        ? `<span class="tag-nv3">NV 3</span>${aaChip}`
+        : (a.aiVersion === 'RNV1' || a.aiVersion === 'RNV1 FAST')
+          ? `<span class="tag-rnv1">RNV1 FAST</span>${aaChip}`
+          : a.isSpy
+            ? `<span class="tag-nv21">${a.aiVersion || 'NV2.1 SPY'}</span>${aaChip}`
+            : a.aiVersion
+              ? `<span class="tag-human">${a.aiVersion}</span>${aaChip}`
+              : aaChip;
     return `<div class="roster-row"><span class="${a.team?'orange':'cyan'}">${a.name}${tag}</span><span>${a.kills}</span><span>${a.deaths}</span></div>`;
   }).join('');
   equipment.result(match);
@@ -2296,7 +2376,12 @@ async function init() {
     if (screen === 'lobby') lobby();
     else syncRnv1UI();
   });
+  onNV3WeightsChanged(() => {
+    if (screen === 'lobby') lobby();
+    else syncNv3UI();
+  });
   preloadBundledRNV1Weights('./assets/rnv1-weights.json').catch(() => {});
+  loadNV3WeightsFromUrl('./assets/nv3-weights.json').catch(() => {});
   $('start').disabled = true;
   try {
     renderer = new Renderer(scene, $('hdr'));

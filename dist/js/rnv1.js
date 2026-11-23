@@ -19,7 +19,7 @@ import {
 import {eyeOf, targetPoint, postureStep, vertical} from './posture.js';
 import {RNV1_BUNDLED_WEIGHTS} from './rnv1-weights.js';
 
-export const RNV1_VERSION = 'RNV1';
+export const RNV1_VERSION = 'RNV1 FAST';
 export const RNV1_SCHEMA = 1;
 export const RNV1_OBS_DIM = 144;
 export const RNV1_STORAGE_KEY = 'result.rnv1.weights.v1';
@@ -144,8 +144,8 @@ export function validateRNV1Bundle(bundle) {
   if (!bundle || typeof bundle !== 'object') {
     return {ok: false, error: '重みデータがオブジェクトではありません'};
   }
-  if (bundle.version !== RNV1_VERSION) {
-    return {ok: false, error: `バージョン不一致 (${bundle.version} !== ${RNV1_VERSION})`};
+  if (bundle.version !== 'RNV1' && bundle.version !== RNV1_VERSION) {
+    return {ok: false, error: `バージョン不一致 (${bundle.version} !== RNV1)`};
   }
   if (bundle.schema !== RNV1_SCHEMA) {
     return {ok: false, error: `スキーマ不一致 (${bundle.schema} !== ${RNV1_SCHEMA})`};

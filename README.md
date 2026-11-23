@@ -31,11 +31,20 @@ Node.js 24 を使用して、`npm install --prefix tools` の後に `npm test --
 
 [追加20件の重大度順の修正一覧](docs/CRITICAL_BUGFIX_AUDIT.md)
 
-## RNV1 高速強化学習スタジオ (Google Colab Pro A100)
+## NV 3 OMEGA — 超大規模 A100 感情共感型人間NPC 学習スタジオ (Google Colab Pro A100)
 
-Harbor Range の 3D 物理環境を A100 GPU 上で並列化し、NPC AI **`RNV1`** をランダム初期化から一から高速学習・強化できます。Colab を開いて **「ランタイム → すべて実行」** を押すだけで学習から `rnv1-weights.json` の自動ダウンロードまで完了します。
+`NV2.6 Force` を遥かに超える人間性（8次元感情・4次元身体状態・16次元パーソナリティDNA・5大状況理解/心の理論・16ボーン全身ジェスチャー・Klatt音声無線）を持つ次世代NPC **`NV 3`** を、A100 GPU 上の超並列ゼロ同期シミュレーション（最大 12,288 NPC同時稼働 / 419万パラメータ Omega Teacher → 58.8万パラメータ 360Hz ブラウザコア蒸留）でワンクリック学習できます。
+
+- ノートブック: [`training/NV3_Omega_Colab_A100_Studio.ipynb`](training/NV3_Omega_Colab_A100_Studio.ipynb)
+- [Google Colab Pro (A100) で NV 3 OMEGA スタジオを開く](https://colab.research.google.com/github/sc8z35a-collab/Result/blob/feat/rnv1-colab-a100-studio/training/NV3_Omega_Colab_A100_Studio.ipynb)
+- 詳細設計・導入手順: [`docs/NV3_OMEGA_STUDIO.md`](docs/NV3_OMEGA_STUDIO.md)
+
+## RNV1 FAST 高速強化学習スタジオ (Google Colab Pro A100)
+
+A100 GPU で学習済みのモデル **`RNV1 FAST`**（`dist/assets/rnv1-weights.json` / `dist/js/rnv1-weights.js`）を標準収録しており、そのまま実験場・通常戦で対戦可能です。さらに追加学習したい場合は Colab を開いて **「ランタイム → すべて実行」** を押すだけで再学習から `rnv1-weights.json` の自動ダウンロードまで完了します。
 
 - ノートブック: [`training/RNV1_Colab_A100_Studio.ipynb`](training/RNV1_Colab_A100_Studio.ipynb)
-- [Google Colab (A100) で RNV1 スタジオを開く](https://colab.research.google.com/github/sc8z35a-collab/Result/blob/main/training/RNV1_Colab_A100_Studio.ipynb)
+- [Google Colab (A100) で RNV1 スタジオを開く](https://colab.research.google.com/github/sc8z35a-collab/Result/blob/feat/rnv1-colab-a100-studio/training/RNV1_Colab_A100_Studio.ipynb)
 - 詳細設計・導入手順: [`docs/RNV1_STUDIO.md`](docs/RNV1_STUDIO.md)
+
 

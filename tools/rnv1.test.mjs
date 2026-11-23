@@ -30,44 +30,47 @@ function place(a, x, z, yaw = 0, y = 0) {
 // ============================================================================
 // 1. RNV1 Registration in AI_VERSION_LIST, Match & ArenaCompositeAI
 // ============================================================================
-test('RNV1-01 | RNV1 registers cleanly as 11th AI generation in Match, Lab, and ArenaCompositeAI', () => {
-  assert.equal(RNV1_VERSION, 'RNV1');
-  assert.equal(AI_VERSION_LIST.length, 11);
-  assert.equal(AI_VERSION_LIST[0].id, 'rnv1');
+test('RNV1-01 | RNV1 FAST registers cleanly in Match, Lab, and ArenaCompositeAI with bundled A100 weights', () => {
+  assert.equal(RNV1_VERSION, 'RNV1 FAST');
+  assert.equal(AI_VERSION_LIST.length, 12);
+  assert.equal(AI_VERSION_LIST[1].id, 'rnv1');
   assert.equal(normalizeAiModelId('RNV1'), 'rnv1');
-  assert.equal(aiVersionDisplay('rnv1'), 'RNV1');
+  assert.equal(normalizeAiModelId('RNV1 FAST'), 'rnv1');
+  assert.equal(aiVersionDisplay('rnv1'), 'RNV1 FAST');
 
-  // Direct pure RNV1 match
+  // Direct pure RNV1 FAST match
   const mPure = new Match({mode: '3v3', limit: 'unlimited', aiModel: 'rnv1'});
   assert(mPure.nv instanceof RNV1, 'Pure RNV1 match must instantiate RNV1 engine directly');
-  assert(mPure.actors.filter(a => !a.human).every(a => a.aiVersion === 'RNV1'));
+  assert(mPure.actors.filter(a => !a.human).every(a => a.aiVersion === 'RNV1 FAST'));
 
-  // Lab head-to-head RNV1 vs NV2.6 Force
+  // Lab head-to-head RNV1 FAST vs NV2.6 Force
   const mVs = new Match({
     mode: 'lab', limit: 'unlimited',
     lab: {playerRole: 'spectate', teamACount: 3, teamBCount: 3, teamAAi: 'rnv1', teamBAi: 'human'}
   });
-  assert(mVs.nv instanceof ArenaCompositeAI, 'RNV1 vs NV2.6 Force must use ArenaCompositeAI');
-  assert(mVs.actors.filter(a => a.team === 0).every(a => a.aiVersion === 'RNV1'));
+  assert(mVs.nv instanceof ArenaCompositeAI, 'RNV1 FAST vs NV2.6 Force must use ArenaCompositeAI');
+  assert(mVs.actors.filter(a => a.team === 0).every(a => a.aiVersion === 'RNV1 FAST'));
   assert(mVs.actors.filter(a => a.team === 1).every(a => a.aiVersion === 'NV2.6 Force'));
 
-  // Lab RNV1 vs RNV1 mirror match
+  // Lab RNV1 FAST vs RNV1 FAST mirror match
   const mMirror = new Match({
     mode: 'lab', limit: 'unlimited',
     lab: {playerRole: 'spectate', teamACount: 2, teamBCount: 2, teamAAi: 'rnv1', teamBAi: 'rnv1'}
   });
-  assert(mMirror.nv instanceof RNV1, 'RNV1 vs RNV1 mirror match should instantiate single RNV1 engine');
+  assert(mMirror.nv instanceof RNV1, 'RNV1 FAST mirror match should instantiate single RNV1 engine');
 });
 
 // ============================================================================
 // 2. Weight Bundle Validation, Corruption Rejection & Forward-Pass Integrity
 // ============================================================================
-test('RNV1-02 | RNV1PolicyNet validates bundles, rejects corrupted weights, and runs zero-NaN GRU forward pass', () => {
+test('RNV1-02 | RNV1PolicyNet validates bundled A100 RNV1 FAST weights, rejects corrupted weights, and runs zero-NaN GRU forward pass', () => {
   const ok = validateRNV1Bundle(RNV1_BUNDLED_WEIGHTS);
-  assert.equal(ok.ok, true, 'Starter bundled weights must validate cleanly');
+  assert.equal(ok.ok, true, 'Bundled A100 RNV1 FAST weights must validate cleanly');
+  assert.equal(RNV1_BUNDLED_WEIGHTS.meta.trained, true, 'Bundled RNV1 FAST weights must be A100-trained');
+  assert(RNV1_BUNDLED_WEIGHTS.meta.steps > 2_000_000, 'Bundled RNV1 FAST weights must have >2M A100 steps');
   const net = ok.net;
   assert.equal(net.obsDim, RNV1_OBS_DIM);
-  assert(net.paramCount > 20000);
+  assert(net.paramCount > 200000);
 
   // Reject wrong version / truncated data / missing tensor
   assert.equal(validateRNV1Bundle({version: 'NV2', schema: 1}).ok, false);
@@ -246,16 +249,16 @@ test('RNV1-05 | UI: Lab Mode exposes RNV1, imports trained weight JSON, and togg
   assert.equal(getRNV1Status().trained, true);
   assert($('rnv1StatusBadge').textContent.includes('100M'), 'Badge must display imported A100 step count');
 
-  // Toggle standard-mode RNV1 ON and start a standard 3v3 match -> NPCs run RNV1!
+  // Toggle standard-mode RNV1 FAST ON and start a standard 3v3 match -> NPCs run RNV1 FAST!
   $('rnv1StdBtn').click();
   assert.equal($('rnv1StdBtn').getAttribute('aria-pressed'), 'true');
   $('modes').querySelector('[data-value="3v3"]').click();
-  assert.equal($('lobbyAiLabel').textContent, 'RNV1');
+  assert.equal($('lobbyAiLabel').textContent, 'RNV1 FAST');
   $('start').click();
   frame();
   assert.equal(currentMatch.aiModel, 'rnv1');
   assert(currentMatch.nv instanceof RNV1);
-  assert(currentMatch.actors.filter(a => !a.human).every(a => a.aiVersion === 'RNV1'));
+  assert(currentMatch.actors.filter(a => !a.human).every(a => a.aiVersion === 'RNV1 FAST'));
 
   // Verify preference persistence
   const prefs = readPreferences({rules: {useRnv1Standard: true}});
