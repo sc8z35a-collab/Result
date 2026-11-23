@@ -30,3 +30,12 @@ Node.js 24 を使用して、`npm install --prefix tools` の後に `npm test --
 [重大度順の不具合修正一覧](docs/BUGFIX_AUDIT.md)
 
 [追加20件の重大度順の修正一覧](docs/CRITICAL_BUGFIX_AUDIT.md)
+
+## RNV1 高速強化学習スタジオ (Google Colab Pro A100)
+
+Harbor Range の 3D 物理環境を A100 GPU 上で並列化し、NPC AI **`RNV1`** をランダム初期化から一から高速学習・強化できます。Colab を開いて **「ランタイム → すべて実行」** を押すだけで学習から `rnv1-weights.json` の自動ダウンロードまで完了します。
+
+- ノートブック: [`training/RNV1_Colab_A100_Studio.ipynb`](training/RNV1_Colab_A100_Studio.ipynb)
+- [Google Colab (A100) で RNV1 スタジオを開く](https://colab.research.google.com/github/sc8z35a-collab/Result/blob/main/training/RNV1_Colab_A100_Studio.ipynb)
+- 詳細設計・導入手順: [`docs/RNV1_STUDIO.md`](docs/RNV1_STUDIO.md)
+

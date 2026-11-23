@@ -12,7 +12,7 @@ const defaultSettings = {
   audioMode: 'ultra300', audioV2: true, sensitivity: 1, volume: 55, sound: false
 };
 const uiModes = {'1v1': 1, '3v3': 1, '5v5': 1, lab: 1};
-const gameRules = {mode: '3v3', limit: 'points', multiplier: 5, loadout: 'SW T', allyNv21: 0, aiModel: 'human', lab: {...DEFAULT_LAB_CONFIG}};
+const gameRules = {mode: '3v3', limit: 'points', multiplier: 5, loadout: 'SW T', allyNv21: 0, aiModel: 'human', useRnv1Standard: false, lab: {...DEFAULT_LAB_CONFIG}};
 const record = value => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 const choice = (table, value, fallback) => typeof value === 'string' && Object.hasOwn(table, value) ? value : fallback;
 const number = (value, fallback) => {
@@ -58,7 +58,8 @@ export function readPreferences(saved) {
   rules.limit = value.limit === 'unlimited' ? 'unlimited' : 'points';
   rules.multiplier = scoreMultiplier(value.multiplier);
   rules.allyNv21 = 0;
-  rules.aiModel = 'human';
+  rules.useRnv1Standard = !!value.useRnv1Standard;
+  rules.aiModel = rules.useRnv1Standard ? 'rnv1' : 'human';
   rules.lab = normalizeLabConfig(value.lab);
   return {settings, rules};
 }

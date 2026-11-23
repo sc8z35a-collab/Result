@@ -8,6 +8,9 @@ import {forward, add, clamp} from './geometry.js';
 import {SoundEngin, SOUND_ENGIN_VERSION} from './audio.js';
 import {readPreferences, scoreMultiplier} from './preferences.js';
 import {aiVersionDisplay} from './ai-arena.js';
+import {
+  getRNV1Status, importRNV1WeightsJSON, resetRNV1Weights, preloadBundledRNV1Weights, onRNV1WeightsChange
+} from './rnv1.js';
 const $ = s => document.getElementById(s),
   views = {title: 'titleView', lobby: 'lobby', settings: 'settings', game: 'hud', pause: 'pause', results: 'results'};
 // Optically exact +2/3 wider view width relative to 24.7° / 13.0° FOV:
@@ -595,9 +598,42 @@ function soundButton() {
   $('sound').setAttribute('aria-label', on ? 'サウンドをオフにする' : 'サウンドをオンにする');
   $('app').dataset.audioState = audio.ctx?.state || (audio.on ? 'ready' : 'off')
 }
+function formatRnv1Steps(steps) {
+  if (!steps || steps <= 0) return '0';
+  if (steps >= 1e6) return (steps / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
+  if (steps >= 1e3) return Math.round(steps / 1e3) + 'k';
+  return String(steps);
+}
+
+function syncRnv1UI() {
+  const st = getRNV1Status();
+  const badge = $('rnv1StatusBadge');
+  if (badge) {
+    badge.classList.toggle('is-trained', !!st.trained);
+    if (st.trained) {
+      const kd = Number.isFinite(st.evalKD) ? ` · K/D ${st.evalKD.toFixed(2)}` : '';
+      badge.textContent = `RNV1 A100学習済 · ${formatRnv1Steps(st.steps)} steps${kd}`;
+    } else {
+      badge.textContent = 'RNV1 初期モデル（Colab A100で一から高速学習）';
+    }
+  }
+  const stdBtn = $('rnv1StdBtn');
+  if (stdBtn) {
+    const on = !!rules.useRnv1Standard;
+    stdBtn.setAttribute('aria-pressed', String(on));
+    stdBtn.classList.toggle('is-on', on);
+    stdBtn.textContent = on ? '通常戦RNV1 ON' : '通常戦RNV1 OFF';
+  }
+  const resetBtn = $('rnv1ResetBtn');
+  if (resetBtn) {
+    resetBtn.hidden = st.source !== 'imported';
+  }
+}
+
 function lobby() {
   rules.lab = normalizeLabConfig(rules.lab);
-  rules.aiModel = 'human';
+  rules.useRnv1Standard = !!rules.useRnv1Standard;
+  rules.aiModel = rules.useRnv1Standard ? 'rnv1' : 'human';
   rules.allyNv21 = 0;
   const lab = rules.lab;
   const isLab = rules.mode === 'lab';
@@ -653,6 +689,49 @@ function lobby() {
         npcSk.textContent = lab.npcSkills ? 'NPC技 ON' : 'NPC技 OFF';
         npcSk.onclick = () => setLab({npcSkills: !lab.npcSkills});
       }
+      const rLoad = $('rnv1LoadBtn'), rFile = $('rnv1File');
+      if (rLoad && rFile) {
+        rLoad.onclick = () => rFile.click();
+        rFile.onchange = async () => {
+          const file = rFile.files?.[0];
+          rFile.value = '';
+          if (!file) return;
+          try {
+            const text = await file.text();
+            const res = importRNV1WeightsJSON(text, {persist: true, source: 'imported'});
+            if (res.ok) {
+              if (res.status.trained) {
+                rules.useRnv1Standard = true;
+                rules.lab = normalizeLabConfig({...rules.lab, teamBAi: 'rnv1'});
+                save();
+              }
+              if ($('lobbyNotice')) $('lobbyNotice').textContent = `RNV1 重みを読み込みました (${formatRnv1Steps(res.status.steps)} steps)`;
+              lobby();
+            } else if ($('lobbyNotice')) {
+              $('lobbyNotice').textContent = `RNV1 読込エラー: ${res.error}`;
+            }
+          } catch (err) {
+            if ($('lobbyNotice')) $('lobbyNotice').textContent = `RNV1 読込失敗: ${err?.message || err}`;
+          }
+        };
+      }
+      const rStd = $('rnv1StdBtn');
+      if (rStd) {
+        rStd.onclick = () => {
+          rules.useRnv1Standard = !rules.useRnv1Standard;
+          save();
+          lobby();
+        };
+      }
+      const rReset = $('rnv1ResetBtn');
+      if (rReset) {
+        rReset.onclick = () => {
+          resetRNV1Weights();
+          if ($('lobbyNotice')) $('lobbyNotice').textContent = 'RNV1 を初期モデルに戻しました';
+          lobby();
+        };
+      }
+      syncRnv1UI();
       const isSpec = lab.playerRole === 'spectate';
       if ($('labAaP')) $('labAaP').hidden = isSpec;
       if ($('labAaPLabel')) $('labAaPLabel').hidden = isSpec;
@@ -661,7 +740,9 @@ function lobby() {
   if ($('loadoutField')) $('loadoutField').hidden = isLab && lab.playerRole === 'spectate';
   $('lobbyAiLabel').textContent = isLab
     ? `${aiVersionDisplay(lab.teamAAi)} vs ${aiVersionDisplay(lab.teamBAi)}`
-    : 'NV2.6 Force';
+    : rules.useRnv1Standard
+      ? 'RNV1'
+      : 'NV2.6 Force';
   group('limit', rules.limit, k => {
     rules.limit = k;
     save();
@@ -1175,7 +1256,7 @@ function startMatch() {
   spectateCam = 'tps';
   spectateIdx = 0;
   rules.lab = normalizeLabConfig(rules.lab);
-  rules.aiModel = 'human';
+  rules.aiModel = rules.useRnv1Standard ? 'rnv1' : 'human';
   rules.allyNv21 = 0;
   liveSimSpeed = rules.mode === 'lab' ? (rules.lab.simSpeed || 1) : 1;
   resetMotion();
@@ -1183,7 +1264,7 @@ function startMatch() {
   const aaMode = currentAutoAimMode();
   match = new Match({
     ...rules,
-    aiModel: 'human',
+    aiModel: rules.aiModel,
     allyNv21: 0,
     lab: rules.mode === 'lab' ? rules.lab : undefined,
     autoAimMode: aaMode,
@@ -1593,11 +1674,13 @@ function resultUI() {
       : '';
     const tag = a.human
       ? ` · 自分${aaChip}`
-      : a.isSpy
-        ? `<span class="tag-nv21">${a.aiVersion || 'NV2.1 SPY'}</span>${aaChip}`
-        : a.aiVersion
-          ? `<span class="tag-human">${a.aiVersion}</span>${aaChip}`
-          : aaChip;
+      : a.aiVersion === 'RNV1'
+        ? `<span class="tag-rnv1">RNV1</span>${aaChip}`
+        : a.isSpy
+          ? `<span class="tag-nv21">${a.aiVersion || 'NV2.1 SPY'}</span>${aaChip}`
+          : a.aiVersion
+            ? `<span class="tag-human">${a.aiVersion}</span>${aaChip}`
+            : aaChip;
     return `<div class="roster-row"><span class="${a.team?'orange':'cyan'}">${a.name}${tag}</span><span>${a.kills}</span><span>${a.deaths}</span></div>`;
   }).join('');
   equipment.result(match);
@@ -2209,6 +2292,11 @@ async function init() {
   syncAutoAimUI();
   soundButton();
   audio.set(settings.volume / 100);
+  onRNV1WeightsChange(() => {
+    if (screen === 'lobby') lobby();
+    else syncRnv1UI();
+  });
+  preloadBundledRNV1Weights('./assets/rnv1-weights.json').catch(() => {});
   $('start').disabled = true;
   try {
     renderer = new Renderer(scene, $('hdr'));
