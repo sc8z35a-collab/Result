@@ -88,7 +88,7 @@ class RNV1Actor(nn.Module):
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         x1 = F.silu(self.enc_ln(self.enc_fc(obs)))
         x2 = x1 + F.silu(self.res_ln(self.res_fc(x1)))
-        h_new = self.gru(x2, h_prev)
+        h_new = self.gru(x2, h_prev.to(x2.dtype)).float()
         outs = {
             "cont_mean": torch.tanh(self.head_cont(h_new)),
             "aim_logits": self.head_aim(h_new),

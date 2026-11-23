@@ -413,8 +413,12 @@ def train_rnv1(cfg: StudioConfig) -> Dict[str, Any]:
 
     adam_kwargs: Dict[str, Any] = {"lr": cfg.lr_start, "eps": 1e-5, "weight_decay": 1e-4}
     if hw["fused_adam"]:
-        adam_kwargs["fused"] = True
-    optimizer = torch.optim.AdamW(model.parameters(), **adam_kwargs)
+        try:
+            optimizer = torch.optim.AdamW(model.parameters(), fused=True, **adam_kwargs)
+        except Exception:
+            optimizer = torch.optim.AdamW(model.parameters(), **adam_kwargs)
+    else:
+        optimizer = torch.optim.AdamW(model.parameters(), **adam_kwargs)
     scaler = torch.amp.GradScaler("cuda", enabled=use_fp16)
 
     league = PFSPLeague(cfg.league_max_size, OBS_DIM, cfg.hidden_dim, device)
