@@ -947,7 +947,8 @@ export class Match {
     return {ok: true, units: spawned, count: spawned.length, usesLeft: this.reinforceUsesLeft, wave};
   }
   buyDrone(buyer = this.player) {
-    const canBuyActor = !!(buyer?.human || String(buyer?.aiVersion || '').includes('NVSS'));
+    const aiStr = String(buyer?.aiVersion || '');
+    const canBuyActor = !!(buyer?.human || aiStr.includes('NVSS') || aiStr.includes('NV Gamer'));
     if (!buyer?.alive || !canBuyActor || this.ended || this.isZombieChallenge) return null;
     const totalAmmo = (buyer.stock || 0) + (buyer.mag || 0);
     if (!this.infiniteAmmo && totalAmmo < DRONE_AMMO_COST) return null;

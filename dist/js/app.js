@@ -8,6 +8,7 @@ import {forward, add, clamp} from './geometry.js';
 import {SoundEngin, SOUND_ENGIN_VERSION} from './audio.js';
 import {readPreferences, scoreMultiplier} from './preferences.js';
 import {getActiveNVSSWeights, loadNVSSWeights} from './nvss-weights.js';
+import {getActiveNVGamerWeights, loadNVGamerWeights} from './nvgamer-weights.js';
 const $ = s => document.getElementById(s),
   views = {title: 'titleView', lobby: 'lobby', settings: 'settings', game: 'hud', pause: 'pause', results: 'results'};
 const setTxt = (el, v) => {
@@ -757,8 +758,9 @@ function lobby() {
       lobby();
     };
   }
-  group('aiModelSelect', rules.aiModel === 'nvss' ? 'nvss' : 'human', k => {
-    rules.aiModel = k === 'nvss' ? 'nvss' : 'human';
+  const curAi = (rules.aiModel === 'nvgamer' || rules.aiModel === 'nvss') ? rules.aiModel : 'human';
+  group('aiModelSelect', curAi, k => {
+    rules.aiModel = (k === 'nvgamer' || k === 'nvss') ? k : 'human';
     save();
     lobby();
   });
@@ -766,8 +768,8 @@ function lobby() {
   if (wStat) {
     const aw = getActiveNVSSWeights();
     wStat.textContent = aw.trainedSteps > 0
-      ? `読込済: ${(aw.trainedSteps / 1e6).toFixed(1)}M steps (${aw.trainedMatches.toLocaleString()}試合)`
-      : '内蔵ベース学習済ウェイト';
+      ? `${(aw.trainedSteps / 1e6).toFixed(1)}M steps`
+      : '内蔵済';
   }
   const wBtn = $('nvssWeightBtn'), wIn = $('nvssWeightInput');
   if (wBtn && wIn && !wBtn._nvssWired) {
@@ -782,13 +784,45 @@ function lobby() {
         if ($('lobbyNotice')) $('lobbyNotice').textContent = `NVSSウェイト適用完了 (${loaded.trainedSteps.toLocaleString()} steps)`;
         lobby();
       } catch (err) {
-        if ($('lobbyNotice')) $('lobbyNotice').textContent = `ウェイト読込失敗: ${err.message}`;
+        if ($('lobbyNotice')) $('lobbyNotice').textContent = `NVSSウェイト読込失敗: ${err.message}`;
       } finally {
         wIn.value = '';
       }
     };
   }
-  $('lobbyAiLabel').textContent = isZChal ? 'NV2.7 ZONBI vs NV2.6' : rules.aiModel === 'nvss' ? 'NV Super Soldier (NVSS)' : 'NV2.6 Force';
+  const gStat = $('nvgamerWeightStatus');
+  if (gStat) {
+    const gw = getActiveNVGamerWeights();
+    gStat.textContent = gw.trainedSteps > 0
+      ? `${(gw.trainedSteps / 1e6).toFixed(1)}M steps (${gw.genresTrained || 5}ジャンル)`
+      : '汎用内蔵済';
+  }
+  const gBtn = $('nvgamerWeightBtn'), gIn = $('nvgamerWeightInput');
+  if (gBtn && gIn && !gBtn._nvgWired) {
+    gBtn._nvgWired = true;
+    gBtn.onclick = () => gIn.click();
+    gIn.onchange = async () => {
+      const f = gIn.files?.[0];
+      if (!f) return;
+      try {
+        const txt = await f.text();
+        const loaded = loadNVGamerWeights(txt, true);
+        if ($('lobbyNotice')) $('lobbyNotice').textContent = `NV Gamerウェイト適用完了 (${loaded.trainedSteps.toLocaleString()} steps)`;
+        lobby();
+      } catch (err) {
+        if ($('lobbyNotice')) $('lobbyNotice').textContent = `NV Gamerウェイト読込失敗: ${err.message}`;
+      } finally {
+        gIn.value = '';
+      }
+    };
+  }
+  $('lobbyAiLabel').textContent = isZChal
+    ? 'NV2.7 ZONBI vs NV2.6'
+    : rules.aiModel === 'nvgamer'
+      ? 'NV Gamer (汎用30×)'
+      : rules.aiModel === 'nvss'
+        ? 'NV Super Soldier (NVSS)'
+        : 'NV2.6 Force';
   group('limit', rules.limit, k => {
     rules.limit = k;
     save();
@@ -1245,9 +1279,10 @@ function startMatch() {
   spectateIdx = 0;
   if (!['3v3', 'lab', 'zombie', 'br', 'zombieChallenge'].includes(rules.mode)) rules.mode = '3v3';
   rules.lab = normalizeLabConfig(rules.lab);
-  rules.lab.teamAAi = rules.lab.teamAAi === 'nvss' ? 'nvss' : 'human';
-  rules.lab.teamBAi = rules.lab.teamBAi === 'nvss' ? 'nvss' : 'human';
-  rules.aiModel = rules.aiModel === 'nvss' ? 'nvss' : 'human';
+  const keepAi = v => (v === 'nvgamer' || v === 'nvss') ? v : 'human';
+  rules.lab.teamAAi = keepAi(rules.lab.teamAAi);
+  rules.lab.teamBAi = keepAi(rules.lab.teamBAi);
+  rules.aiModel = keepAi(rules.aiModel);
   rules.allyNv21 = 0;
   liveSimSpeed = rules.mode === 'lab' ? (rules.lab.simSpeed || 1) : 1;
   resetMotion();
@@ -1973,7 +2008,8 @@ function resultUI() {
       const aaChip = a.aaOverride && a.aaOverride !== 'off'
         ? `<span class="${a.aaOverride === '1.5' ? 'tag-scherp' : 'tag-nv21'}">${a.aaOverride === '1.5' ? '1.5 Scherp' : 'AA ' + a.aaOverride}</span>`
         : '';
-      const engLabel = a.isH1Zonbi ? 'NV2.7 ZONBI' : (String(a.aiVersion || '').includes('NVSS') ? 'NVSS' : 'NV2.6 Force');
+      const aiStr = String(a.aiVersion || '');
+      const engLabel = a.isH1Zonbi ? 'NV2.7 ZONBI' : aiStr.includes('NV Gamer') ? 'NV Gamer' : aiStr.includes('NVSS') ? 'NVSS' : 'NV2.6 Force';
       const tag = a.human
         ? ` · 自分${aaChip}`
         : `<span class="tag-human">${engLabel}</span>${aaChip}`;

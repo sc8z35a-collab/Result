@@ -61,6 +61,9 @@ import {
 } from '../dist/js/nv2-human.js';
 import {NVSuperSoldier,NVSS_VERSION,NVSSPolicyNet,NVSSHumanRealism} from '../dist/js/nvss.js';
 import {NVSS_ARCH,createBaselineNVSSWeights,loadNVSSWeights,resetNVSSWeights} from '../dist/js/nvss-weights.js';
+import {NVGamerCore,NVGAMER_VERSION,HumanVirtualController} from '../dist/js/nvgamer-core.js';
+import {NVGAMER_TENSOR_KEYS,createBaselineNVGamerWeights,loadNVGamerWeights,resetNVGamerWeights} from '../dist/js/nvgamer-weights.js';
+import {NVGamerEngine} from '../dist/js/nvgamer-result.js';
 import {
   PortAudio,SoundEngin,SoundEngin2,SOUND_ENGIN_VERSION,SOUND_CONTROL_HZ,SUB_CROSSOVER_HZ,
   SPEED_OF_SOUND,AUDIO_MODES,SOUND_CATALOG_COUNT,
@@ -2067,9 +2070,109 @@ for (const [mode,counts] of Object.entries(modes)) {
     realismScore:nvEng.metrics.nvssHumanRealismScore
    });
   }
+
+  // 17. NV Gamer Suite: Zero-Dependency Multi-Game Portability (Racing + Bullet-Hell + Control Inversion), 30x Virtual Human Controller & Result Integration
+  {
+   // 17A. Colab JSON weight round-trip & Recurrent GRU + Forward World-Model check
+   assert.equal(HumanVirtualController.minJerk(0),0);
+   assert.equal(HumanVirtualController.minJerk(0.5),0.5);
+   assert.equal(HumanVirtualController.minJerk(1),1);
+   const baseG=createBaselineNVGamerWeights();
+   const colabG={
+    version:'NV-GAMER-1.0-UNIVERSAL',trainedSteps:250000000,trainedEpisodes:4200000,genresTrained:5,source:'colab-pro-a100',
+    weights:Object.fromEntries(NVGAMER_TENSOR_KEYS.map(k=>[k,Array.from(baseG[k])]))
+   };
+   const loadedG=loadNVGamerWeights(JSON.stringify(colabG),false);
+   assert.equal(loadedG.trainedSteps,250000000);assert.equal(loadedG.genresTrained,5);
+   resetNVGamerWeights();
+
+   // 17B. Cross-Game Proof #1: Standalone 2D Arcade Racing Game (zero Result dependencies!)
+   const racer=new NVGamerCore({seed:101,policyHz:20});
+   let carX=0,carZ=0,carVx=0,carVz=0,nitroUsed=0,cpReached=0;
+   const cps=[[10,16],[-8,30],[14,44]];
+   let cpIdx=0;
+   for(let step=0;step<240;step++){
+    const cp=cps[cpIdx%cps.length];
+    const gDx=cp[0]-carX,gDz=cp[1]-carZ,dist0=Math.hypot(gDx,gDz);
+    const out=racer.step({
+     time:step*0.05,dt:0.05,
+     self:{vital:1,speed:Math.hypot(carVx,carVz)/10,vx:carVx/10,vz:carVz/10,goalDx:gDx,goalDz:gDz},
+     entities:[{id:'cp',dx:gDx,dz:gDz,dist:dist0,goalValue:1}],
+     actions:[{id:'nitro',ready:true,minInterval:0.5,descriptor:[0.6,0.2,0.95,0,0.2,0.8,0,0.1]}],
+     reward:0
+    });
+    const boost=out.buttons.get('nitro')?1.6:1.0;
+    if(boost>1)nitroUsed++;
+    carVx=carVx*0.82+out.moveX*2.8*boost;
+    carVz=carVz*0.82+out.moveY*2.8*boost;
+    carX+=carVx*0.05;carZ+=carVz*0.05;
+    if(Math.hypot(cp[0]-carX,cp[1]-carZ)<3.0){cpReached++;cpIdx++;}
+   }
+   assert(cpReached>=2,`Standalone NVGamerCore must drive & clear racing checkpoints in a non-FPS racing game (got ${cpReached})`);
+   assert(nitroUsed>0,'Standalone NVGamerCore must autonomously trigger unfamiliar racing nitro action');
+
+   // 17C. Cross-Game Proof #2: Live Mid-Episode Control Inversion Adaptation (30x Adaptive Meta-Control!)
+   const adaptor=new NVGamerCore({seed:202,policyHz:20});
+   let ax=0,az=0,avx=0,avz=0;
+   let inverted=false;
+   for(let step=0;step<80;step++){
+    if(step===15) inverted=true; // Suddenly invert horizontal controls mid-game!
+    const gDx=18-ax,gDz=0-az;
+    const out=adaptor.step({
+     time:step*0.05,dt:0.05,
+     self:{vital:1,vx:avx,vz:avz,obsVx:avx,obsVz:avz,goalDx:gDx,goalDz:gDz,physicsAnomaly:inverted?1.4:0},
+     entities:[{id:'goal',dx:gDx,dz:gDz,goalValue:1}],
+     reward:0
+    });
+    const sign=inverted?-1:1;
+    avx=out.moveX*sign*2.5;
+    avz=out.moveY*2.5;
+    ax+=avx*0.05;az+=avz*0.05;
+   }
+   assert.equal(adaptor.adapter.movePolarityX,-1,'NVGamerCore must detect sudden mid-game control inversion and flip movePolarityX to -1');
+   assert(ax>6,'NVGamerCore must continue advancing toward the goal even after horizontal controls invert mid-episode');
+   assert(adaptor.adapter.adaptationEvents>=1,'NVGamerCore must log live environmental adaptation events');
+
+   // 17D. Full Result Integration: NV Gamer vs NVSS live 3v3 storm combat + future capabilities + gas pipes
+   const mNg=new Match({mode:'3v3',allNpc:true,limit:'unlimited',teamAiModels:['nvgamer','nvss'],weather:'storm'});
+   assert(mNg.nv.engines&&mNg.nv.engines[0] instanceof NVGamerEngine,'Team A must run NV Gamer');
+   assert(mNg.nv.engines[1] instanceof NVSuperSoldier,'Team B must run NVSS');
+   const ngEng=mNg.nv.engines[0];
+   let ngFutureUsed=0;
+   mNg.customEntities=[{x:0,y:1.2,z:50,goal:true,pickup:true,threat:0.3,alive:true}];
+   mNg.dynamicCapabilities=[{
+    id:'future_hyper_warp_v100',
+    descriptor:[0.85,0.65,0.75,0.55,0.40,0.95,0.40,1.0],
+    canUse:(a)=>a.alive&&ngFutureUsed<3,
+    execute:()=>{ngFutureUsed++;return true;}
+   }];
+   for(const a of mNg.actors){
+    if(a.team===0){a.stock=400;a.x=(a.slot-1)*3;a.z=62;a.y=0;}
+    else{a.x=(a.slot-1)*3;a.z=44;a.y=0;}
+   }
+   for(let i=0;i<360*8;i++) mNg.step(h,{});
+   assert(ngEng.metrics.nvgInferences>=100,'NV Gamer must run recurrent Transformer + World Model inference');
+   assert(ngEng.metrics.nvgCurvedFlicks>0,'NV Gamer must execute curved Bezier Minimum-Jerk virtual mouse flicks');
+   assert(ngEng.metrics.nvgDroneBuys>0,'NV Gamer must buy NV2.6 escort drones via universal action head');
+   assert(ngFutureUsed>0,'NV Gamer must zero-shot master brand-new future capabilities');
+   assert(ngEng.metrics.nvgHumanRealismScore>0,'NV Gamer must report 30x human realism telemetry');
+
+   console.log('NV Gamer Suite OK:',{
+    version:NVGAMER_VERSION,
+    racingCheckpoints:cpReached,
+    racingNitroUsed:nitroUsed,
+    invertedControlAdapted:adaptor.adapter.movePolarityX===-1,
+    inferences:ngEng.metrics.nvgInferences,
+    curvedFlicks:ngEng.metrics.nvgCurvedFlicks,
+    droneBuys:ngEng.metrics.nvgDroneBuys,
+    futureCaps:ngFutureUsed,
+    weatherComps:ngEng.metrics.nvgWeatherComps,
+    realismScore:ngEng.metrics.nvgHumanRealismScore
+   });
+  }
  }
 }
-console.log('360Hz sim, weapon specs (DF1 OUT, MS10, RD20/30/40, DF40 II 600-mag 2-shot/12-pellet-scatter, SR 1U SMG), Narrowed Non-Forced Auto-Aim, FLOW 6s/0.4x, Stun Launcher, Zombie Mode, Zombie Challenge (4 Roles, NV2.7 ZONBI Ranking), Battle Royale, Destructible Gas Pipes, 6 NPC Judgment Mechs, 4 Weathers (Squad Fracture), Ultra-Realistic Blood Splatter, Purchasable NV2.6 Escort Drones, Timed Container Raids + Helicopter, H1 ZONBI (NV2.7), NV Super Soldier (NVSS + Colab Pro GPU RL), Random 50-Round Ammo Boxes, NV2.6 +7 Reinforcements, BAIZER 200 Stack, Sound Engin 2.0, Lightweight LOD, and all matches passed.');
+console.log('360Hz sim, weapon specs (DF1 OUT, MS10, RD20/30/40, DF40 II 600-mag 2-shot/12-pellet-scatter, SR 1U SMG), Narrowed Non-Forced Auto-Aim, FLOW 6s/0.4x, Stun Launcher, Zombie Mode, Zombie Challenge (4 Roles, NV2.7 ZONBI Ranking), Battle Royale, Destructible Gas Pipes, 6 NPC Judgment Mechs, 4 Weathers (Squad Fracture), Ultra-Realistic Blood Splatter, Purchasable NV2.6 Escort Drones, Timed Container Raids + Helicopter, H1 ZONBI (NV2.7), NV Super Soldier (NVSS), NV Gamer (Multi-Game 30x Universal AI + Separate Colab Pro RL), Random 50-Round Ammo Boxes, NV2.6 +7 Reinforcements, BAIZER 200 Stack, Sound Engin 2.0, Lightweight LOD, and all matches passed.');
 
 
 

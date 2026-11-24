@@ -8,8 +8,10 @@ import {NV12} from './nv12.js';
 import {NV13Pro} from './nv13pro.js';
 import {NV2} from './nv2.js';
 import {NVSuperSoldier, NVSS_VERSION} from './nvss.js';
+import {NVGamerEngine, NVGAMER_VERSION} from './nvgamer-result.js';
 
 export const AI_VERSION_LIST = [
+  {id: 'nvgamer', label: 'NV Gamer (汎用30×)', family: 'nvgamer'},
   {id: 'nvss',    label: 'NV Super Soldier (NVSS)', family: 'nvss'},
   {id: 'human',   label: 'NV2.6 Force', family: 'nv2'},
   {id: 'humain',  label: 'NV2.5',       family: 'nv2'},
@@ -26,6 +28,7 @@ export const AI_VERSION_LIST = [
 export const AI_VERSION_MAP = Object.fromEntries(AI_VERSION_LIST.map(v => [v.id, v]));
 
 export function normalizeAiModelId(raw, fallback = 'human') {
+  if (raw === 'nvgamer' || raw === 'gamer' || raw === 'nv_gamer') return 'nvgamer';
   if (raw === 'nvss' || raw === 'supersoldier' || raw === 'nv_ss') return 'nvss';
   if (raw === 'force' || raw === 'nv26') return 'human';
   if (raw === 'nv25') return 'humain';
@@ -37,6 +40,7 @@ export function normalizeAiModelId(raw, fallback = 'human') {
 
 export function aiVersionDisplay(id) {
   switch (normalizeAiModelId(id)) {
+    case 'nvgamer': return NVGAMER_VERSION;
     case 'nvss': return NVSS_VERSION;
     case 'nv1': return 'NV1';
     case 'nv11': return 'NV1.1';
@@ -59,10 +63,15 @@ export function isNvssAiId(id) {
   return normalizeAiModelId(id) === 'nvss';
 }
 
+export function isNvGamerAiId(id) {
+  return normalizeAiModelId(id) === 'nvgamer';
+}
+
 function buildEngineForTeam(match, modelId, teamIdx) {
   const id = normalizeAiModelId(modelId);
   let eng;
-  if (id === 'nvss') eng = new NVSuperSoldier(match);
+  if (id === 'nvgamer') eng = new NVGamerEngine(match);
+  else if (id === 'nvss') eng = new NVSuperSoldier(match);
   else if (id === 'nv1') eng = new NV1(match);
   else if (id === 'nv11') eng = new NV11(match);
   else if (id === 'nv12') eng = new NV12(match);
@@ -210,10 +219,14 @@ export class ArenaCompositeAI {
 export function createMatchAI(match) {
   const tm = match.teamAiModels;
   if (tm) {
+    if (isNvGamerAiId(tm[0]) && isNvGamerAiId(tm[1])) return new NVGamerEngine(match);
     if (isNvssAiId(tm[0]) && isNvssAiId(tm[1])) return new NVSuperSoldier(match);
-    if (isLegacyAiId(tm[0]) || isLegacyAiId(tm[1]) || isNvssAiId(tm[0]) || isNvssAiId(tm[1])) {
+    if (isLegacyAiId(tm[0]) || isLegacyAiId(tm[1]) || isNvssAiId(tm[0]) || isNvssAiId(tm[1]) || isNvGamerAiId(tm[0]) || isNvGamerAiId(tm[1])) {
       return new ArenaCompositeAI(match, tm);
     }
+  }
+  if (!tm && isNvGamerAiId(match.aiModel)) {
+    return new NVGamerEngine(match);
   }
   if (!tm && isNvssAiId(match.aiModel)) {
     return new NVSuperSoldier(match);
