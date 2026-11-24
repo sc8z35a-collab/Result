@@ -62,7 +62,7 @@ export function readPreferences(saved) {
   rules.limit = value.limit === 'unlimited' ? 'unlimited' : 'points';
   rules.multiplier = scoreMultiplier(value.multiplier);
   rules.allyNv21 = 0;
-  rules.aiModel = value.aiModel === 'nvss' ? 'nvss' : 'human';
+  rules.aiModel = (value.aiModel === 'nvgamer' || value.aiModel === 'nvss') ? value.aiModel : 'human';
   rules.lab = normalizeLabConfig(value.lab);
   return {settings, rules};
 }
