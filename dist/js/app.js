@@ -2,11 +2,12 @@ import {PilotEquipment} from './df-hud.js';
 import {eyeOf} from './posture.js';
 import {Renderer, effectiveSize} from './renderer.js';
 import {titleCamera} from './harbor.js';
-import {Match, modes, weapons, BASE_SHIELD_MAX, BAIZER_MAX_STACK, REINFORCE_MAX_USES, REINFORCE_COUNT, MAX_SKILL_CHARGES, KILLS_PER_SKILL_CHARGE, normalizeLabConfig} from './match.js';
+import {Match, modes, weapons, BASE_SHIELD_MAX, BAIZER_MAX_STACK, REINFORCE_MAX_USES, REINFORCE_COUNT, DRONE_AMMO_COST, WEATHERS, ZOMBIE_ROLES, MAX_SKILL_CHARGES, KILLS_PER_SKILL_CHARGE, normalizeLabConfig} from './match.js';
 import {obstruction} from './yard.js';
 import {forward, add, clamp} from './geometry.js';
 import {SoundEngin, SOUND_ENGIN_VERSION} from './audio.js';
 import {readPreferences, scoreMultiplier} from './preferences.js';
+import {getActiveNVSSWeights, loadNVSSWeights} from './nvss-weights.js';
 const $ = s => document.getElementById(s),
   views = {title: 'titleView', lobby: 'lobby', settings: 'settings', game: 'hud', pause: 'pause', results: 'results'};
 const setTxt = (el, v) => {
@@ -78,7 +79,9 @@ const recoilProfiles = {
   RD30: {z: .023, y: .0038, pitch: .029, yaw: .0055, roll: .015, camPitch: 0, camRoll: 0, shake: 0, spread: 2.4, heat: .13, fov: 0},
   RD40: {z: .023, y: .0035, pitch: .026, yaw: .005, roll: .013, camPitch: 0, camRoll: 0, shake: 0, spread: 2.1, heat: .12, fov: 0},
   'RD 50': {z: .022, y: .0036, pitch: .027, yaw: .0052, roll: .014, camPitch: 0, camRoll: 0, shake: 0, spread: 2.3, heat: .11, fov: 0},
-  'DF40 II': {z: .021, y: .0032, pitch: .024, yaw: .0045, roll: .012, camPitch: 0, camRoll: 0, shake: 0, spread: 2.0, heat: .10, fov: 0}
+  'SR 1U': {z: .020, y: .0034, pitch: .026, yaw: .0055, roll: .014, camPitch: 0, camRoll: 0, shake: 0, spread: 2.2, heat: .11, fov: 0},
+  'DF40 II': {z: .021, y: .0032, pitch: .024, yaw: .0045, roll: .012, camPitch: 0, camRoll: 0, shake: 0, spread: 2.0, heat: .10, fov: 0},
+  'STUN LAUNCHER': {z: .038, y: .007, pitch: .052, yaw: .006, roll: .018, camPitch: 0, camRoll: 0, shake: 0, spread: 3.6, heat: .22, fov: 0}
 };
 // Ultra-small precision micro-recoil with rapid smooth recovery (laser-controllable).
 const aimRecoil = {
@@ -91,7 +94,9 @@ const aimRecoil = {
   RD30: {pitch: .0018, yaw: .00055, recoverRate: 16.5, recoverRatio: .94, climb: .007},
   RD40: {pitch: .0015, yaw: .00045, recoverRate: 18.0, recoverRatio: .95, climb: .005},
   'RD 50': {pitch: .0017, yaw: .0005, recoverRate: 17.5, recoverRatio: .94, climb: .006},
-  'DF40 II': {pitch: .0013, yaw: .0004, recoverRate: 19.0, recoverRatio: .96, climb: .004}
+  'SR 1U': {pitch: .0016, yaw: .00055, recoverRate: 17.5, recoverRatio: .94, climb: .006},
+  'DF40 II': {pitch: .0013, yaw: .0004, recoverRate: 19.0, recoverRatio: .96, climb: .004},
+  'STUN LAUNCHER': {pitch: .0042, yaw: .0006, recoverRate: 14.0, recoverRatio: .92, climb: .014}
 };
 let saved;
 try {
@@ -728,8 +733,62 @@ function lobby() {
       if ($('labAaPLabel')) $('labAaPLabel').hidden = isSpec;
     }
   }
-  if ($('loadoutField')) $('loadoutField').hidden = isLab && lab.playerRole === 'spectate';
-  $('lobbyAiLabel').textContent = 'NV2.6 Force';
+  const isZChal = rules.mode === 'zombieChallenge';
+  if ($('loadoutField')) $('loadoutField').hidden = (isLab && lab.playerRole === 'spectate') || isZChal;
+  if ($('zombieRoleRow')) $('zombieRoleRow').hidden = !isZChal;
+  if ($('h1ZonbiRow')) $('h1ZonbiRow').hidden = isZChal;
+  group('weatherMode', rules.weather || 'clear', k => {
+    rules.weather = k;
+    save();
+    lobby();
+  });
+  group('zombieRole', rules.zombieRole || 'runner', k => {
+    rules.zombieRole = k;
+    save();
+    lobby();
+  });
+  const h1Sw = $('h1ZonbiSwitch');
+  if (h1Sw) {
+    h1Sw.setAttribute('aria-checked', String(!!rules.h1Zonbi));
+    h1Sw.classList.toggle('on', !!rules.h1Zonbi);
+    h1Sw.onclick = () => {
+      rules.h1Zonbi = !rules.h1Zonbi;
+      save();
+      lobby();
+    };
+  }
+  group('aiModelSelect', rules.aiModel === 'nvss' ? 'nvss' : 'human', k => {
+    rules.aiModel = k === 'nvss' ? 'nvss' : 'human';
+    save();
+    lobby();
+  });
+  const wStat = $('nvssWeightStatus');
+  if (wStat) {
+    const aw = getActiveNVSSWeights();
+    wStat.textContent = aw.trainedSteps > 0
+      ? `読込済: ${(aw.trainedSteps / 1e6).toFixed(1)}M steps (${aw.trainedMatches.toLocaleString()}試合)`
+      : '内蔵ベース学習済ウェイト';
+  }
+  const wBtn = $('nvssWeightBtn'), wIn = $('nvssWeightInput');
+  if (wBtn && wIn && !wBtn._nvssWired) {
+    wBtn._nvssWired = true;
+    wBtn.onclick = () => wIn.click();
+    wIn.onchange = async () => {
+      const f = wIn.files?.[0];
+      if (!f) return;
+      try {
+        const txt = await f.text();
+        const loaded = loadNVSSWeights(txt, true);
+        if ($('lobbyNotice')) $('lobbyNotice').textContent = `NVSSウェイト適用完了 (${loaded.trainedSteps.toLocaleString()} steps)`;
+        lobby();
+      } catch (err) {
+        if ($('lobbyNotice')) $('lobbyNotice').textContent = `ウェイト読込失敗: ${err.message}`;
+      } finally {
+        wIn.value = '';
+      }
+    };
+  }
+  $('lobbyAiLabel').textContent = isZChal ? 'NV2.7 ZONBI vs NV2.6' : rules.aiModel === 'nvss' ? 'NV Super Soldier (NVSS)' : 'NV2.6 Force';
   group('limit', rules.limit, k => {
     rules.limit = k;
     save();
@@ -743,9 +802,15 @@ function lobby() {
   if (document.activeElement !== $('mult')) $('mult').value = rules.multiplier;
   $('multWrap').hidden = rules.limit === 'unlimited';
   const [a, b] = isLab ? [lab.teamACount, lab.teamBCount] : (modes[rules.mode] || modes['3v3']), v = rules.multiplier;
-  $('targets').textContent = rules.limit === 'unlimited'
-    ? '無制限試合（時間・得点制限なし）'
-    : `勝利条件：味方 ${a * v} 点 ／ 敵 ${b * v} 点先取`;
+  $('targets').textContent = rules.mode === 'zombie'
+    ? '無限ゾンビ耐久ベンチ（秒間4体出現 · 死亡まで撃破数を計測）'
+    : rules.mode === 'zombieChallenge'
+      ? 'ゾンビチャレンジ（無武装HP50 · 初期50体+中央3体/s · RD30 NV2.6×2から生存時間を競う）'
+      : rules.mode === 'br'
+        ? 'バトルロワイヤル（1ライフ制 · 死亡後は自動で観戦へ移行）'
+        : rules.limit === 'unlimited'
+          ? '無制限試合（時間・得点制限なし）'
+          : `勝利条件：味方 ${a * v} 点 ／ 敵 ${b * v} 点先取`;
   const w = weapons[rules.loadout];
   const modeLabel = w.auto && w.pellets > 1 ? `${w.pellets}発同時` : w.auto && w.burst > 1 ? `${w.burst}発連射` : w.auto ? 'フルオート' : w.burst > 1 ? w.burst + '点' : '単発';
   const effDmg = w.pellets > 1 ? w.damage * w.pellets : w.damage;
@@ -756,14 +821,15 @@ function lobby() {
   const capPct = clamp((Math.min(w.capacity, 100) / 100) * 100, 10, 100).toFixed(0);
   const chips = [modeLabel];
   if (w.stockCap) chips.push(`上限 ${w.stockCap}`);
-  if (w.stockRegen) chips.push(`自動補充 ${w.stockRegen}/s`);
+  if (w.stockRegen) chips.push(w.stockRegen < 1 ? `自動補充 ${(1 / w.stockRegen).toFixed(0)}s/発` : `自動補充 ${w.stockRegen}/s`);
   const accentChips = [];
   if (rules.loadout === 'DF1 OUT') accentChips.push('ARV1.1 · P1');
   if (rules.loadout === 'RD20') accentChips.push('AA 1.1');
   if (rules.loadout === 'RD30') accentChips.push('AA 1.1 mini');
   if (rules.loadout === 'RD40') accentChips.push('AA 1.2 · 壁裏D01');
   if (rules.loadout === 'RD 50') chips.push('AA なし');
-  if (rules.loadout === 'DF40 II') accentChips.push('AA 1.3 / 1.4 過熱ブースト');
+  if (rules.loadout === 'SR 1U') accentChips.push('高速SMG');
+  if (rules.loadout === 'DF40 II') accentChips.push('AA 1.3/1.4 · Q 散弾12発');
   $('weaponStats').innerHTML =
     `<div class="ws-bars">` +
       `<div class="ws-meter"><div class="ws-meter-head"><span>威力</span><b>${dmgLabel}</b></div><div class="ws-track"><i style="width:${dmgPct}%"></i></div></div>` +
@@ -1177,11 +1243,11 @@ function startMatch() {
   spectraAt = 0;
   spectateCam = 'tps';
   spectateIdx = 0;
-  if (rules.mode !== '3v3' && rules.mode !== 'lab') rules.mode = '3v3';
+  if (!['3v3', 'lab', 'zombie', 'br', 'zombieChallenge'].includes(rules.mode)) rules.mode = '3v3';
   rules.lab = normalizeLabConfig(rules.lab);
-  rules.lab.teamAAi = 'human';
-  rules.lab.teamBAi = 'human';
-  rules.aiModel = 'human';
+  rules.lab.teamAAi = rules.lab.teamAAi === 'nvss' ? 'nvss' : 'human';
+  rules.lab.teamBAi = rules.lab.teamBAi === 'nvss' ? 'nvss' : 'human';
+  rules.aiModel = rules.aiModel === 'nvss' ? 'nvss' : 'human';
   rules.allyNv21 = 0;
   liveSimSpeed = rules.mode === 'lab' ? (rules.lab.simSpeed || 1) : 1;
   resetMotion();
@@ -1189,7 +1255,10 @@ function startMatch() {
   const aaMode = currentAutoAimMode();
   match = new Match({
     ...rules,
-    aiModel: 'human',
+    weather: rules.weather || 'clear',
+    h1Zonbi: !!rules.h1Zonbi,
+    zombieRole: rules.zombieRole || 'runner',
+    aiModel: rules.aiModel,
     allyNv21: 0,
     lab: rules.mode === 'lab' ? rules.lab : undefined,
     autoAimMode: aaMode,
@@ -1207,12 +1276,16 @@ function startMatch() {
   $('startHint').hidden = false;
   $('startHint').textContent = match.spectating
     ? 'Q/E 切替 · C FPS/TPS/FREE · 1-0 選択'
-    : touch ? '左傾ダッシュ · 画面タップで自動全画面' : 'WASD 移動 · 4/Z 技 · 画面クリックで自動全画面';
+    : match.isZombieChallenge
+      ? `ゾンビ役職: ${ZOMBIE_ROLES[match.zombieRole]?.name || 'ランナー'} · 左クリック/F 近接暴行 · 生き残れ！`
+      : touch ? '左傾ダッシュ · 画面タップで自動全画面' : 'WASD 移動 · 4/Z 技 · 6/N 増援 · 7/U ドローン(100発)';
   const assigned = !match.spectating && match.player?.assignedSkill;
-  $('combatNotice').textContent = assigned
-    ? `技: ${assigned === 'shaffer' ? 'シャッファー' : 'リチャージヒール'}`
-    : '';
-  noticeUntil = assigned ? match.time + 2.2 : 0;
+  const skLabel = assigned === 'shaffer' ? 'シャッファー' : assigned === 'heal' ? 'リチャージヒール' : assigned === 'flow' ? 'FLOW' : assigned === 'stunlauncher' ? 'スタンランチャー' : '';
+  $('combatNotice').textContent = match.isZombieChallenge
+    ? `ゾンビチャレンジ開始 · ${ZOMBIE_ROLES[match.zombieRole]?.name || 'ランナー'}`
+    : skLabel ? `技: ${skLabel}` : '';
+  noticeUntil = (skLabel || match.isZombieChallenge) ? match.time + 2.4 : 0;
+  if ($('bloodOverlay')) $('bloodOverlay').replaceChildren();
   $('feed').replaceChildren();
   delete $('feed').dataset.stamp;
   if ($('specActors')) { $('specActors').replaceChildren(); delete $('specActors').dataset.stamp; }
@@ -1324,21 +1397,89 @@ function event(e) {
     feed.push({line: `NV2.6 増援 +${e.count}体 展開`, team: p.team, until: match.time + 4.5});
   }
   if (e.type === 'skill_charge' && p && e.actor === p) {
-    const skName = p.assignedSkill === 'shaffer' ? 'シャッファー' : p.assignedSkill === 'heal' ? 'リチャージヒール' : '';
+    const skName = p.assignedSkill === 'shaffer' ? 'シャッファー' : p.assignedSkill === 'heal' ? 'リチャージヒール' : p.assignedSkill === 'flow' ? 'FLOW' : p.assignedSkill === 'stunlauncher' ? 'スタンランチャー' : '';
     if (skName) {
       $('combatNotice').textContent = `技チャージ (${e.charges}/${MAX_SKILL_CHARGES}) · ${skName}`;
       noticeUntil = match.time + 2.4;
     }
   }
-  if (e.type === 'skill' && p && e.actor === p) {
-    if (e.skill === 'shaffer') {
-      $('combatNotice').textContent = `シャッファー ${(e.duration || 12).toFixed(0)}s`;
-      noticeUntil = match.time + 2.2;
-    } else if (e.skill === 'heal') {
-      healPulse = 1;
-      $('combatNotice').textContent = 'リチャージヒール';
-      noticeUntil = match.time + 1.8;
+  if (e.type === 'skill') {
+    if (e.skill === 'judgment') {
+      const mLabel = e.mechName ? `${e.mechName} (${e.mechCode || ''})` : '巨大ロボ';
+      feed.push({line: `⚠ 審判の時発動 · ${e.actor.name} ${mLabel}出撃`, team: e.actor.team, until: match.time + 5.0});
+      $('combatNotice').textContent = `⚠ 審判の時 · ${e.actor.name} ${mLabel}`;
+      noticeUntil = match.time + 3.0;
+    } else if (p && e.actor === p) {
+      if (e.skill === 'shaffer') {
+        $('combatNotice').textContent = `シャッファー ${(e.duration || 12).toFixed(0)}s`;
+        noticeUntil = match.time + 2.2;
+      } else if (e.skill === 'heal') {
+        healPulse = 1;
+        $('combatNotice').textContent = 'リチャージヒール';
+        noticeUntil = match.time + 1.8;
+      } else if (e.skill === 'flow') {
+        $('combatNotice').textContent = `FLOW 発動 (${(e.duration || 6).toFixed(0)}s · 0.4×)`;
+        noticeUntil = match.time + 2.2;
+      } else if (e.skill === 'stunlauncher') {
+        $('combatNotice').textContent = `スタンランチャー装備 (${e.ammo || 15}発)`;
+        noticeUntil = match.time + 2.2;
+      }
     }
+  }
+  if (e.type === 'df40Mode' && p && e.actor === p) {
+    $('combatNotice').textContent = e.scatterMode ? 'DF40 II · 散弾12発モード (1.2×12)' : 'DF40 II · 2連射モード (4×2)';
+    noticeUntil = match.time + 1.8;
+  }
+  if (e.type === 'gasPipeBlast') {
+    feed.push({line: '💥 ガス管爆発 (5m 衝撃波 25DMG)', team: e.actor?.team ?? 0, until: match.time + 3.5});
+  }
+  if (e.type === 'bloodSplatter' && !settings.lightMode) {
+    const nearMe = (p && e.victim === p) || (typeof e.distToPlayer === 'number' && e.distToPlayer < 8.0);
+    if (nearMe) spawnScreenBlood(e, p && e.victim === p);
+  }
+  if (e.type === 'droneBought' && p && e.actor === p) {
+    $('combatNotice').textContent = `NV2.6 ドローン配備 (稼働 ${e.activeDrones}機 · -${e.cost}発)`;
+    noticeUntil = match.time + 2.2;
+    feed.push({line: `🛰 NV2.6 ドローン配備 (${e.activeDrones}機)`, team: p.team, until: match.time + 3.8});
+  }
+  if (e.type === 'h1ZonbiSpawn') {
+    $('combatNotice').textContent = `☠ H1 ZONBI (NV2.7) 襲来 · HP${e.hp} 残機${e.lives} ドローン${e.drones}`;
+    noticeUntil = match.time + 4.0;
+    feed.push({line: `☠ H1 ZONBI 襲来 (NV2.7 · DF40 II · ドローン${e.drones}機)`, team: 1, until: match.time + 6.0});
+  }
+  if (e.type === 'h1ZonbiRespawn') {
+    $('combatNotice').textContent = `☠ H1 ZONBI 蘇生 (残機 ${e.livesLeft})`;
+    noticeUntil = match.time + 3.2;
+    feed.push({line: `☠ H1 ZONBI 再起 (残機 ${e.livesLeft})`, team: 1, until: match.time + 5.0});
+  }
+  if (e.type === 'h1ZonbiDefeated') {
+    $('combatNotice').textContent = '✓ H1 ZONBI 完全撃破！';
+    noticeUntil = match.time + 3.6;
+    feed.push({line: `✓ H1 ZONBI 撃破 (${e.killer?.name || '部隊'})`, team: e.killer?.team ?? 0, until: match.time + 6.0});
+  }
+  if (e.type === 'zombieRaid') {
+    const desc = e.wave === '5m' ? `5分襲来 · 武装ゾンビ ${e.count}体 (RD30)` : `${e.wave === '10m' ? '10分' : '20分'}コンテナ開放 · ゾンビ ${e.count}体襲来`;
+    $('combatNotice').textContent = `⚠ ${desc}`;
+    noticeUntil = match.time + 3.8;
+    feed.push({line: `⚠ ${desc}`, team: 1, until: match.time + 6.0});
+  }
+  if (e.type === 'heliSpawn') {
+    $('combatNotice').textContent = `🚁 ゾンビ操縦ヘリ襲来 · 無差別砲撃開始 (HP ${e.hp})`;
+    noticeUntil = match.time + 3.8;
+    feed.push({line: '🚁 ゾンビ操縦ヘリ襲来 · 撃墜せよ！', team: 1, until: match.time + 6.0});
+  }
+  if (e.type === 'heliDestroyed') {
+    $('combatNotice').textContent = '💥 ゾンビヘリ撃墜！';
+    noticeUntil = match.time + 3.2;
+    feed.push({line: `💥 ゾンビヘリ撃墜 (${e.actor?.name || '対空'})`, team: e.actor?.team ?? 0, until: match.time + 5.5});
+  }
+  if (e.type === 'brSpectate') {
+    const aliveIdx = match.actors.findIndex(x => x.alive);
+    if (aliveIdx >= 0) spectateIdx = aliveIdx;
+    spectateCam = 'tps';
+    $('combatNotice').textContent = '撃破されました · 観戦モードへ移行';
+    noticeUntil = match.time + 3.2;
+    hud();
   }
   if (e.type === 'reload' && p && e.actor === p && e.auto) {
     $('combatNotice').textContent = '自動装填';
@@ -1353,6 +1494,27 @@ function event(e) {
     noticeUntil = match.time + .8;
   }
   if (e.type === 'end') show('results');
+}
+function spawnScreenBlood(e, isSelf) {
+  const overlay = $('bloodOverlay');
+  if (!overlay) return;
+  const count = isSelf ? (e.isKill ? 9 : 4) : (e.isKill ? 5 : 2);
+  while (overlay.childElementCount > 24) overlay.firstElementChild?.remove();
+  for (let i = 0; i < count; i++) {
+    const el = document.createElement('div');
+    el.className = 'blood-splat';
+    const sz = (isSelf ? 26 : 16) + Math.random() * (e.isKill ? 68 : 38);
+    // Cluster near viewport edges so the reticle remains readable while feeling visceral.
+    const edge = Math.random();
+    const x = edge < 0.5 ? (Math.random() < 0.5 ? 2 + Math.random() * 24 : 72 + Math.random() * 24) : 12 + Math.random() * 76;
+    const y = edge >= 0.5 ? (Math.random() < 0.5 ? 2 + Math.random() * 24 : 68 + Math.random() * 26) : 10 + Math.random() * 78;
+    el.style.width = `${sz.toFixed(0)}px`;
+    el.style.height = `${(sz * (0.85 + Math.random() * 0.55)).toFixed(0)}px`;
+    el.style.left = `${x.toFixed(1)}%`;
+    el.style.top = `${y.toFixed(1)}%`;
+    overlay.appendChild(el);
+    setTimeout(() => el.remove(), 3900);
+  }
 }
 function triggerSkill(skill) {
   if (screen !== 'game' || !match || match.spectating || !match.player?.alive) return false;
@@ -1369,6 +1531,16 @@ function triggerSkill(skill) {
     noticeUntil = match.time + 1.0;
     return false;
   }
+  if (chosen === 'flow' && (a.flowTimer || 0) > 0) {
+    $('combatNotice').textContent = `FLOW 発動中 ${a.flowTimer.toFixed(1)}s`;
+    noticeUntil = match.time + 1.0;
+    return false;
+  }
+  if (chosen === 'stunlauncher' && a.stunLauncher) {
+    $('combatNotice').textContent = `装備中 残${a.stunLauncher.shotsLeft}発`;
+    noticeUntil = match.time + 1.0;
+    return false;
+  }
   const maxHp = a.maxHp || 100;
   if (chosen === 'heal' && a.hp >= maxHp) {
     $('combatNotice').textContent = 'HP満タン';
@@ -1381,12 +1553,30 @@ function triggerSkill(skill) {
 }
 function triggerReinforce() {
   if (screen !== 'game' || !match || match.spectating || !match.player?.alive) return false;
+  if (match.isZombieChallenge) return false;
   if ((match.reinforceUsesLeft || 0) <= 0) {
     $('combatNotice').textContent = `NV2.6 増援 0/${REINFORCE_MAX_USES}`;
     noticeUntil = match.time + 1.2;
     return false;
   }
   const res = match.callReinforcements(match.player);
+  if (res?.ok) {
+    hud();
+    return true;
+  }
+  return false;
+}
+function triggerBuyDrone() {
+  if (screen !== 'game' || !match || match.spectating || !match.player?.alive) return false;
+  if (match.isZombieChallenge) return false;
+  const a = match.player;
+  const avail = (a.stock || 0) + (a.mag || 0);
+  if (!match.infiniteAmmo && avail < DRONE_AMMO_COST) {
+    $('combatNotice').textContent = `ドローン購入には弾薬${DRONE_AMMO_COST}発が必要 (現在 ${avail}発)`;
+    noticeUntil = match.time + 1.6;
+    return false;
+  }
+  const res = match.buyDrone(a);
   if (res?.ok) {
     hud();
     return true;
@@ -1400,9 +1590,89 @@ function hud() {
   match.viewActor = (spec && spectateCam === 'free') ? null : a;
   setCls(document.body, 'is-spectating', spec);
 
-  setTxt($('scoreA'), match.scores[0]);
-  setTxt($('scoreB'), match.scores[1]);
-  setTxt($('hudRule'), Number.isFinite(match.goals[0]) ? (match.goals[0] === match.goals[1] ? `${match.goals[0]} 点先取` : `${match.goals[0]} / ${match.goals[1]} 点先取`) : '無制限');
+  if (match.isZombieChallenge) {
+    let aliveZ = 0, aliveH = 0;
+    for (let i = 0; i < match.actors.length; i++) {
+      const x = match.actors[i];
+      if (!x.alive) continue;
+      if (x.team === 0 && x.isZombie) aliveZ++;
+      else if (x.team === 1 && !x.isDrone) aliveH++;
+    }
+    const roleLabel = ZOMBIE_ROLES[a.zombieRole]?.name || 'ゾンビ';
+    setTxt($('scoreALabel'), 'ゾンビ生存');
+    setTxt($('scoreBLabel'), 'NPC生存');
+    setTxt($('scoreA'), aliveZ);
+    setTxt($('scoreB'), aliveH);
+    setTxt($('hudRule'), `${roleLabel} · 生存 ${(match.time || 0).toFixed(1)}s`);
+  } else if (match.isZombie) {
+    let aliveZ = 0;
+    for (let i = 0; i < match.actors.length; i++) if (match.actors[i].isZombie && match.actors[i].alive) aliveZ++;
+    setTxt($('scoreALabel'), '撃破数');
+    setTxt($('scoreBLabel'), 'ゾンビ');
+    setTxt($('scoreA'), match.zombieKills || 0);
+    setTxt($('scoreB'), aliveZ);
+    const sec = Math.floor(match.time || 0);
+    setTxt($('hudRule'), `耐久 ${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`);
+  } else if (match.isBR) {
+    let a0 = 0, a1 = 0;
+    for (let i = 0; i < match.actors.length; i++) {
+      const x = match.actors[i];
+      if (!x.alive || x.isDrone) continue;
+      if (x.team === 0) a0++; else a1++;
+    }
+    setTxt($('scoreALabel'), '味方生存');
+    setTxt($('scoreBLabel'), '敵生存');
+    setTxt($('scoreA'), a0);
+    setTxt($('scoreB'), a1);
+    setTxt($('hudRule'), spec ? 'バトロワ · 観戦中' : 'バトロワ · 1ライフ');
+  } else {
+    setTxt($('scoreALabel'), '味方');
+    setTxt($('scoreBLabel'), '敵');
+    setTxt($('scoreA'), match.scores[0]);
+    setTxt($('scoreB'), match.scores[1]);
+    setTxt($('hudRule'), Number.isFinite(match.goals[0]) ? (match.goals[0] === match.goals[1] ? `${match.goals[0]} 点先取` : `${match.goals[0]} / ${match.goals[1]} 点先取`) : '無制限');
+  }
+
+  // Weather overlay & badge
+  const wKey = match.weather || 'clear';
+  const wSpec = WEATHERS[wKey] || WEATHERS.clear;
+  const wVeil = $('weatherVeil');
+  if (wVeil) {
+    setHid(wVeil, wKey === 'clear');
+    const cls = wKey === 'clear' ? '' : `w-${wKey}`;
+    if (wVeil._hdCN !== cls) { wVeil._hdCN = cls; wVeil.className = cls; }
+  }
+  const wBadge = $('weatherBadge');
+  if (wBadge) {
+    const icon = wKey === 'clear' ? '☀' : wKey === 'rain' ? '🌧' : wKey === 'storm' ? '⛈' : '🌋';
+    setTxt(wBadge, match.squadFractured ? `${icon} ${wSpec.label} · 部隊決裂` : `${icon} ${wSpec.label}`);
+  }
+
+  // Boss / Helicopter Threat Bars
+  const heli = match.helicopter;
+  const heliAlive = !!(heli && heli.alive);
+  const h1 = match.h1ZonbiActor;
+  const h1Alive = !!(h1 && h1.alive);
+  const threatBars = $('threatBars');
+  if (threatBars) {
+    setHid(threatBars, !heliAlive && !h1Alive);
+    const heliHud = $('heliHud');
+    if (heliHud) {
+      setHid(heliHud, !heliAlive);
+      if (heliAlive) {
+        setTxt($('heliLabel'), `🚁 ゾンビヘリ ${Math.ceil(heli.hp)}/${heli.maxHp}`);
+        setSty($('heliBar'), 'width', clamp((heli.hp / heli.maxHp) * 100, 0, 100) + '%');
+      }
+    }
+    const h1Hud = $('h1BossHud');
+    if (h1Hud) {
+      setHid(h1Hud, !h1Alive);
+      if (h1Alive) {
+        setTxt($('h1BossLabel'), `☠ H1 ZONBI · HP ${Math.ceil(h1.hp)}/${h1.maxHp} · 残機${h1.lives}`);
+        setSty($('h1BossBar'), 'width', clamp((h1.hp / h1.maxHp) * 100, 0, 100) + '%');
+      }
+    }
+  }
 
   // Lab / Spectator Control Bar
   const specBar = $('specBar');
@@ -1477,7 +1747,7 @@ function hud() {
     if (!hideSh) setTxt($('shafferBadge'), `シャッファー ${a.shafferTimer.toFixed(1)}s`);
   }
   const assigned = a.assignedSkill || null;
-  setHid($('skillBar'), spec);
+  setHid($('skillBar'), spec || match.isZombieChallenge);
   const charges = a.skillCharges || 0;
   const kills = a.skillKills || 0;
   const pips = $('skillPips');
@@ -1496,6 +1766,13 @@ function hud() {
     if (btnSh.disabled !== dis) btnSh.disabled = dis;
     setTxt($('shafferLabel'), shActive ? `シャッファー ${a.shafferTimer.toFixed(1)}s` : 'シャッファー');
   }
+  const flowActive = a.alive && (a.flowTimer || 0) > 0;
+  const flowVeil = $('flowVeil');
+  if (flowVeil) {
+    const hideFl = !(flowActive && (!spec || spectateCam === 'fps'));
+    setHid(flowVeil, hideFl);
+    if (!hideFl) setTxt($('flowBadge'), `FLOW ${a.flowTimer.toFixed(1)}s · 0.4×`);
+  }
   const btnHl = $('btnHeal');
   if (btnHl) {
     setHid(btnHl, assigned !== 'heal');
@@ -1503,24 +1780,66 @@ function hud() {
     const dis = !a.alive || charges <= 0 || a.hp >= maxHp;
     if (btnHl.disabled !== dis) btnHl.disabled = dis;
   }
+  const btnFl = $('btnFlow');
+  if (btnFl) {
+    setHid(btnFl, assigned !== 'flow');
+    setCls(btnFl, 'is-ready', charges > 0 && !flowActive && a.alive);
+    setCls(btnFl, 'is-active', flowActive);
+    const dis = !a.alive || (!flowActive && charges <= 0);
+    if (btnFl.disabled !== dis) btnFl.disabled = dis;
+    setTxt($('flowLabel'), flowActive ? `FLOW ${a.flowTimer.toFixed(1)}s` : 'FLOW');
+  }
+  const btnLn = $('btnLauncher');
+  if (btnLn) {
+    const lnActive = a.alive && !!a.stunLauncher;
+    setHid(btnLn, assigned !== 'stunlauncher');
+    setCls(btnLn, 'is-ready', charges > 0 && !lnActive && a.alive);
+    setCls(btnLn, 'is-active', lnActive);
+    const dis = !a.alive || (!lnActive && charges <= 0);
+    if (btnLn.disabled !== dis) btnLn.disabled = dis;
+    setTxt($('launcherLabel'), lnActive ? `ランチャー 残${a.stunLauncher.shotsLeft}` : 'スタンランチャー');
+  }
+  const btnDfMode = $('mobileDF40Mode');
+  if (btnDfMode && a.df40) {
+    setTxt(btnDfMode, a.df40.scatterMode ? '2連切替' : '散弾12');
+    setCls(btnDfMode, 'is-active', !!a.df40.scatterMode);
+  }
   const btnRf = $('btnReinforce');
   if (btnRf) {
     const rfLeft = match.reinforceUsesLeft || 0;
-    setHid(btnRf, spec);
+    setHid(btnRf, spec || match.isZombieChallenge);
     setCls(btnRf, 'is-ready', rfLeft > 0 && a.alive);
     const dis = !a.alive || rfLeft <= 0;
     if (btnRf.disabled !== dis) btnRf.disabled = dis;
     setTxt($('reinforceLabel'), `NV2.6 増援 ${rfLeft}/${REINFORCE_MAX_USES}`);
   }
-  setTxt($('gunName'), spec ? `${a.name} · ${a.gun}` : a.gun);
-  setTxt($('magVal'), a.mag);
-  setTxt($('stockVal'), match.infiniteAmmo ? '∞' : a.stock);
+  const btnDr = $('btnBuyDrone');
+  if (btnDr) {
+    const hideDr = spec || match.isZombieChallenge;
+    setHid(btnDr, hideDr);
+    if (!hideDr) {
+      let ownDrones = 0;
+      for (let i = 0; i < match.actors.length; i++) {
+        const u = match.actors[i];
+        if (u.alive && u.isDrone && u.ownerId === a.id) ownDrones++;
+      }
+      const canBuy = a.alive && (match.infiniteAmmo || ((a.stock || 0) + (a.mag || 0)) >= DRONE_AMMO_COST);
+      setCls(btnDr, 'is-ready', canBuy);
+      const dis = !canBuy;
+      if (btnDr.disabled !== dis) btnDr.disabled = dis;
+      setTxt($('droneLabel'), ownDrones > 0 ? `ドローン(${ownDrones}) ${DRONE_AMMO_COST}発` : `ドローン ${DRONE_AMMO_COST}発`);
+    }
+  }
+  const isClaw = a.gun === 'CLAW';
+  setTxt($('gunName'), isClaw ? `格闘 (${ZOMBIE_ROLES[a.zombieRole]?.name || 'ゾンビ'})` : (spec ? `${a.name} · ${a.gun}` : a.gun));
+  setTxt($('magVal'), isClaw ? '∞' : a.mag);
+  setTxt($('stockVal'), isClaw || match.infiniteAmmo ? '∞' : a.stock);
   const relWrap = $('reloadBarWrap');
   if (relWrap) {
-    setHid(relWrap, !(a.reload > 0));
-    if (a.reload > 0) setSty($('reloadBar'), 'width', clamp((a.reloadFrac || 0) * 100, 0, 100).toFixed(1) + '%');
+    setHid(relWrap, isClaw || !(a.reload > 0));
+    if (!isClaw && a.reload > 0) setSty($('reloadBar'), 'width', clamp((a.reloadFrac || 0) * 100, 0, 100).toFixed(1) + '%');
   }
-  setTxt($('reloadLabel'), a.reload > 0 ? `${a.autoReloading ? '自動装填' : '再装填'} ${a.reload.toFixed(1)} s` : a.mag > 0 ? '予備弾' : a.stock ? '自動装填待機' : '予備弾を生成中');
+  setTxt($('reloadLabel'), isClaw ? '近接暴行 · 回復/シールドなし' : (a.reload > 0 ? `${a.autoReloading ? '自動装填' : '再装填'} ${a.reload.toFixed(1)} s` : a.mag > 0 ? '予備弾' : a.stock ? '自動装填待機' : '予備弾を生成中'));
   setHid($('ammoBoost'), !((a.ammoRate || 1) > 1.01));
   let nearestTk = null, nearestDist2 = 324; // 18^2
   const tankers = match.tankers;
@@ -1634,19 +1953,33 @@ function hud() {
 }
 function resultUI() {
   if (!match) return;
-  $('outcome').textContent = match.winner === null ? '試合終了' : match.winner === 0 ? '味方勝利' : '敵勝利';
-  $('finalA').textContent = match.scores[0];
-  $('finalB').textContent = match.scores[1];
-  $('roster').innerHTML = '<div class="roster-row heading"><span>参加者</span><span>撃破</span><span>ダウン</span></div>' + match.actors.map(a => {
-    const aaChip = a.aaOverride && a.aaOverride !== 'off'
-      ? `<span class="${a.aaOverride === '1.5' ? 'tag-scherp' : 'tag-nv21'}">${a.aaOverride === '1.5' ? '1.5 Scherp' : 'AA ' + a.aaOverride}</span>`
-      : '';
-    // UI displays only NV2.6 Force for NPCs
-    const tag = a.human
-      ? ` · 自分${aaChip}`
-      : `<span class="tag-human">NV2.6 Force</span>${aaChip}`;
-    return `<div class="roster-row"><span class="${a.team?'orange':'cyan'}">${a.name}${tag}</span><span>${a.kills}</span><span>${a.deaths}</span></div>`;
-  }).join('');
+  if (match.isZombieChallenge) {
+    const rank = match.zombieChallengeRanking || match.computeZombieChallengeRanking();
+    $('outcome').textContent = match.winner === 0
+      ? `ゾンビ陣営勝利 · 生存 ${rank.playerSurvived.toFixed(1)}s (${rank.playerRank}/${rank.totalZombies}位)`
+      : `生存 ${rank.playerSurvived.toFixed(1)}s · ${rank.playerRank}/${rank.totalZombies}位`;
+    $('finalA').textContent = `${rank.playerSurvived.toFixed(1)}s`;
+    $('finalB').textContent = `#${rank.playerRank}`;
+    $('roster').innerHTML = '<div class="roster-row heading"><span>順位 · ゾンビ (NV2.7)</span><span>役職</span><span>生存</span></div>' + rank.top.map((e, idx) => {
+      const roleLabel = ZOMBIE_ROLES[e.role]?.name || e.role;
+      const tag = e.human ? ' · 自分' : `<span class="tag-human">${e.aiVersion || 'NV2.7 ZONBI'}</span>`;
+      return `<div class="roster-row"><span class="${e.human ? 'cyan' : 'orange'}">#${idx + 1} ${e.name}${tag}</span><span>${roleLabel}</span><span>${e.survived.toFixed(1)}s</span></div>`;
+    }).join('');
+  } else {
+    $('outcome').textContent = match.winner === null ? '試合終了' : match.winner === 0 ? '味方勝利' : '敵勝利';
+    $('finalA').textContent = match.scores[0];
+    $('finalB').textContent = match.scores[1];
+    $('roster').innerHTML = '<div class="roster-row heading"><span>参加者</span><span>撃破</span><span>ダウン</span></div>' + match.actors.filter(a => !a.isDrone).map(a => {
+      const aaChip = a.aaOverride && a.aaOverride !== 'off'
+        ? `<span class="${a.aaOverride === '1.5' ? 'tag-scherp' : 'tag-nv21'}">${a.aaOverride === '1.5' ? '1.5 Scherp' : 'AA ' + a.aaOverride}</span>`
+        : '';
+      const engLabel = a.isH1Zonbi ? 'NV2.7 ZONBI' : (String(a.aiVersion || '').includes('NVSS') ? 'NVSS' : 'NV2.6 Force');
+      const tag = a.human
+        ? ` · 自分${aaChip}`
+        : `<span class="tag-human">${engLabel}</span>${aaChip}`;
+      return `<div class="roster-row"><span class="${a.team?'orange':'cyan'}">${a.name}${tag}</span><span>${a.kills}</span><span>${a.deaths}</span></div>`;
+    }).join('');
+  }
   equipment.result(match);
   const synEl = $('synapseReport');
   if (synEl && match.synapse) {
@@ -1716,7 +2049,7 @@ document.addEventListener('keydown', e => {
   }
   if (screen !== 'game' || !match || document.hidden || e.target?.closest?.('input, textarea, select, [contenteditable=true]')) return;
   if (e.code === 'Space' && e.target?.closest?.('button')) return;
-  if (['Space', 'Tab', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyF', 'KeyR', 'KeyT', 'KeyG', 'KeyL', 'KeyK', 'KeyM', 'Digit0', 'Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6', 'Digit7', 'Digit8', 'Digit9', 'KeyZ', 'KeyH', 'KeyN'].includes(e.code)) e.preventDefault();
+  if (['Space', 'Tab', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyF', 'KeyR', 'KeyT', 'KeyG', 'KeyL', 'KeyK', 'KeyM', 'Digit0', 'Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6', 'Digit7', 'Digit8', 'Digit9', 'KeyZ', 'KeyH', 'KeyN', 'KeyU'].includes(e.code)) e.preventDefault();
   keys.add(e.code);
   if (e.repeat) return;
   if (e.code === 'KeyP') { doPause(); return; }
@@ -1752,6 +2085,7 @@ document.addEventListener('keydown', e => {
   if (e.code === 'KeyG') triggerSmokeVent();
   if (e.code === 'Digit4' || e.code === 'KeyZ' || e.code === 'Digit5' || e.code === 'KeyH') triggerSkill(match.player?.assignedSkill);
   if (e.code === 'Digit6' || e.code === 'KeyN') triggerReinforce();
+  if (e.code === 'Digit7' || e.code === 'KeyU') triggerBuyDrone();
   if (e.code === 'KeyK') {
     settings.fermatCore = !settings.fermatCore;
     save();
@@ -1759,6 +2093,7 @@ document.addEventListener('keydown', e => {
     noticeUntil = match.time + 1.4;
   }
   if (e.code === 'Space' && match.player.alive) simJump = true;
+  if (e.code === 'KeyQ' && match.player?.df40) { match.toggleDF40Scatter(match.player); hud(); return; }
   const extra = {KeyQ: 'pattern', KeyX: 'boost', KeyE: 'aa14', KeyC: 'ads', KeyV: 'scope', KeyB: 'buy'}[e.code];
   if (extra) equipment.action(extra);
 });
@@ -1938,7 +2273,11 @@ for (const [id, action] of [
   ['touchChrono', () => toggleChrono()],
   ['btnShaffer', () => triggerSkill('shaffer')],
   ['btnHeal', () => triggerSkill('heal')],
-  ['btnReinforce', () => triggerReinforce()]
+  ['btnFlow', () => triggerSkill('flow')],
+  ['btnLauncher', () => triggerSkill('stunlauncher')],
+  ['btnReinforce', () => triggerReinforce()],
+  ['btnBuyDrone', () => triggerBuyDrone()],
+  ['mobileDF40Mode', () => { if (match?.player?.df40) { match.toggleDF40Scatter(match.player); hud(); } }]
 ]) {
   const el = $(id);
   if (el) el.onclick = () => { el.blur?.(); if (screen === 'game') action(); };

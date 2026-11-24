@@ -263,7 +263,9 @@ export const WEAPON_RECOIL_PROFILE = Object.freeze({
   RD20:   {kickP: 0.0060, kickY: 0.0040, pullSkill: 0.89, driftBias: 0.10, quietReq: 0.042, arvWait: true,  bloomPerShot: 0.0029},
   RD40:   {kickP: 0.0052, kickY: 0.0036, pullSkill: 0.92, driftBias: 0.08, quietReq: 0.036, arvWait: true,  bloomPerShot: 0.0025},
   'DF40 II': {kickP: 0.0048, kickY: 0.0034, pullSkill: 0.93, driftBias: 0.06, quietReq: 0.032, arvWait: true,  bloomPerShot: 0.0022},
-  'DF1 OUT': {kickP: 0.0056, kickY: 0.0042, pullSkill: 0.88, driftBias: 0.10, quietReq: 0.038, arvWait: true, bloomPerShot: 0.0028}
+  'DF1 OUT': {kickP: 0.0056, kickY: 0.0042, pullSkill: 0.88, driftBias: 0.10, quietReq: 0.038, arvWait: true, bloomPerShot: 0.0028},
+  'SR 1U': {kickP: 0.0052, kickY: 0.0042, pullSkill: 0.88, driftBias: 0.08, quietReq: 0.042, arvWait: false, bloomPerShot: 0.0028},
+  'STUN LAUNCHER': {kickP: 0.0090, kickY: 0.0040, pullSkill: 0.86, driftBias: 0.04, quietReq: 0.055, arvWait: false, bloomPerShot: 0.0030}
 });
 
 /** Select a distinct 12-dimensional human persona based on callsign, Spy role, weapon & slot. */

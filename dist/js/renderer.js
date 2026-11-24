@@ -398,6 +398,7 @@ export class Renderer {
     this.activeLightCount = 0;
     this.flirActors = new Float32Array(24);
     this.flirBlend = 0;
+    this.weatherVec = new Float32Array([1, 0, 0, 0]);
 
     this._actorPalPool = Array.from({length: 16}, () => new Float32Array(RIG_BONE_COUNT * 12));
     this._actorMatPool = Array.from({length: 16}, () => new Float32Array(16));
@@ -678,6 +679,7 @@ export class Renderer {
       else if (k === 'baizerBreak') pushL(ep[0], ep[1], ep[2], frac * 3.4, 1.45, .45, 2.15, 89 - d);
       else if (k === 'break') pushL(ep[0], ep[1], ep[2], frac * 3.2, .42, 1.65, 1.95, 88 - d);
       else if (k === 'baizerPickup') pushL(ep[0], ep[1], ep[2], frac * 4.2, 1.45, .42, 2.15, 85 - d);
+      else if (k === 'rocketBlast') pushL(ep[0], ep[1], ep[2], frac * 5.8, 2.35, 1.15, .28, 98 - d);
       else if (k === 'tanker') pushL(ep[0], ep[1], ep[2], frac * 4.8, .55, 1.65, 1.45, 86 - d);
       else if (k === 'heal') pushL(ep[0], ep[1], ep[2], frac * 3.8, .42, 1.95, 1.25, 84 - d);
       else if (k === 'shaffer') pushL(ep[0], ep[1], ep[2], frac * 3.4, .68, .92, 1.95, 82 - d);
@@ -836,6 +838,7 @@ export class Renderer {
     gl.uniform4fv(p.uActors, this.actorData);
     gl.uniform4fv(p.uLights, this.lightPos);
     gl.uniform3fv(p.uLightCol, this.lightCol);
+    if (p.uWeather != null) gl.uniform4fv(p.uWeather, this.weatherVec);
   }
   worldPass(vp, eye, output, khdrOn, sfMode, quality, time, terrainMesh = this.terrain, fluxGIOn = false, res = null, frustum = null, preSorted = false, deferCutout = false) {
     const gl = this.gl;
@@ -950,6 +953,13 @@ export class Renderer {
       }
     }
 
+    // Update weather uniform from match.weatherSpec + dynamic lightning flash
+    const ws = match?.weatherSpec;
+    this.weatherVec[0] = ws ? ws.fogScale : 1;
+    this.weatherVec[1] = ws ? ws.stormDark : 0;
+    this.weatherVec[2] = ws ? ws.disasterTint : 0;
+    this.weatherVec[3] = match?.lightningFlash || 0;
+
     // Pack tightly-bound active actors (Shadow Flame + FLIR) AND solve RigCore-Zero palettes ONCE per actor!
     this.actorData.fill(0);
     this.flirActors.fill(0);
@@ -961,6 +971,7 @@ export class Renderer {
       let ak = 0, fk = 0, pk = 0;
       for (let i = 0; i < actors.length; i++) {
         const a = actors[i];
+        if (a.isDrone) continue;
         const cloakedFromViewer = !spectating && a.team !== viewerTeam && (a.shafferTimer || 0) > 0;
         if (!lite && a.alive && !cloakedFromViewer && ak < 6) {
           const o4 = ak * 4;
@@ -1180,6 +1191,7 @@ export class Renderer {
     gl.uniform1i(sk.uQuality, quality);
     gl.uniform1i(sk.uHasMirror, seeWater && this.mirrorVP ? 1 : 0);
     gl.uniformMatrix4fv(sk.uMirrorVP, false, this.mirrorVP || I);
+    if (sk.uWeather != null) gl.uniform4fv(sk.uWeather, this.weatherVec);
     gl.bindVertexArray(this.empty);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
 

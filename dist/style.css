@@ -3040,6 +3040,42 @@ body.touch #baizerHint { font-size: 6.5px; margin-top: 0; }
   color: #dff9ff;
   box-shadow: 0 0 12px #46dcff48;
 }
+.skill-btn.is-flow.is-ready,
+.skill-btn.is-flow.is-active {
+  border-color: #48f0ffdd;
+  background: linear-gradient(135deg, #0d4a68e0, #0d2b4be0);
+  color: #e4fbff;
+  box-shadow: 0 0 14px #3ce8ff66;
+}
+.skill-btn.is-launcher.is-ready,
+.skill-btn.is-launcher.is-active {
+  border-color: #ffae44dd;
+  background: linear-gradient(135deg, #643510e0, #3f1f0ae0);
+  color: #fff2dc;
+  box-shadow: 0 0 14px #ff962866;
+}
+#flowVeil {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9;
+  box-shadow: inset 0 0 95px #22d8ff5c;
+  background: radial-gradient(circle at 50% 50%, transparent 56%, #0628384a 100%);
+}
+#flowBadge {
+  position: absolute;
+  top: 72px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 4px 12px;
+  border-radius: 999px;
+  font: 800 12px/1 var(--mono);
+  letter-spacing: .12em;
+  color: #d8fbff;
+  background: #082838cc;
+  border: 1px solid #48f0ffbb;
+  box-shadow: 0 0 14px #2ce0ff55;
+}
 .skill-btn:not(:disabled):active {
   transform: scale(.95);
 }
@@ -3729,9 +3765,39 @@ body.light-mode #specBar {
   white-space: nowrap;
 }
 .oh-tag.is-ally {
-  border-color: #36efffcc;
-  background: linear-gradient(180deg, #0b242ee0, #081820e0);
-  box-shadow: 0 3px 12px #05182288, 0 0 10px #36efff2c;
+  min-width: 58px;
+  padding: 2px 5px 3px;
+  gap: 1.5px;
+  border-width: 1px;
+  border-radius: 4px;
+  border-color: #36efff88;
+  background: #081820b8;
+  box-shadow: none;
+}
+.oh-tag.is-ally .oh-top {
+  gap: 3px;
+  font-size: 8.5px;
+}
+.oh-tag.is-ally .oh-side,
+.oh-tag.is-ally .oh-gun,
+.oh-tag.is-ally .oh-dist {
+  display: none;
+}
+.oh-tag.is-ally .oh-name {
+  font-size: 8.5px;
+  font-weight: 700;
+}
+.oh-tag.is-ally .oh-bar {
+  height: 3px;
+}
+.oh-tag.is-ally .oh-bar.oh-sh,
+.oh-tag.is-ally .oh-bar.oh-bz {
+  height: 2px;
+}
+.oh-tag.is-ally .oh-pin {
+  bottom: -4px;
+  width: 6px;
+  height: 6px;
 }
 .oh-tag.is-enemy {
   border-color: #ff4252e0;
@@ -4412,3 +4478,42 @@ body.light-mode #bottomDock #skillBar {
   .lobby-foot { flex-wrap: wrap; }
   .lobby-foot #start { width: 100%; }
 }
+
+/* Part C: Weather, H1 ZONBI, Zombie Challenge, Drones, Blood Splatter & Boss/Heli HUD */
+.mode-badge.is-zchal { background: #3b1c26; color: #ff8e9e; border-color: #ff607855; }
+#modes button.is-zchal.on { border-color: #ff6078; box-shadow: inset 0 0 0 1px #ff607866; }
+.env-grid { display: flex; flex-direction: column; gap: 10px; }
+.env-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.env-row > label { font: 700 11.5px/1.2 var(--mono); color: #9eb8b4; min-width: 92px; }
+#weatherMode button, #zombieRole button { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 10px; }
+#weatherMode small, #zombieRole small { font: 500 9.5px/1.1 var(--mono); opacity: .78; }
+#weatherMode button.is-disaster.on { background: linear-gradient(135deg, #5e1518, #9c2428); border-color: #ff625c; color: #ffeaea; }
+.h1-toggle-wrap { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 220px; }
+.h1-toggle-wrap small { font: 600 10.5px/1.35 var(--mono); color: #f2b4b0; }
+.skill-btn.is-drone { border-color: #4bd8ff55; }
+.skill-btn.is-drone.is-ready { border-color: #5eeeff; background: linear-gradient(180deg, #10323c, #0a1f28); color: #c8f9ff; box-shadow: 0 0 14px #3cdfff44; }
+#threatBars { position: fixed; top: calc(max(12px, env(safe-area-inset-top)) + 48px); left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; gap: 5px; z-index: 22; pointer-events: none; min-width: 240px; max-width: 72vw; }
+.threat-bar { display: flex; align-items: center; gap: 8px; padding: 4px 10px; border-radius: 6px; background: #140e12d8; border: 1px solid #ff584e66; font: 700 11px/1 var(--mono); color: #ffd6d2; }
+.threat-bar.is-heli { border-color: #ff9c4466; color: #ffe0be; }
+.threat-bar .tmeter { flex: 1; height: 6px; border-radius: 99px; background: #2d181a; overflow: hidden; }
+.threat-bar .tmeter i { display: block; height: 100%; width: 100%; background: linear-gradient(90deg, #ff3842, #ff8f3a); transition: width .12s linear; }
+.threat-bar.is-heli .tmeter i { background: linear-gradient(90deg, #ff8828, #ffd252); }
+#weatherVeil { position: fixed; inset: 0; pointer-events: none; z-index: 7; transition: opacity .3s ease; }
+#weatherVeil.w-rain { background: radial-gradient(circle at 50% 45%, transparent 40%, #1a2d3a55 100%); }
+#weatherVeil.w-storm { background: radial-gradient(circle at 50% 45%, #16233022 30%, #0f1b2892 100%); }
+#weatherVeil.w-disaster { background: radial-gradient(circle at 50% 45%, #2b0d0f33 25%, #24080ad2 100%); }
+#bloodOverlay { position: fixed; inset: 0; pointer-events: none; z-index: 12; overflow: hidden; }
+.blood-splat { position: absolute; border-radius: 54% 46% 62% 38% / 44% 58% 42% 56%; background: radial-gradient(circle at 38% 36%, #b80d14dd 0%, #7d060bcc 54%, #3d020588 84%, transparent 100%); filter: drop-shadow(0 2px 4px #1c000288); transform-origin: center; animation: bloodDrip 3.8s ease-out forwards; }
+@keyframes bloodDrip {
+  0% { opacity: 0.96; transform: scale(0.55) translateY(0); }
+  12% { opacity: 0.94; transform: scale(1.04) translateY(2px); }
+  70% { opacity: 0.72; transform: scale(1.0, 1.24) translateY(26px); }
+  100% { opacity: 0; transform: scale(0.95, 1.48) translateY(58px); }
+}
+.nvss-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; padding-top: 10px; border-top: 1px solid #ffffff16; }
+#aiModelSelect button.is-nvss.on { background: linear-gradient(135deg, #0b4f6c, #188c72); border-color: #46f6d4; color: #eafffa; box-shadow: 0 0 14px #2ae8c644; }
+.nvss-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.nvss-link, .nvss-btn { font: 600 11px/1.2 var(--mono); padding: 6px 10px; border-radius: 7px; text-decoration: none; border: 1px solid #46f6d455; color: #b6fff0; background: #0c2630cc; cursor: pointer; }
+.nvss-link:hover, .nvss-btn:hover { border-color: #66ffe0; background: #123a48; }
+
+

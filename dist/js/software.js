@@ -470,7 +470,8 @@ export class SoftwareRenderer {
       const nl = Math.max(0, nx * SUN[0] + ny * SUN[1] + nz * SUN[2]),
         hemi = (ny + 1) * .5,
         depth = coords.reduce((s, p) => s + p[2], 0) / coords.length;
-      const fog = view ? 0 : clamp(1 - Math.exp(-Math.pow(Math.max(0, depth) * .00265, 1.38)), 0, .94);
+      const wScale = this.weatherFogScale || 1;
+      const fog = view ? 0 : clamp(1 - Math.exp(-Math.pow(Math.max(0, depth) * .00265 * wScale, 1.38)), 0, .94);
       let sr = (.25 + .41 * hemi + 1.63 * nl) ** .455, sg = (.27 + .52 * hemi + 1.30 * nl) ** .455, sb = (.25 + .62 * hemi + .88 * nl) ** .455;
       if (transform?.pose?.shieldFlash > .02) {
         const f = transform.pose.shieldFlash;
@@ -495,6 +496,7 @@ export class SoftwareRenderer {
   render(cam, time, match, view = {}) {
     if (!this.pix || !this.depth) this.settings(this.config || {resolution: 'SD', lightMode: false});
     const lite = !!this.config?.lightMode;
+    this.weatherFogScale = match?.weatherSpec?.fogScale || 1;
     if (lite) this.ensureLiteMeshes();
     const extra = !lite && this.config?.graphics === 'extra';
     const activeTerrain = lite ? this.terrainLite : this.terrain;
@@ -512,7 +514,7 @@ export class SoftwareRenderer {
     const viewerTeam = (view.spectateActor || match?.player)?.team ?? 0;
     if (match) {
       for (const a of match.actors) {
-        if (!a.alive || a === fpActor) continue;
+        if (!a.alive || a === fpActor || a.isDrone) continue;
         if (!spectating && a.team !== viewerTeam && (a.shafferTimer || 0) > 0) continue;
         const cy = Math.cos(a.yaw), sy = Math.sin(a.yaw);
         this.mesh(this.actorMesh(a, lite), {pose: a, p: [a.x, a.y, a.z], r: [cy, 0, sy], u: [0, 1, 0], b: [-sy, 0, cy]}, {phase: a.stride * 1.92, amt: Math.min(1, Math.hypot(a.vx, a.vz) / 4.2), sprint: a.sprintAmt || 0})

@@ -30,7 +30,8 @@ export const WEAPON_PENETRATION = {
   SRA: {wood: 2.2, steel: 0.18, concrete: 0.08, maxPen: 1, maxRic: 1},
   RD20: {wood: 1.9, steel: 0.14, concrete: 0.06, maxPen: 1, maxRic: 1},
   D1: {wood: 1.7, steel: 0.12, concrete: 0.05, maxPen: 1, maxRic: 1},
-  'DF1 OUT': {wood: 1.6, steel: 0.12, concrete: 0.05, maxPen: 1, maxRic: 1}
+  'DF1 OUT': {wood: 1.6, steel: 0.12, concrete: 0.05, maxPen: 1, maxRic: 1},
+  'SR 1U': {wood: 2.1, steel: 0.17, concrete: 0.07, maxPen: 1, maxRic: 1}
 };
 
 // Critical grazing incidence sine thresholds: sin(24°) ≈ 0.407 (steel), sin(16°) ≈ 0.276 (concrete)

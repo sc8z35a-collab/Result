@@ -812,23 +812,28 @@ export class PilotEquipment {
     const losCache = this._ohLosCache;
     const actors = match.actors;
 
+    const viewer = spec ? null : (viewActor || match.player);
+    const maxVisDist = 140 * (match.weatherSpec?.visibility ?? 1);
     let used = 0;
     for (let ai = 0; ai < actors.length; ai++) {
+      if (used >= 22) break;
       const e = actors[ai];
       if (!e?.alive) continue;
       if (!spec && e === match.player) continue;
       if (spec && isFirstPerson && e === viewActor) continue;
+      if (e.isZombie && !e.isH1Zonbi && !e.armedZombie && match.isZombieChallenge && e.team === myTeam) continue;
 
-      const isAlly = e.team === myTeam;
-      const isEnemy = !isAlly;
+      const isEnemy = (!spec && viewer && match.areHostile) ? match.areHostile(viewer, e) : (e.team !== myTeam);
+      const isAlly = !isEnemy;
       if (!spec && isEnemy && (e.shafferTimer || 0) > 0) continue;
 
       const [cx, cz] = bodyCenter(e);
       const tScale = torso(e);
-      const ay = e.y + 1.98 * tScale + (e.crouch > 0.3 ? 0.08 : 0.14);
+      const ay = e.isDrone ? (e.y + 0.85) : e.inMech ? (e.y + 3.45) : (e.y + 1.98 * tScale + (e.crouch > 0.3 ? 0.08 : 0.14));
       const dx = cx - cpx, dy = ay - cpy, dz = cz - cpz;
       const z = dx * fx + dy * fy + dz * fz;
-      if (z < 0.72 || z > 140) continue;
+      if (z < 0.72 || z > maxVisDist) continue;
+      if (e.isZombie && !e.isH1Zonbi && !e.armedZombie && z > 22) continue;
 
       const sx = 50 + (dx * rx + dy * ry + dz * rz) * invTanX / z;
       const sy = 50 - (dx * ux + dy * uy + dz * uz) * invTanY / z;
@@ -843,9 +848,9 @@ export class PilotEquipment {
         || (cpx - ent.cpx) * (cpx - ent.cpx) + (cpy - ent.cpy) * (cpy - ent.cpy) + (cpz - ent.cpz) * (cpz - ent.cpz) > 0.1225
         || (cx - ent.ex) * (cx - ent.ex) + (e.y - ent.ey) * (e.y - ent.ey) + (cz - ent.ez) * (cz - ent.ez) > 0.1225;
       if (needLos) {
-        pt[0] = cx; pt[1] = e.y + 1.24 * tScale; pt[2] = cz;
+        pt[0] = cx; pt[1] = e.isDrone ? (e.y + 0.35) : (e.y + 1.24 * tScale); pt[2] = cz;
         clearLos = clearOpticalPath(cp, pt, match.aeroVortex);
-        if (!clearLos) {
+        if (!clearLos && !e.isDrone) {
           pt[1] = e.y + 1.66 * tScale;
           clearLos = clearOpticalPath(cp, pt, match.aeroVortex);
         }

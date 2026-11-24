@@ -7,10 +7,12 @@ export function bodyCenter(a) {
   return [a.x + Math.cos(a.yaw) * lean, a.z + Math.sin(a.yaw) * lean]
 }
 export function eyeOf(a) {
+  if (a.isDrone) return [a.x, a.y + .35, a.z];
   const [x, z] = bodyCenter(a);
   return [x, a.y + (a.human ? 1.61 : 1.5) * torso(a), z]
 }
 export function targetPoint(a) {
+  if (a.isDrone) return [a.x, a.y + .35, a.z];
   const [x, z] = bodyCenter(a);
   return [x, a.y + 1.23 * torso(a), z]
 }

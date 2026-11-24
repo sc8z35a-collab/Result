@@ -29,8 +29,8 @@ export const PLAYER_AA_LEVELS = ['weapon', 'off', '1.1', '1.2', '1.3', '1.4', '1
 export const SCHERP_ASSIST_STRENGTH = 3.60;
 export const SCHERP_LAUNCH_GAIN = 0.992;
 export const SCHERP_LAUNCH_STEP = 0.24;          // ~13.75 deg instant launch deflection
-export const SCHERP_LOCK_ACQUIRE = 0.34;         // ~19.5 deg razor-wide acquire cone
-export const SCHERP_LOCK_HOLD = 0.56;            // ~32.1 deg panoramic hold cone
+export const SCHERP_LOCK_ACQUIRE = 0.13;         // ~7.4 deg narrowed acquire cone
+export const SCHERP_LOCK_HOLD = 0.21;            // ~12.0 deg narrowed hold cone
 export const SCHERP_FOCUS_TIME = 0.025;          // 25 ms snap-lock
 export const SCHERP_MAX_RANGE = 180;
 export const SCHERP_HOMING_COS = 0.64;           // ~50.2 deg pursuit aperture
@@ -587,7 +587,7 @@ export function updateUniversalAA(match, a, dt) {
     aa.scanAt = t + (spec.scherp ? 0.016 : 0.032);
     let best = -1, bestCost = Infinity, bestMode = 'none', bestBank = null, bestRange = 0;
     for (const e of match.actors) {
-      if (!e.alive || e.team === a.team || (e.shafferTimer || 0) > 0) continue;
+      if (!e.alive || !(match.areHostile ? match.areHostile(a, e) : e.team !== a.team) || (e.shafferTimer || 0) > 0) continue;
       const raw = targetPoint(e);
       const sRaw = anglesTo(origin, raw);
       if (sRaw.range > spec.maxRange) continue;
@@ -654,7 +654,7 @@ export function updateUniversalAA(match, a, dt) {
   let targetTrackYaw = 0, targetTrackPitch = 0;
   if (aa.focusId >= 0) {
     const e = match.actors[aa.focusId];
-    if (e?.alive && e.team !== a.team && e.spawnId === aa.focusSpawnId && !(e.shafferTimer > 0)) {
+    if (e?.alive && (match.areHostile ? match.areHostile(a, e) : e.team !== a.team) && e.spawnId === aa.focusSpawnId && !(e.shafferTimer > 0)) {
       const speed = match.weapon(a)?.speed || 360;
       let aimPt;
       if (aa.solveMode === 'bank' && aa.activeBank?.bounce1) {
@@ -675,31 +675,6 @@ export function updateUniversalAA(match, a, dt) {
       const gimbalGain = aa.locked ? (spec.scherp ? 1.35 : 1.05) : aa.focus * 0.6;
       targetTrackYaw = clamp(dyaw * 2.1 * gimbalGain, -0.28, 0.28);
       targetTrackPitch = clamp(dpitch * 1.9 * gimbalGain, -0.20, 0.20);
-
-      if (spec.trackAim && aa.locked && ang > 1e-4 && sep < spec.lockHold) {
-        if (spec.scherp) {
-          // LQR Critically-Damped Angular Controller: crisp zero-overshoot snap!
-          const wn = 28.0;
-          const zeta = 0.96;
-          const ay = wn * wn * dyaw - 2 * zeta * wn * aa.angVelYaw;
-          const ap = wn * wn * dpitch - 2 * zeta * wn * aa.angVelPitch;
-          aa.angVelYaw = clamp(aa.angVelYaw + ay * dt, -spec.trackRate, spec.trackRate);
-          aa.angVelPitch = clamp(aa.angVelPitch + ap * dt, -spec.trackRate, spec.trackRate);
-          let stepY = aa.angVelYaw * dt;
-          let stepP = aa.angVelPitch * dt;
-          // Prevent tiny sign overshoot across exact intercept ray
-          if (Math.abs(stepY) > Math.abs(dyaw) && stepY * dyaw > 0) { stepY = dyaw; aa.angVelYaw *= 0.25; }
-          if (Math.abs(stepP) > Math.abs(dpitch) && stepP * dpitch > 0) { stepP = dpitch; aa.angVelPitch *= 0.25; }
-          a.yaw += stepY;
-          a.pitch = clamp(a.pitch + stepP, -1.31, 1.31);
-        } else {
-          const rate = aa.wallActive ? spec.trackGain * 0.88 : spec.trackGain;
-          const step = Math.min(ang, ang * (1 - Math.exp(-rate * dt)), spec.trackRate * dt);
-          const frac = step / ang;
-          a.yaw += dyaw * frac;
-          a.pitch = clamp(a.pitch + dpitch * frac, -1.31, 1.31);
-        }
-      }
     }
   }
 
@@ -742,7 +717,7 @@ export function bulletGuidanceUniversal(match, a, barrelSide = 0, barrelVert = 0
   }
 
   const e = match.actors[aa.focusId];
-  if (!e?.alive || e.team === a.team || e.spawnId !== aa.focusSpawnId || (e.shafferTimer || 0) > 0) {
+  if (!e?.alive || !(match.areHostile ? match.areHostile(a, e) : e.team !== a.team) || e.spawnId !== aa.focusSpawnId || (e.shafferTimer || 0) > 0) {
     return {
       dir: forward(a.yaw + fanYaw, clamp(a.pitch + fanPitch, -1.31, 1.31)),
       guided: false,

@@ -46,13 +46,25 @@ export function sweptMovingBodyHit(a, b, actor, dt = 0) {
   const ax = a[0] + shiftX, ay = a[1] + shiftY, az = a[2] + shiftZ;
   const bx = b[0], by = b[1], bz = b[2];
 
-  // Fast broadphase AABB reject (capsule max radius 0.39 + crouch/prone lean offset <= 0.62m)
+  if (actor.isDrone) {
+    const dcx = cx, dcy = actor.y + 0.35, dcz = cz;
+    const minX = ax < bx ? ax : bx, maxX = ax > bx ? ax : bx;
+    if (dcx + 0.62 < minX || dcx - 0.62 > maxX) return Infinity;
+    const minZ = az < bz ? az : bz, maxZ = az > bz ? az : bz;
+    if (dcz + 0.62 < minZ || dcz - 0.62 > maxZ) return Infinity;
+    const minY = ay < by ? ay : by, maxY = ay > by ? ay : by;
+    if (dcy + 0.62 < minY || dcy - 0.62 > maxY) return Infinity;
+    return sphereHitRelS(ax, ay, az, bx - ax, by - ay, bz - az, dcx, dcy, dcz, 0.56 * 0.56);
+  }
+
+  // Fast broadphase AABB reject (capsule max radius 0.39 + lean offset; wider for giant mechs)
+  const padXZ = actor.inMech ? 1.05 : 0.65;
   const minX = ax < bx ? ax : bx, maxX = ax > bx ? ax : bx;
-  if (cx + 0.65 < minX || cx - 0.65 > maxX) return Infinity;
+  if (cx + padXZ < minX || cx - padXZ > maxX) return Infinity;
   const minZ = az < bz ? az : bz, maxZ = az > bz ? az : bz;
-  if (cz + 0.65 < minZ || cz - 0.65 > maxZ) return Infinity;
+  if (cz + padXZ < minZ || cz - padXZ > maxZ) return Infinity;
   const minY = ay < by ? ay : by, maxY = ay > by ? ay : by;
-  const yLo = actor.y - 0.05, yHi = actor.y + 1.95;
+  const yLo = actor.y - 0.05, yHi = actor.y + (actor.inMech ? 3.25 : 1.95);
   if (yHi < minY || yLo > maxY) return Infinity;
 
   const center = bodyCenter(actor);
@@ -61,7 +73,7 @@ export function sweptMovingBodyHit(a, b, actor, dt = 0) {
 
   const x = ax - bcx;
   const z = az - bcz;
-  const rr = 0.39;
+  const rr = actor.inMech ? 0.78 : 0.39;
   const rr2 = rr * rr;
   const lo = actor.y + 0.36;
   const hi = actor.y + 1.46 * torso(actor);

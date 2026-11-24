@@ -1125,6 +1125,208 @@ export function movingDetails(match, time, extra = false, lite = false, opts = n
     }
   }
 
+  // Randomly placed Destructible Gas Pipes (red/amber pressurized industrial cylinder + hazard band)
+  if (match.gasPipes) {
+    const lRed = layers.redPaint ?? 0;
+    const lBmet = layers.blackMetal ?? 0;
+    for (let gi = 0; gi < match.gasPipes.length; gi++) {
+      const gp = match.gasPipes[gi];
+      if (!gp.alive) continue;
+      if (frustum && !sphereInFrustum(frustum, gp.x, 1.05, gp.z, 1.6)) continue;
+      if (lite) {
+        m.boxS(gp.x, .95, gp.z, .44, 1.9, .44, lRed, .92, .22, .18, 0, 1);
+      } else {
+        m.boxS(gp.x, .08, gp.z, .74, .16, .74, lBmet, .24, .26, .28, 0, 1);
+        m.boxS(gp.x, 1.02, gp.z, .44, 1.88, .44, lRed, gp.hitFlash > 0.1 ? 1.0 : .90, gp.hitFlash > 0.1 ? .85 : .22, .18, 0, 1);
+        m.boxS(gp.x, 1.35, gp.z, .48, .18, .48, 0, _C_AMMO_BAND[0], _C_AMMO_BAND[1], _C_AMMO_BAND[2], 0, 3);
+        m.boxS(gp.x, 2.02, gp.z, .32, .14, .32, lBmet, .35, .38, .40, 0, 1);
+      }
+    }
+  }
+
+  // Giant Mech visual armor chassis & distinct silhouettes for all 6 Judgment Mech types + H1 ZONBI boss aura + Airborne NV2.6 Escort Drones
+  const lBmetA = layers.blackMetal ?? 0;
+  const lSteelA = layers.steel ?? 0;
+  for (let ai = 0; ai < match.actors.length; ai++) {
+    const a = match.actors[ai];
+    if (!a.alive) continue;
+    if (a.isDrone) {
+      if (frustum && !sphereInFrustum(frustum, a.x, a.y + .35, a.z, 1.3)) continue;
+      const dx = a.x, dy = a.y + .35, dz = a.z;
+      const isBossDrone = a.team === 1;
+      const coreR = isBossDrone ? 1.0 : .22, coreG = isBossDrone ? .26 : .92, coreB = isBossDrone ? .22 : 1.0;
+      if (lite) {
+        m.boxS(dx, dy, dz, .64, .26, .64, lBmetA, .20, .24, .28, 0, 1);
+        m.boxS(dx, dy - .06, dz, .24, .18, .24, 0, coreR, coreG, coreB, 0, 3);
+      } else {
+        // Central armored fuselage + optical sensor eye
+        m.boxS(dx, dy, dz, .52, .22, .56, lBmetA, .18, .22, .26, 0, 1);
+        m.ellipsoidS(dx, dy + .02, dz, .15, .11, .15, 0, coreR, coreG, coreB, 3, 6, 4);
+        // 4 diagonal quad-rotor arms + spinning rotor rings
+        const rotSpin = time * 18 + a.id;
+        for (const sx of [-1, 1]) {
+          for (const sz of [-1, 1]) {
+            const rx = dx + sx * .44, rz = dz + sz * .44;
+            m.beamS(dx, dy + .04, dz, rx, dy + .08, rz, .04, .035, lSteelA, .42, .48, .52, 1);
+            m.ringS(rx, dy + .11, rz, 0, 1, 0, .20, .022, 8, 0, coreR, coreG, coreB, 3);
+            const bx = Math.cos(rotSpin + sx * sz) * .18, bz = Math.sin(rotSpin + sx * sz) * .18;
+            m.beamS(rx - bx, dy + .11, rz - bz, rx + bx, dy + .11, rz + bz, .016, .016, 0, .85, .92, .96, 3);
+          }
+        }
+        // Twin under-slung mini-guns (2 barrels)
+        const sy = Math.sin(a.yaw), cy = Math.cos(a.yaw);
+        const rx = cy, rz = sy;
+        for (const side of [-1, 1]) {
+          const gx = dx + rx * side * .22, gy = dy - .14, gz = dz + rz * side * .22;
+          m.beamS(gx, gy, gz, gx + sy * .36, gy, gz - cy * .36, .038, .028, lBmetA, .32, .36, .40, 1);
+        }
+      }
+      continue;
+    }
+    if (a.isH1Zonbi) {
+      if (!frustum || sphereInFrustum(frustum, a.x, a.y + 1.2, a.z, 2.2)) {
+        m.ringS(a.x, a.y + .12, a.z, 0, 1, 0, 1.15, .055, lite ? 8 : 16, 0, 1.0, .18, .22, 3, true);
+        if (!lite) {
+          m.ringS(a.x, a.y + 2.15 + Math.sin(time * 4) * .08, a.z, 0, 1, 0, .48, .035, 12, 0, 1.0, .78, .22, 3);
+        }
+      }
+    }
+    if (!a.inMech) continue;
+    if (frustum && !sphereInFrustum(frustum, a.x, a.y + 1.9, a.z, 3.0)) continue;
+    const ms = a.mechSpec || {id: 'titan', primary: [.86, .22, .16], glow: [1.0, .48, .18], armor: [.22, .14, .14]};
+    const pr = ms.primary, glw = ms.glow, arm = ms.armor;
+    m.ringS(a.x, a.y + .14, a.z, 0, 1, 0, 1.55, .07, lite ? 10 : 18, 0, glw[0], glw[1], glw[2], 3, true);
+    m.boxS(a.x, a.y + 1.95, a.z, 1.38, 1.68, 1.08, lBmetA, arm[0], arm[1], arm[2], 0, 1);
+    m.boxS(a.x, a.y + 2.98, a.z, .80, .56, .80, 0, glw[0], glw[1], glw[2], 0, 3);
+    if (!lite) {
+      // Shoulder pods tinted per mech class
+      m.boxS(a.x - .92, a.y + 2.22, a.z, .44, 1.18, .62, lSteelA, pr[0], pr[1], pr[2], 0, 1);
+      m.boxS(a.x + .92, a.y + 2.22, a.z, .44, 1.18, .62, lSteelA, pr[0], pr[1], pr[2], 0, 1);
+      // Distinct silhouette attachment for each of the 6 giant mech classes
+      if (ms.id === 'valkyrie') {
+        m.beamS(a.x - .9, a.y + 2.4, a.z, a.x - 2.3, a.y + 3.4, a.z + .4, .12, .06, 0, glw[0], glw[1], glw[2], 3);
+        m.beamS(a.x + .9, a.y + 2.4, a.z, a.x + 2.3, a.y + 3.4, a.z + .4, .12, .06, 0, glw[0], glw[1], glw[2], 3);
+      } else if (ms.id === 'cerberus') {
+        for (const ox of [-.75, 0, .75]) m.boxS(a.x + ox, a.y + 3.42, a.z - .35, .24, .28, .92, lBmetA, pr[0], pr[1], pr[2], 0, 1);
+      } else if (ms.id === 'aegis') {
+        m.ringS(a.x, a.y + 1.9, a.z, 0, 1, 0, 1.85, .09, 16, 0, glw[0], glw[1], glw[2], 3);
+        m.ringS(a.x, a.y + 2.6, a.z, 0, 1, 0, 1.55, .07, 14, 0, pr[0], pr[1], pr[2], 3);
+      } else if (ms.id === 'phantom') {
+        m.beamS(a.x, a.y + 3.2, a.z, a.x, a.y + 4.3, a.z + .35, .09, .03, 0, glw[0], glw[1], glw[2], 3);
+        m.ringS(a.x, a.y + 2.1, a.z, Math.sin(time * 3), 1, Math.cos(time * 3), 1.45, .05, 14, 0, glw[0], glw[1], glw[2], 3);
+      } else if (ms.id === 'apocalypse') {
+        m.ringS(a.x, a.y + 3.75, a.z, 0, 1, 0, 1.25, .09, 18, 0, glw[0], glw[1], glw[2], 3);
+        m.beamS(a.x - .85, a.y + 2.8, a.z, a.x - 1.15, a.y + 4.4, a.z, .12, .05, 0, pr[0], pr[1], pr[2], 3);
+        m.beamS(a.x + .85, a.y + 2.8, a.z, a.x + 1.15, a.y + 4.4, a.z, .12, .05, 0, pr[0], pr[1], pr[2], 3);
+      } else {
+        // Titan heavy armored pauldron crest
+        m.boxS(a.x, a.y + 3.38, a.z, 1.55, .36, .88, lSteelA, pr[0], pr[1], pr[2], 0, 1);
+      }
+    }
+  }
+
+  // Airborne Zombie-Piloted Gunship Helicopter
+  const heli = match.helicopter;
+  if (heli?.alive && (!frustum || sphereInFrustum(frustum, heli.x, heli.y, heli.z, 7.5))) {
+    const hx = heli.x, hy = heli.y, hz = heli.z;
+    const sy = Math.sin(heli.yaw), cy = Math.cos(heli.yaw);
+    const fx = sy, fz = -cy, rx = cy, rz = sy;
+    const flash = heli.hitFlash > 0.1;
+    // Main fuselage + cockpit canopy + tail boom
+    m.boxS(hx, hy, hz, 2.3, 1.85, 5.2, lBmetA, flash ? 1.0 : .22, flash ? .55 : .25, flash ? .45 : .24, 0, 1);
+    m.boxS(hx + fx * 2.1, hy - .15, hz + fz * 2.1, 1.85, 1.15, 1.65, 0, .95, .24, .18, 0, 3);
+    m.beamS(hx - fx * 2.2, hy + .2, hz - fz * 2.2, hx - fx * 7.2, hy + .6, hz - fz * 7.2, .45, .22, lBmetA, .26, .28, .26, 1);
+    // Spinning main rotor blades
+    const rAng = heli.rotorAngle || (time * 28);
+    for (let b = 0; b < 2; b++) {
+      const a0 = rAng + b * Math.PI * 0.5;
+      const bx = Math.cos(a0) * 5.6, bz = Math.sin(a0) * 5.6;
+      m.beamS(hx - bx, hy + 1.35, hz - bz, hx + bx, hy + 1.35, hz + bz, .16, .16, lSteelA, .75, .78, .80, 1);
+    }
+    if (!lite) {
+      m.ringS(hx, hy + 1.36, hz, 0, 1, 0, 5.4, .06, 16, 0, .92, .26, .20, 3);
+      // Tail rotor + twin door-mounted miniguns
+      const tx = hx - fx * 7.2, ty = hy + .65, tz = hz - fz * 7.2;
+      m.ringS(tx + rx * .35, ty, tz + rz * .35, rx, 0, rz, .85, .05, 10, 0, .95, .36, .22, 3);
+      for (const side of [-1, 1]) {
+        const gx = hx + rx * side * 1.45, gz = hz + rz * side * 1.45;
+        m.beamS(gx, hy - .55, gz, gx + fx * 1.6, hy - .95, gz + fz * 1.6, .12, .08, lSteelA, .52, .56, .58, 1);
+      }
+    }
+  }
+
+  // Container Breach Beacon when 10m / 20m container zombie swarm erupts
+  if ((match.raidBreachFlash || 0) > 0 && match.raidContainer) {
+    const [bx, bz] = match.raidContainer;
+    const pulse = .8 + ((time * 2.2) % 1) * 2.6;
+    m.ringS(bx, .16, bz, 0, 1, 0, pulse, .08, lite ? 8 : 16, 0, 1.0, .20, .16, 3, true);
+  }
+
+  // Ultra-Realistic 3D Arterial Blood Splatter: decals/pools + airborne hemoglobin mist + velocity-stretched droplets!
+  if (match.bloodDecals && match.bloodDecals.length) {
+    const decals = match.bloodDecals;
+    const step = lite ? 3 : 1;
+    for (let bi = 0; bi < decals.length; bi += step) {
+      const dc = decals[bi];
+      if (camPos && ((dc.x - camX) * (dc.x - camX) + (dc.z - camZ) * (dc.z - camZ)) > 2025) continue;
+      if (frustum && !sphereInFrustum(frustum, dc.x, dc.y, dc.z, dc.r * 1.6)) continue;
+      const ageFrac = clamp(1 - dc.life / (dc.maxLife || 24), 0, 1);
+      // Coagulation darkening over time (fresh arterial bright crimson -> wet deep oxblood!)
+      const cr = dc.pool ? (0.36 - ageFrac * 0.14) : (0.50 - ageFrac * 0.18);
+      const cg = 0.025 - ageFrac * 0.012;
+      const cb = 0.028 - ageFrac * 0.012;
+      m.discS(dc.x, dc.y, dc.z, dc.nx, dc.ny, dc.nz, dc.r, lite ? 5 : (dc.pool ? 10 : 7), 0, cr, cg, cb, 1);
+      if (!lite && !dc.pool && dc.stretch > 1.3 && dc.ny > 0.5) {
+        // Directional impact tail droplet streak
+        m.discS(dc.x + dc.vx * dc.r * 0.9, dc.y + 0.002, dc.z + dc.vz * dc.r * 0.9, 0, 1, 0, dc.r * 0.52, 6, 0, cr * 1.15, cg, cb, 1);
+      }
+    }
+  }
+  if (match.bloodMist && match.bloodMist.length && !lite) {
+    const mist = match.bloodMist;
+    for (let mi = 0; mi < mist.length; mi++) {
+      const bm = mist[mi];
+      if (frustum && !sphereInFrustum(frustum, bm.x, bm.y, bm.z, bm.r * 1.5)) continue;
+      const fade = clamp(bm.life / (bm.maxLife || .6), 0, 1);
+      m.ellipsoidS(bm.x, bm.y, bm.z, bm.r, bm.r * 0.85, bm.r, 0, .58 * fade + .12, .03, .035, 0, 5, 3);
+    }
+  }
+  if (match.bloodDroplets && match.bloodDroplets.length) {
+    const drops = match.bloodDroplets;
+    const step = lite ? 3 : 1;
+    for (let di = 0; di < drops.length; di += step) {
+      const d = drops[di];
+      if (frustum && !sphereInFrustum(frustum, d.x, d.y, d.z, .35)) continue;
+      const spd = Math.hypot(d.vx, d.vy, d.vz) || 1;
+      const len = clamp(spd * 0.032, 0.04, 0.28);
+      const ux = d.vx / spd, uy = d.vy / spd, uz = d.vz / spd;
+      const cr = d.tier === 0 ? .76 : d.tier === 1 ? .52 : .32;
+      const cg = d.tier === 0 ? .04 : .02;
+      const cb = d.tier === 0 ? .045 : .025;
+      m.beamS(d.x - ux * len, d.y - uy * len, d.z - uz * len, d.x + ux * len * .35, d.y + uy * len * .35, d.z + uz * len * .35, d.r * 1.25, d.r * 0.65, 0, cr, cg, cb, d.tier === 0 ? 1 : 0);
+    }
+  }
+
+  // Dynamic 3D Weather Precipitation Streaks (Rain / Storm / Super Disaster) around camera
+  const wId = match.weather || 'clear';
+  if (wId !== 'clear' && camPos && !lite) {
+    const rainCount = wId === 'disaster' ? 96 : wId === 'storm' ? 68 : 42;
+    const slantX = wId === 'disaster' ? 0.52 : wId === 'storm' ? 0.28 : 0.08;
+    const slantZ = wId === 'disaster' ? 0.34 : wId === 'storm' ? 0.16 : 0.04;
+    const fallSpd = wId === 'disaster' ? 30 : wId === 'storm' ? 23 : 17;
+    const streakLen = wId === 'disaster' ? 1.35 : wId === 'storm' ? 1.05 : 0.78;
+    const rr = wId === 'disaster' ? .76 : .68, rg = wId === 'disaster' ? .64 : .78, rb = wId === 'disaster' ? .66 : .88;
+    for (let ri = 0; ri < rainCount; ri++) {
+      const h1 = ((ri * 2654435761) >>> 0) / 4294967296;
+      const h2 = (((ri * 1597334677) ^ 0x5bd1e995) >>> 0) / 4294967296;
+      const h3 = (((ri * 2246822519) ^ 0x9e3779b9) >>> 0) / 4294967296;
+      const rx = camX + (h1 - .5) * 26;
+      const rz = camZ + (h2 - .5) * 26;
+      const ry = 14 - ((time * fallSpd + h3 * 14) % 14);
+      m.beamS(rx, ry, rz, rx + slantX * streakLen, ry - streakLen, rz + slantZ * streakLen, .009, .006, 0, rr, rg, rb, 3);
+    }
+  }
+
   // Persistent cooling 3D bullet scorch craters & molten embers on struck containers/wharf.
   if (!lite && match.scorches) {
     for (let si = 0; si < match.scorches.length; si++) {
@@ -1411,6 +1613,43 @@ export function movingDetails(match, time, extra = false, lite = false, opts = n
     if (e.kind === 'reinforce') {
       m.ringS(ex, .20 + progress * 2.1, ez, 0, 1, 0, .65 + progress * 2.0, .044 * inv, lite ? 10 : 14, 0, _C_REINF_FX[0], _C_REINF_FX[1], _C_REINF_FX[2], 3);
       if (!lite) m.beamS(ex, .10, ez, ex, 2.8 * inv + .3, ez, .045 * inv, .045 * inv, 0, _C_REINF_FX[0], _C_REINF_FX[1], _C_REINF_FX[2], 3);
+      continue;
+    }
+
+    if (e.kind === 'flow') {
+      m.ringS(ex, .25 + progress * 1.9, ez, 0, 1, 0, .65 + progress * 2.6, .042 * inv, lite ? 10 : 16, 0, _C_REINF_FX[0], _C_REINF_FX[1], _C_REINF_FX[2], 3);
+      continue;
+    }
+
+    if (e.kind === 'launcher') {
+      m.ringS(ex, .25 + progress * 1.7, ez, 0, 1, 0, .55 + progress * 2.0, .040 * inv, lite ? 10 : 14, 0, _C_AMMO_GLOW[0], _C_AMMO_GLOW[1], _C_AMMO_GLOW[2], 3);
+      continue;
+    }
+
+    if (e.kind === 'rocketBlast') {
+      const blastR = (e.radius || 2.0) * (0.35 + progress * 0.65);
+      m.ringS(ex, Math.max(.12, ey), ez, 0, 1, 0, blastR, .075 * inv, lite ? 10 : 18, 0, _C_AMMO_GLOW[0], _C_AMMO_GLOW[1], _C_AMMO_GLOW[2], 3);
+      if (progress < .65) {
+        const coreR = (e.radius || 2.0) * 0.42 * (1 - progress * 0.85);
+        m.ellipsoidS(ex, ey, ez, coreR, coreR, coreR, 0, _C_AMMO_BAND[0], _C_AMMO_BAND[1], _C_AMMO_BAND[2], 3, lite ? 6 : 8, lite ? 3 : 4);
+      }
+      continue;
+    }
+
+    if (e.kind === 'gasBlast' || e.kind === 'heliBlast') {
+      const isHeli = e.kind === 'heliBlast';
+      const blastR = (e.radius || (isHeli ? 9.0 : 5.0)) * (0.2 + progress * 0.8);
+      m.ringS(ex, Math.max(.15, ey), ez, 0, 1, 0, blastR, (isHeli ? .22 : .11) * inv, lite ? 12 : 22, 0, 1.0, isHeli ? .32 : .42, .16, 3);
+      if (progress < .78) {
+        const coreR = (isHeli ? 2.8 : 1.45) * (1 - progress * 0.7);
+        m.ellipsoidS(ex, ey + .35, ez, coreR, coreR, coreR, 0, 1.0, .58, .20, 3, lite ? 6 : 8, lite ? 3 : 4);
+      }
+      continue;
+    }
+
+    if (e.kind === 'judgment') {
+      m.ringS(ex, .25 + progress * 3.0, ez, 0, 1, 0, .9 + progress * 3.6, .08 * inv, lite ? 10 : 18, 0, 1.0, .26, .18, 3);
+      if (!lite) m.beamS(ex, .10, ez, ex, 5.5 * inv + .6, ez, .14 * inv, .14 * inv, 0, 1.0, .38, .20, 3);
       continue;
     }
 

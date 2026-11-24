@@ -39,24 +39,24 @@ function place(a, x, z, yaw = 0, y = 0) {
 // 1. Random Single Assigned Skill (1 per match, strict single-skill enforcement)
 // ============================================================================
 test('L01 | Every match assigns strictly ONE skill randomly and rejects the other skill', () => {
-  assert.deepEqual(SKILL_POOL, ['shaffer', 'heal']);
-  // Deterministic seeds span both skills
+  assert.deepEqual(SKILL_POOL, ['shaffer', 'heal', 'flow', 'stunlauncher']);
+  // Deterministic seeds span all 4 player skills
   const seenSeed = new Set();
-  for (let s = 1; s <= 40; s++) {
+  for (let s = 1; s <= 60; s++) {
     const m = new Match({mode: '1v1', limit: 'unlimited', loadout: 'SW T', skillSeed: s});
     assert(SKILL_POOL.includes(m.player.assignedSkill));
     seenSeed.add(m.player.assignedSkill);
   }
-  assert.equal(seenSeed.size, 2, 'Deterministic seeds must cover both skills');
+  assert.equal(seenSeed.size, 4, 'Deterministic seeds must cover all 4 skills');
 
   // Live random matches (no skillSeed) MUST NOT lock to one value (no Match.rng determinism trap)
   const seenLive = new Set();
-  for (let i = 0; i < 40; i++) {
+  for (let i = 0; i < 60; i++) {
     const m = new Match({mode: '1v1', limit: 'unlimited', loadout: 'SW T'});
     assert(SKILL_POOL.includes(m.player.assignedSkill));
     seenLive.add(m.player.assignedSkill);
   }
-  assert.equal(seenLive.size, 2, 'Live matches must vary randomly across both skills');
+  assert.equal(seenLive.size, 4, 'Live matches must vary randomly across all 4 skills');
 
   // Strict single-skill enforcement
   const mS = new Match({mode: '1v1', limit: 'unlimited', loadout: 'SW T', playerSkill: 'shaffer'});
