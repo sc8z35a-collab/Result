@@ -7,8 +7,10 @@ import {NV11} from './nv11.js';
 import {NV12} from './nv12.js';
 import {NV13Pro} from './nv13pro.js';
 import {NV2} from './nv2.js';
+import {NVSuperSoldier, NVSS_VERSION} from './nvss.js';
 
 export const AI_VERSION_LIST = [
+  {id: 'nvss',    label: 'NV Super Soldier (NVSS)', family: 'nvss'},
   {id: 'human',   label: 'NV2.6 Force', family: 'nv2'},
   {id: 'humain',  label: 'NV2.5',       family: 'nv2'},
   {id: 'manusia', label: 'NV2.4',       family: 'nv2'},
@@ -24,6 +26,7 @@ export const AI_VERSION_LIST = [
 export const AI_VERSION_MAP = Object.fromEntries(AI_VERSION_LIST.map(v => [v.id, v]));
 
 export function normalizeAiModelId(raw, fallback = 'human') {
+  if (raw === 'nvss' || raw === 'supersoldier' || raw === 'nv_ss') return 'nvss';
   if (raw === 'force' || raw === 'nv26') return 'human';
   if (raw === 'nv25') return 'humain';
   if (raw === 'nv24') return 'manusia';
@@ -34,6 +37,7 @@ export function normalizeAiModelId(raw, fallback = 'human') {
 
 export function aiVersionDisplay(id) {
   switch (normalizeAiModelId(id)) {
+    case 'nvss': return NVSS_VERSION;
     case 'nv1': return 'NV1';
     case 'nv11': return 'NV1.1';
     case 'nv12': return 'NV1.2';
@@ -51,10 +55,15 @@ export function isLegacyAiId(id) {
   return AI_VERSION_MAP[normalizeAiModelId(id)]?.family === 'legacy';
 }
 
+export function isNvssAiId(id) {
+  return normalizeAiModelId(id) === 'nvss';
+}
+
 function buildEngineForTeam(match, modelId, teamIdx) {
   const id = normalizeAiModelId(modelId);
   let eng;
-  if (id === 'nv1') eng = new NV1(match);
+  if (id === 'nvss') eng = new NVSuperSoldier(match);
+  else if (id === 'nv1') eng = new NV1(match);
   else if (id === 'nv11') eng = new NV11(match);
   else if (id === 'nv12') eng = new NV12(match);
   else if (id === 'nv13pro') eng = new NV13Pro(match);
@@ -115,6 +124,11 @@ export class ArenaCompositeAI {
     eng.attach(actor);
     const b = eng.brains.get(actor.id);
     if (b) this.brains.set(actor.id, b);
+  }
+
+  addActorBrain(actor, opts = null) {
+    if (opts?.forceNV26) actor.forceNv26 = true;
+    this.attach(actor);
   }
 
   tick(dt) {
@@ -195,8 +209,14 @@ export class ArenaCompositeAI {
 
 export function createMatchAI(match) {
   const tm = match.teamAiModels;
-  if (tm && (isLegacyAiId(tm[0]) || isLegacyAiId(tm[1]))) {
-    return new ArenaCompositeAI(match, tm);
+  if (tm) {
+    if (isNvssAiId(tm[0]) && isNvssAiId(tm[1])) return new NVSuperSoldier(match);
+    if (isLegacyAiId(tm[0]) || isLegacyAiId(tm[1]) || isNvssAiId(tm[0]) || isNvssAiId(tm[1])) {
+      return new ArenaCompositeAI(match, tm);
+    }
+  }
+  if (!tm && isNvssAiId(match.aiModel)) {
+    return new NVSuperSoldier(match);
   }
   if (!tm && isLegacyAiId(match.aiModel)) {
     return new ArenaCompositeAI(match, [match.aiModel, match.aiModel]);

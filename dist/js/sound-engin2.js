@@ -2235,6 +2235,22 @@ export class SoundEngin2 {
     const j = 0.94 + Math.random() * 0.12;
     const burstStep = (e.burstIndex || 0) % 3;
 
+    // Anti-clipping & anti-dropout polyphony governor for overlapping rapid gunfire
+    if (!this._recentFireTimes) this._recentFireTimes = [];
+    if (!this._actorLastFire) this._actorLastFire = new Map();
+    const recent = this._recentFireTimes;
+    let rw = 0;
+    for (let i = 0; i < recent.length; i++) {
+      if (now - recent[i] < 0.14) recent[rw++] = recent[i];
+    }
+    recent.length = rw;
+    const actorKey = a?.id ?? -1;
+    if (!isPlayer && actorKey >= 0) {
+      const prevAt = this._actorLastFire.get(actorKey) ?? -10;
+      if (now - prevAt < 0.068) return;
+      this._actorLastFire.set(actorKey, now);
+    }
+
     this.stats.shots++;
 
     // 3-Band UTD Acoustic Path + Binaural Near-Field Elevation/Head-Shadow
@@ -2245,17 +2261,21 @@ export class SoundEngin2 {
     if (path.occluded) this.stats.occludedEvents++;
     const d = path.dist;
     if (!isPlayer && d > 185) return;
+    // Cull distant/excess NPC shots under extreme overlap so WebAudio voices never saturate or drop out
+    if (!isPlayer && ((recent.length >= 9 && (d > 28 || path.occluded)) || recent.length >= 15)) return;
+    recent.push(now);
+    const polyScale = recent.length > 2 ? 1 / Math.sqrt(1 + (recent.length - 2) * 0.48) : 1.0;
 
     const binaural = isPlayer ? null : computeBinauralNearField(srcPos, this.listenerPos, this.listenerRight, this.listenerFwd);
     const start = now + path.delay;
     const distNorm = clamp(d / 85, 0, 1);
-    const vol = isPlayer ? 1.0 : clamp(path.directGain * 1.20, 0.04, 0.95);
+    const vol = (isPlayer ? 1.0 : clamp(path.directGain * 1.20, 0.04, 0.95)) * polyScale;
     const lpf = binaural ? Math.min(path.cutoffHz, binaural.shadowCutoffHz) : path.cutoffHz;
-    const lowBandVol = isPlayer ? 1.0 : clamp((path.bandGains?.low ?? path.directGain) * 1.25, 0.06, 0.95);
+    const lowBandVol = (isPlayer ? 1.0 : clamp((path.bandGains?.low ?? path.directGain) * 1.25, 0.06, 0.95)) * polyScale;
     const pos = isPlayer ? null : srcPos;
     const muzzlePan = isPlayer ? 0.07 : 0;
     const boltPan = isPlayer ? 0.22 : 0;
-    const revSend = clamp((isPlayer ? 0.34 : 0.26 + distNorm * 0.48) + path.reverbBoost + this.enclosure * 0.28, 0.15, 0.94);
+    const revSend = clamp(((isPlayer ? 0.34 : 0.26 + distNorm * 0.48) + path.reverbBoost + this.enclosure * 0.28) * polyScale, 0.08, 0.94);
     const prio = isPlayer ? 4 : d < 28 ? 3 : 2;
     const elevOpts = binaural ? {elevDeg: binaural.elevDeg, pinnaNotchHz: binaural.pinnaNotchHz} : {};
 
@@ -2273,6 +2293,8 @@ export class SoundEngin2 {
       : gun === 'RD40' ? 1.36 * j
       : gun === 'RD30' ? 1.15 * j
       : gun === 'RD20' ? 1.05 * j
+      : gun === 'SR 1U' ? 1.24 * j
+      : gun === 'STUN LAUNCHER' ? 0.62 * j
       : gun === 'DF1 OUT' ? (e.source === 'p1' ? 1.34 : 1.18) * j
       : gun === 'SRA' ? 1.12 * j
       : gun === 'D1' ? 0.94 * j
@@ -2293,7 +2315,7 @@ export class SoundEngin2 {
     });
 
     // LAYER 2: 300Hz-Class Chest-Impact Sub-Harmonic Punch (diffracts around steel containers via lowBandVol!)
-    const subRate = gun === 'SW T' ? 0.86 : gun === 'D1' ? 0.92 : gun === 'MS10' ? 1.14 : gun === 'DF40 II' ? 1.12 : gun === 'RD40' ? 1.08 : 1.0;
+    const subRate = gun === 'SW T' ? 0.86 : gun === 'D1' ? 0.92 : gun === 'MS10' ? 1.14 : gun === 'DF40 II' ? 1.12 : gun === 'RD40' ? 1.08 : gun === 'STUN LAUNCHER' ? 0.68 : 1.0;
     this._playBuffer({
       buffer: this.sub300Buf,
       rate: subRate * j,
@@ -2306,6 +2328,8 @@ export class SoundEngin2 {
       priority: prio,
       start
     });
+    // Under heavy concurrent gunfire, stop after core punch layers for NPC shots to keep audio crisp & distortion-free
+    if (!isPlayer && recent.length >= 6) return;
 
     // LAYER 3: Weapon-Specific Physical Acoustic Signature
     if (gun === 'MS10') {

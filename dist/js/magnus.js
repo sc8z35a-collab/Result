@@ -27,7 +27,8 @@ const CALIBER_AERO = {
   SRA:       {mass: 0.0068, bc: 0.35, spin: 880,  magnusGain: 0.00026},
   RD20:      {mass: 0.0064, bc: 0.32, spin: 820,  magnusGain: 0.00028},
   'DF1 OUT': {mass: 0.0052, bc: 0.30, spin: 780,  magnusGain: 0.00030},
-  D1:        {mass: 0.0056, bc: 0.29, spin: 740,  magnusGain: 0.00030}
+  D1:        {mass: 0.0056, bc: 0.29, spin: 740,  magnusGain: 0.00030},
+  'SR 1U':   {mass: 0.0066, bc: 0.34, spin: 900,  magnusGain: 0.00027}
 };
 
 /**

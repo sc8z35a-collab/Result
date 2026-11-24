@@ -12,8 +12,8 @@ export const ARV1_UPGRADE_MULT = 1.1;
 export const ARV1_ASSIST_STRENGTH = ARV1_BASE_STRENGTH * ARV1_UPGRADE_MULT; // 1.76x
 export const ARV1_LAUNCH_GAIN = 0.28 * ARV1_ASSIST_STRENGTH;                // 0.4928
 export const ARV1_LAUNCH_STEP = 0.013 * ARV1_ASSIST_STRENGTH;               // 0.02288 rad
-export const ARV1_LOCK_ACQUIRE = 0.078 * Math.sqrt(ARV1_ASSIST_STRENGTH);   // ~0.1035 rad
-export const ARV1_LOCK_HOLD = 0.109 * Math.sqrt(ARV1_ASSIST_STRENGTH);      // ~0.1446 rad
+export const ARV1_LOCK_ACQUIRE = 0.032 * Math.sqrt(ARV1_ASSIST_STRENGTH);   // ~0.0424 rad (~2.4 deg)
+export const ARV1_LOCK_HOLD = 0.046 * Math.sqrt(ARV1_ASSIST_STRENGTH);      // ~0.0610 rad (~3.5 deg)
 export const ARV1_ASSIST_MAX_ANG = 0.11 * Math.sqrt(ARV1_ASSIST_STRENGTH);  // ~0.1459 rad
 const DF_BULLET_SPEED = 360 * 0.65;
 

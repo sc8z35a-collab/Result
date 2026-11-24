@@ -17,6 +17,7 @@ uniform int uOutput;
 uniform int uKHDR;
 uniform vec3 uEye;
 uniform sampler2D uSky;
+uniform vec4 uWeather;
 ${KHDR_TONE_GLSL}
 vec3 sky(vec3 d){
   float a=atan(d.x,-d.z);
@@ -27,7 +28,8 @@ vec3 sky(vec3 d){
   vec3 col=raw*raw*(.80+.20*raw);
   float mu=max(0.,dot(d,SUN));
   vec3 sunAdd=vec3(0.);
-  if(mu>.70){
+  float sunVis=clamp(1.-uWeather.y*1.15,0.,1.);
+  if(mu>.70 && sunVis>.01){
     float m2=mu*mu,m4=m2*m2,m8=m4*m4;
     float halo=.095*(m8*m8*m8);
     if(mu>.96){
@@ -36,9 +38,15 @@ vec3 sky(vec3 d){
       float m16=m8*m8,m32=m16*m16,m64=m32*m32,m128=m64*m64,m256=m128*m128;
       halo+=disc*sunGain+.64*(m256*m128*m32*m4);
     }
-    sunAdd=vec3(1.,.77,.42)*halo;
+    sunAdd=vec3(1.,.77,.42)*halo*sunVis;
   }
-  return col*.99+sunAdd;
+  vec3 outCol=col*.99+sunAdd;
+  if(uWeather.y>.001 || uWeather.z>.001){
+    vec3 overcast=mix(vec3(.24,.29,.34),vec3(.24,.07,.06),uWeather.z);
+    outCol=mix(outCol*(1.-uWeather.y*.65),overcast,clamp(uWeather.y*.78+uWeather.z*.45,0.,.92));
+    outCol+=vec3(.78,.86,1.)*uWeather.w*.55;
+  }
+  return outCol;
 }
 vec3 aces(vec3 x){return clamp((x*(2.51*x+.03))/(x*(2.43*x+.59)+.14),0.,1.);}
 vec3 displayColor(vec3 c){
@@ -58,7 +66,8 @@ vec3 displayColor(vec3 c){
   return kFastGamma(c*.95);
 }
 float fog(float d){
-  float x=max(0.,d*.00265);
+  float wScale=max(1.,uWeather.x);
+  float x=max(0.,d*.00265*wScale);
   float s2=sqrt(sqrt(x));
   return 1.-exp(-x*s2*sqrt(s2));
 }
@@ -164,16 +173,21 @@ float hash(vec2 p){
 float noise(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);return mix(mix(hash(i),hash(i+vec2(1.,0.)),f.x),mix(hash(i+vec2(0.,1.)),hash(i+1.),f.x),f.y);}
 
 vec3 applyWorldFog(vec3 c,vec3 V,float d){
+  vec3 wCol=mix(vec3(.58,.68,.70),vec3(.28,.33,.37),clamp(uWeather.y,0.,1.));
+  wCol=mix(wCol,vec3(.30,.10,.09),clamp(uWeather.z,0.,1.));
+  wCol+=vec3(.55,.65,.78)*uWeather.w*.35;
   if(uQuality<0){
-    return mix(c,vec3(.62,.71,.72),clamp((d-18.)/360.,0.,.86));
+    float lf=clamp((d-18./max(1.,uWeather.x))/(360./max(1.,uWeather.x)),0.,.94);
+    return mix(c,wCol,lf);
   }
   float sdot=max(dot(-V,SUN),0.);
   float s2=sdot*sdot;
   float sunScatter=(uQuality>=2||uKHDR==1)?(s2*sdot):(s2*s2);
-  vec3 fcol=mix(vec3(.58,.68,.70),vec3(.95,.77,.52),sunScatter);
+  float sunVis=clamp(1.-uWeather.y*1.2,0.,1.);
+  vec3 fcol=mix(wCol,vec3(.95,.77,.52),sunScatter*sunVis);
   float fg=fog(d);
   c=mix(c,fcol,fg);
-  if(uQuality>=2 || uKHDR==1)c+=vec3(1.,.78,.46)*sunScatter*fg*(uKHDR==1?.28:.24);
+  if((uQuality>=2 || uKHDR==1) && sunVis>.05)c+=vec3(1.,.78,.46)*sunScatter*fg*sunVis*(uKHDR==1?.28:.24);
   return c;
 }
 
@@ -285,6 +299,9 @@ void main(){
   float umbraDepth=sfMode>=2?mix(.62,1.,vis):sfMode==1?mix(.72,1.,vis):1.;
   vec3 umbraTint=sfMode>=1?mix(vec3(.76,.89,1.12),vec3(1.),vis):vec3(1.);
   vec3 sunCol=uKHDR==1?vec3(2.05,1.56,.96):vec3(1.66,1.32,.88);
+  sunCol*=clamp(1.-uWeather.y*.82,0.12,1.);
+  ambient*=mix(vec3(1.),mix(vec3(.68,.76,.84),vec3(.88,.48,.44),uWeather.z),clamp(uWeather.y,0.,1.));
+  ambient+=vec3(.72,.82,1.)*uWeather.w*.55;
   float posNL=max(nl,0.);
   vec3 direct=posNL*vis*sunCol;
   if(sfMode>=1 && posNL>0.){

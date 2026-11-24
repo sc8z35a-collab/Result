@@ -24,7 +24,9 @@ export const WEAPON_BAND = {
   RD20: {min: 11, ideal: 21, max: 38, burstMax: 4, cap: 20},
   RD40: {min: 14, ideal: 26, max: 48, burstMax: 6, cap: 65},
   'RD 50': {min: 9, ideal: 22, max: 44, burstMax: 7, cap: 50},
-  'DF40 II': {min: 12, ideal: 25, max: 48, burstMax: 6, cap: 300}
+  'SR 1U': {min: 8, ideal: 19, max: 38, burstMax: 7, cap: 40},
+  'DF40 II': {min: 12, ideal: 25, max: 48, burstMax: 6, cap: 300},
+  'STUN LAUNCHER': {min: 10, ideal: 26, max: 60, burstMax: 3, cap: 15}
 };
 
 const NEG_OBS_COS = [Math.cos(-.42), Math.cos(-.16), Math.cos(.16), Math.cos(.42)];
@@ -746,15 +748,17 @@ export class NV13Pro extends NV12 {
     cog.stampField(cog.allyCtrl, a.x, a.z, 10, .85, 3.0);
 
     const actors = this.match.actors;
-    const maxD = b.spy ? 86 : 82;
+    const visScale = this.match.weatherSpec?.visibility ?? 1.0;
+    const maxD = (b.spy ? 86 : 82) * Math.max(0.18, visScale);
     const maxD2 = maxD * maxD;
-    const nearD = b.spy ? 16 : 12;
+    const nearD = (b.spy ? 16 : 12) * Math.max(0.35, visScale);
     const nearD2 = nearD * nearD;
     const cosFov = Math.cos(b.spy ? 1.72 : 1.48);
     const fwdX = Math.sin(a.yaw), fwdZ = -Math.cos(a.yaw);
+    const isHostile = (x, y) => this.match.areHostile ? this.match.areHostile(x, y) : x.team !== y.team;
     for (let i = 0; i < actors.length; i++) {
       const e = actors[i];
-      if (!e.alive || e.team === a.team) continue;
+      if (!e.alive || !isHostile(a, e)) continue;
       if ((e.shafferTimer || 0) > 0) {
         const old = b.contacts.get(e.id);
         if (old) old.seen = false;
@@ -771,9 +775,9 @@ export class NV13Pro extends NV12 {
       const d = Math.sqrt(d2);
       const inView = d2 < nearD2 || (dx * fwdX + dz * fwdZ) > d * cosFov;
       if (inView) {
-        const leanE = e.lean || 0;
+        const leanE = e.isDrone ? 0 : (e.lean || 0);
         const tx = e.x + Math.cos(e.yaw) * leanE;
-        const ty = e.y + 1.23 * (1 - (e.crouch || 0) * .34);
+        const ty = e.isDrone ? (e.y + 0.35) : (e.y + 1.23 * (1 - (e.crouch || 0) * .34));
         const tz = e.z + Math.sin(e.yaw) * leanE;
         if (obstructionCoords(ex, ey, ez, tx, ty, tz) > 1) {
           tpScratch[0] = tx; tpScratch[1] = ty; tpScratch[2] = tz;
@@ -832,7 +836,7 @@ export class NV13Pro extends NV12 {
     const band = WEAPON_BAND[a.gun] || WEAPON_BAND['SW T'];
     for (let i = 0; i < actors.length; i++) {
       const e = actors[i];
-      if (!e.alive || e.team === a.team) continue;
+      if (!e.alive || !isHostile(a, e)) continue;
       const c = b.contacts.get(e.id);
       const {bf, pr} = cog.ensureEnemy(e.id);
       const seen = !!(c?.seen);

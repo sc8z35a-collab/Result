@@ -947,6 +947,12 @@ export class NV2 extends NV13Pro {
     return actor ? this.teamAiTier[actor.team] : 'force';
   }
 
+  addActorBrain(actor, opts = null) {
+    if (opts?.forceNV26) actor.forceNv26 = true;
+    if (opts?.nv27Zonbi) actor.nv27Zonbi = true;
+    this.attach(actor);
+  }
+
   attach(actor) {
     // Preserve episodic memory (Nemesis, Trauma Angles, Enemy Models, EchoPulse Canyon Learning, Mental Ammo, Habits) across respawns!
     const prevBrain = this.brains.get(actor.id);
@@ -977,6 +983,7 @@ export class NV2 extends NV13Pro {
       b.manusiaMode = isManusia;
       b.humainMode = isHumain;
       b.forceMode = isForce;
+      b.nv27Zonbi = !!actor.nv27Zonbi;
       b.visibleEnemies = [];
       b._incoming = [];
       b.dodgeVec = [0, 0];
@@ -2091,8 +2098,9 @@ export class NV2 extends NV13Pro {
     if (!b.visibleEnemies) b.visibleEnemies = [];
     b.visibleEnemies.length = 0;
 
+    const isHostile = (x, y) => this.match.areHostile ? this.match.areHostile(x, y) : x.team !== y.team;
     for (const e of this.match.actors) {
-      if (e.alive && e.team !== a.team && !((e.shafferTimer || 0) > 0) && b.contacts.get(e.id)?.seen) {
+      if (e.alive && isHostile(a, e) && !((e.shafferTimer || 0) > 0) && b.contacts.get(e.id)?.seen) {
         b.visibleEnemies.push(e);
         this.recordEnemyObservation(a.team, e);
         this.match.spectraField?.observe(a.team, e.x, e.z, {sigma: 2.5, weight: 0.90});
@@ -2585,7 +2593,7 @@ export class NV2 extends NV13Pro {
         this.teams[ti].stepFields(t, st.fieldAccum);
         st.fieldAccum = 0;
       }
-      if (this.isTeamHumanMode(ti)) {
+      if (this.isTeamHumanMode(ti) && !this.match.squadFractured) {
         const calls = this.comms.drainReady(ti, t);
         for (let ci = 0; ci < calls.length; ci++) {
           const c = calls[ci];
@@ -2759,7 +2767,7 @@ export class NV2 extends NV13Pro {
 
     for (let ai = 0; ai < actors.length; ai++) {
       const a = actors[ai];
-      if (!a.alive || a.human || (this.teamFilter != null && a.team !== this.teamFilter)) continue;
+      if (!a.alive || a.human || a.isDrone || (a.isZombie && !a.armedZombie) || (this.teamFilter != null && a.team !== this.teamFilter)) continue;
       let b = a._nv2B;
       if (!b || b._ownerNv !== this) {
         b = this.brains.get(a.id);
@@ -2771,12 +2779,17 @@ export class NV2 extends NV13Pro {
       const allies = teamAllies[a.team];
       const enemyCount = teamAllies[1 - a.team].length;
 
-      // Optional Lab NPC assigned single-skill activation
-      if (this.match.lab?.npcSkills && (a.skillCharges || 0) > 0 && a.assignedSkill) {
+      // NPC assigned skill activation (enabled in all standard matches; configurable in Lab)
+      const npcSkillsEnabled = this.match.lab ? this.match.lab.npcSkills : true;
+      if (npcSkillsEnabled && (a.skillCharges || 0) > 0 && a.assignedSkill) {
         if (a.assignedSkill === 'heal' && a.hp < (a.maxHp || 100) * 0.55) {
           this.match.useSkill(a, 'heal');
         } else if (a.assignedSkill === 'shaffer' && (a.shafferTimer || 0) <= 0 && (b.seen || t - b.underFireAt < 1.2)) {
           this.match.useSkill(a, 'shaffer');
+        } else if (a.assignedSkill === 'stunlauncher' && !a.stunLauncher && b.seen) {
+          this.match.useSkill(a, 'stunlauncher');
+        } else if (a.assignedSkill === 'judgment' && !a.inMech && (b.seen || t - b.underFireAt < 2.0)) {
+          this.match.useSkill(a, 'judgment');
         }
       }
 
@@ -3005,6 +3018,8 @@ export class NV2 extends NV13Pro {
       const anchoredWait = b.state === '態勢立て直し' || b.state === '予測待ち伏せ'
         || b.state === '負傷ベイトトラップ';
       let speed = (anchoredWait ? (L > 0.5 ? 2.6 : 0) : 4.64) * a.paceFactor;
+      if (a.inMech && a.mechSpec?.speedMult) speed *= a.mechSpec.speedMult;
+      if (b.nv27Zonbi) speed *= 1.18;
       if (dodgingShot) speed *= isSpy ? 1.28 : 1.18;
       else if (postKillSliding) speed *= 1.16;
       if (counterStrafing) speed *= 0.22;
@@ -3189,6 +3204,19 @@ export class NV2 extends NV13Pro {
         if (this.match.reload(a) && habitReload && b.mind) {
           b.mind.postKillReloadAt = -10;
           this.metrics.humanHabitReloads++;
+        }
+      }
+
+      // Anti-air engagement against Zombie Helicopter when no ground target is in view
+      const heli = this.match.helicopter;
+      if (!hasSeenTarget && heli?.alive && !a.isZombie && a.mag > 0 && a.reload <= 0 && a.cooldown <= 0 && !a.burstLeft) {
+        const eyeA = eyeOf(a);
+        const hdx = heli.x - eyeA[0], hdy = heli.y - eyeA[1], hdz = heli.z - eyeA[2];
+        const hd = Math.hypot(hdx, hdy, hdz);
+        if (hd < 95 && obstruction(eyeA, [heli.x, heli.y, heli.z]) > 1) {
+          a.yaw = Math.atan2(hdx, -hdz);
+          a.pitch = clamp(Math.atan2(hdy, Math.hypot(hdx, hdz) || 1), -1.3, 1.3);
+          this.match.trigger(a);
         }
       }
 

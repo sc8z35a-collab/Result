@@ -133,6 +133,7 @@ export function initialDF40II() {
     gun: DF40II,
     arvVersion: ARV13_VERSION,
     aaVersion: AA13_VERSION,
+    scatterMode: false,
     focusId: -1,
     focusSpawnId: 0,
     focus: 0,
@@ -493,14 +494,6 @@ export function updateDF40II(match, a, dt) {
       const gimbalGain = d.locked ? (d.aa14Active ? 1.2 : 1.0) : d.focus * 0.6;
       targetTrackYaw = clamp(dyaw * 2.0 * gimbalGain, -0.25, 0.25);
       targetTrackPitch = clamp(dpitch * 1.8 * gimbalGain, -0.18, 0.18);
-
-      if (d.locked && ang > 1e-4 && sep < spec.lockHold) {
-        const rate = d.d01Active ? spec.trackGain * 0.88 : spec.trackGain;
-        const step = Math.min(ang, ang * (1 - Math.exp(-rate * dt)), spec.trackRate * dt);
-        const frac = step / ang;
-        a.yaw += dyaw * frac;
-        a.pitch = clamp(a.pitch + dpitch * frac, -1.31, 1.31);
-      }
     }
   }
 

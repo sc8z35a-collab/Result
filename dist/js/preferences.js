@@ -1,5 +1,5 @@
 import {clamp} from './geometry.js';
-import {modes, weapons, DEFAULT_LAB_CONFIG, normalizeLabConfig} from './match.js';
+import {modes, weapons, WEATHERS, ZOMBIE_ROLES, DEFAULT_LAB_CONFIG, normalizeLabConfig} from './match.js';
 import {sizes, qualityLevels, shadowModes} from './renderer.js';
 import {AUDIO_MODES} from './audio.js';
 
@@ -11,8 +11,8 @@ const defaultSettings = {
   autoAim: true, autoAimMode: 'standard',
   audioMode: 'ultra300', audioV2: true, sensitivity: 1, volume: 55, sound: false
 };
-const uiModes = {'3v3': 1, lab: 1};
-const gameRules = {mode: '3v3', limit: 'points', multiplier: 5, loadout: 'SW T', allyNv21: 0, aiModel: 'human', lab: {...DEFAULT_LAB_CONFIG}};
+const uiModes = {'3v3': 1, lab: 1, zombie: 1, br: 1, zombieChallenge: 1};
+const gameRules = {mode: '3v3', limit: 'points', multiplier: 5, loadout: 'SW T', weather: 'clear', h1Zonbi: false, zombieRole: 'runner', allyNv21: 0, aiModel: 'human', lab: {...DEFAULT_LAB_CONFIG}};
 const record = value => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 const choice = (table, value, fallback) => typeof value === 'string' && Object.hasOwn(table, value) ? value : fallback;
 const number = (value, fallback) => {
@@ -55,10 +55,14 @@ export function readPreferences(saved) {
   const rules = {...gameRules};
   rules.mode = choice(uiModes, value.mode, rules.mode);
   rules.loadout = choice(weapons, value.loadout, rules.loadout);
+  if (weapons[rules.loadout]?.temporary) rules.loadout = 'SW T';
+  rules.weather = choice(WEATHERS, value.weather, 'clear');
+  rules.h1Zonbi = !!value.h1Zonbi;
+  rules.zombieRole = choice(ZOMBIE_ROLES, value.zombieRole, 'runner');
   rules.limit = value.limit === 'unlimited' ? 'unlimited' : 'points';
   rules.multiplier = scoreMultiplier(value.multiplier);
   rules.allyNv21 = 0;
-  rules.aiModel = 'human';
+  rules.aiModel = value.aiModel === 'nvss' ? 'nvss' : 'human';
   rules.lab = normalizeLabConfig(value.lab);
   return {settings, rules};
 }

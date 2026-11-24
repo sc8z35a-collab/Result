@@ -1,6 +1,19 @@
 import assert from 'node:assert/strict';
 import {createRequire} from 'node:module';
-import {Match,modes,weapons,npcWeapons,BASE_SHIELD_MAX,BAIZER_MAX_STACK,AMMO_BOX_AMOUNT,AMMO_BOX_COUNT,REINFORCE_MAX_USES,REINFORCE_COUNT,REINFORCE_HP,REINFORCE_SHIELD,MAX_SKILL_CHARGES,KILLS_PER_SKILL_CHARGE,SHAFFER_DURATION,SKILL_POOL} from '../dist/js/match.js';
+import {
+  Match,modes,weapons,npcWeapons,BASE_SHIELD_MAX,BAIZER_MAX_STACK,AMMO_BOX_AMOUNT,AMMO_BOX_COUNT,
+  REINFORCE_MAX_USES,REINFORCE_COUNT,REINFORCE_HP,REINFORCE_SHIELD,MAX_SKILL_CHARGES,KILLS_PER_SKILL_CHARGE,
+  SHAFFER_DURATION,FLOW_DURATION,FLOW_WORLD_SCALE,STUN_LAUNCHER,STUN_LAUNCHER_AMMO,STUN_LAUNCHER_DAMAGE,
+  STUN_LAUNCHER_SPLASH_DAMAGE,STUN_LAUNCHER_SPLASH_RADIUS,ZOMBIE_SPAWN_POINT,ZOMBIE_SPAWN_RATE,
+  GAS_PIPE_COUNT,GAS_PIPE_HP,GAS_PIPE_RADIUS,GAS_PIPE_DAMAGE,DF40II_SCATTER_PELLETS,DF40II_SCATTER_DAMAGE,
+  JUDGMENT_DURATION,JUDGMENT_MECH_HP,JUDGMENT_MECH_SHIELD,JUDGMENT_DAMAGE_MULT,JUDGMENT_RATE_MULT,
+  MECH_TYPES,MECH_TYPE_LIST,WEATHERS,WEATHER_LIST,
+  DRONE_AMMO_COST,DRONE_HP,DRONE_RANGE,DRONE_FIRE_RATE,DRONE_SHOT_VELOCITY,DRONE_SHOT_DAMAGE,DRONE_BARRELS,
+  RAID_5M_TIME,RAID_5M_COUNT,RAID_5M_HP,RAID_5M_GUN,RAID_10M_TIME,RAID_10M_COUNT,RAID_10M_HP,RAID_20M_TIME,RAID_20M_COUNT,
+  HELI_HP,NV27_ZONBI_VERSION,H1_ZONBI_HP,H1_ZONBI_LIVES,H1_ZONBI_GUN,H1_ZONBI_DRONES,
+  ZOMBIE_CHALLENGE_HP,ZOMBIE_CHALLENGE_INITIAL,ZOMBIE_CHALLENGE_SPAWN_RATE,ZOMBIE_ROLES,ZOMBIE_ROLE_LIST,
+  SKILL_POOL,PLAYER_SKILL_POOL,NPC_SKILL_POOL
+} from '../dist/js/match.js';
 import {ARV1_VERSION,ARV1_ASSIST_STRENGTH,ARV1_LAUNCH_GAIN,ARV1_LAUNCH_STEP,ARV1_LOCK_ACQUIRE,ARV1_LOCK_HOLD} from '../dist/js/df1.js';
 import {RD40_AA_VERSION,RD40_ASSIST_STRENGTH,RD40_LOCK_ACQUIRE,RD40_LOCK_HOLD,RD40_D01_DURATION,RD30_MINI_STRENGTH,RD20_AA_STRENGTH,RD_SPECS} from '../dist/js/rd40.js';
 import {
@@ -46,6 +59,8 @@ import {
 import {
   NV2_HUMAN_VERSION,HUMAN_ARCHETYPES,HumanMind,HumanVisionModel,HumanMotorAim,HumanGazeDirector,HumanCommsRelay
 } from '../dist/js/nv2-human.js';
+import {NVSuperSoldier,NVSS_VERSION,NVSSPolicyNet,NVSSHumanRealism} from '../dist/js/nvss.js';
+import {NVSS_ARCH,createBaselineNVSSWeights,loadNVSSWeights,resetNVSSWeights} from '../dist/js/nvss-weights.js';
 import {
   PortAudio,SoundEngin,SoundEngin2,SOUND_ENGIN_VERSION,SOUND_CONTROL_HZ,SUB_CROSSOVER_HZ,
   SPEED_OF_SOUND,AUDIO_MODES,SOUND_CATALOG_COUNT,
@@ -120,28 +135,29 @@ for(const [id,cap,damage,rate,velocity,burstSize,shotsPerTrigger] of [['SW T',10
  assert.equal(mAuto.shots.length,beforeLast+1,'Final 1 round in RD40 mag must fire cleanly without going negative');
  assert.equal(pAuto.mag,0);
 
- // 2. 1.4x expanded lock cone: offset 0.125 rad is outside DF1 OUT (0.1035 rad) yet inside RD40 (0.1449 rad)!
+ // 2. Narrowed 1.4x lock cone: offset 0.051 rad is outside DF1 OUT (0.0425 rad) yet inside RD40 (0.0594 rad)!
  const mDfCone=duel('DF1 OUT'),[pDfC,tDfC]=arrange(mDfCone,2,85,73);
- pDfC.yaw=0.125;forward(mDfCone,pDfC,180);
- assert(!pDfC.df.locked,'DF1 OUT should NOT lock outside its 0.1035 rad cone');
+ pDfC.yaw=0.051;forward(mDfCone,pDfC,180);
+ assert(!pDfC.df.locked,'DF1 OUT should NOT lock outside its narrowed 0.0425 rad cone');
  const rdEvents=[];
  const mRdCone=duel('RD40','unlimited',2,rdEvents),[pRdC,tRdC]=arrange(mRdCone,2,85,73);
- pRdC.yaw=0.125;forward(mRdCone,pRdC,110);
- assert(pRdC.rd.locked&&pRdC.rd.focusId===tRdC.id,'RD40 1.4x expanded lock cone MUST lock cleanly at 0.125 rad');
+ pRdC.yaw=0.051;forward(mRdCone,pRdC,110);
+ assert(pRdC.rd.locked&&pRdC.rd.focusId===tRdC.id,'RD40 1.4x lock cone MUST lock cleanly at 0.051 rad');
  assert(rdEvents.some(e=>e.type==='rdlock'),'RD40 lock acquire must emit rdlock motion/audio event');
  assert(pRdC.rd.lockBlend>0.4&&pRdC.rd.lockPulse>0.5,'RD40 lock acquire must drive lockBlend & lockPulse telemetry');
 
- // 3. Expanded lock-tracking hold cone (0.19 rad > ARV1_LOCK_HOLD 0.1446 rad) + 3D gimbal trackYaw + twin Auto-Aim 1.2 guided bullets
- pRdC.yaw=0.19;forward(mRdCone,pRdC,12);
- assert(pRdC.rd.locked,'RD40 expanded lock hold cone must NOT drop lock at 0.19 rad');
- assert(pRdC.yaw<0.188,'RD40 Auto-Aim 1.2 smooth tracking must pull aim smoothly toward locked target');
+ // 3. Expanded lock-tracking hold cone (0.085 rad > ARV1_LOCK_HOLD 0.0610 rad) + ZERO forced camera aim pull + 3D gimbal trackYaw + twin guided bullets
+ pRdC.yaw=0.085;const rdYawBefore=pRdC.yaw,rdPitchBefore=pRdC.pitch;forward(mRdCone,pRdC,12);
+ assert(pRdC.rd.locked,'RD40 lock hold cone must NOT drop lock at 0.085 rad');
+ assert.equal(pRdC.yaw,rdYawBefore,'RD40 Auto-Aim must NOT forcibly pull player camera yaw');
+ assert.equal(pRdC.pitch,rdPitchBefore,'RD40 Auto-Aim must NOT forcibly pull player camera pitch');
  assert(Math.abs(pRdC.rd.trackYaw)>0.02,'RD40 gimbal tracking telemetry trackYaw must actively follow off-axis target');
  mRdCone.shots.length=0;pRdC.cooldown=0;
  assert(mRdCone.trigger(pRdC));
  assert.equal(mRdCone.shots.length,2);
  assert(mRdCone.shots.every(s=>s.guided&&s.homingTargetId===tRdC.id),'Both twin RD40 bullets must be Auto-Aim 1.2 guided');
 
- // 4. D01 SENSOR: sustains lock & smoothly tracks aim behind steel container, emits d01 event, and expires cleanly after 4.0s!
+ // 4. D01 SENSOR: sustains lock behind steel container without forcing camera aim, emits d01 event, and expires cleanly after 4.0s!
  const d01Events=[];
  const mD01=duel('RD40','unlimited',2,d01Events),[pD,tD]=arrange(mD01,2,85,75);
  forward(mD01,pD,110);
@@ -153,12 +169,13 @@ for(const [id,cap,damage,rate,velocity,burstSize,shotsPerTrigger] of [['SW T',10
  forward(mD01,pD,36); // 0.1s behind wall
  assert(pD.rd.locked&&pD.rd.occluded&&pD.rd.d01Active&&pD.rd.d01Timer>3.5&&pD.rd.d01Timer<RD40_D01_DURATION,'D01 SENSOR must activate and keep lock behind cover');
  assert(d01Events.some(e=>e.type==='d01')&&pD.rd.d01Blend>0.4,'D01 SENSOR activation must emit d01 event and raise d01Blend');
- // Shift enemy laterally behind the steel container and verify D01 SENSOR aim smoothly follows them!
- tD.x=-6.6;
+ // Shift enemy laterally behind the steel container: camera yaw stays untouched while gimbal tracks enemy!
+ tD.x=-7.2;
  const yawBeforeTrack=pD.yaw;
  forward(mD01,pD,120); // 0.33s tracking behind wall
  assert(pD.rd.locked&&pD.rd.d01Active,'D01 SENSOR must maintain lock while enemy strafes behind wall');
- assert(pD.yaw>yawBeforeTrack+0.03,'D01 SENSOR must smoothly track aim toward moving enemy behind wall');
+ assert.equal(pD.yaw,yawBeforeTrack,'D01 SENSOR must NOT forcibly pull player camera yaw');
+ assert(Math.abs(pD.rd.trackYaw)>0.02,'D01 SENSOR gimbal telemetry must track moving enemy behind wall');
  // Advance past finite 4.0s D01 SENSOR window behind cover -> lock must expire cleanly!
  forward(mD01,pD,1500); // >4.1s additional behind wall
  assert(!pD.rd.locked&&!pD.rd.d01Active&&pD.rd.focusId===-1,'D01 SENSOR behind-wall tracking must expire after finite duration');
@@ -182,7 +199,7 @@ for(const [id,cap,damage,rate,velocity,burstSize,shotsPerTrigger] of [['SW T',10
  assert(RD_SPECS.RD30.lockAcquire<ARV1_LOCK_ACQUIRE,'ARV1.1 mini lock cone must be tighter than ARV1.1');
 
  const m30=duel('RD30'),[p30,t30]=arrange(m30,2,85,73);
- p30.yaw=0.05;
+ p30.yaw=0.025;
  const yawBefore=p30.yaw,pitchBefore=p30.pitch;
  forward(m30,p30,190);
  assert(p30.rd.locked&&p30.rd.focusId===t30.id,'RD30 ARV1.1 mini must lock cleanly inside compact cone');
@@ -206,7 +223,7 @@ for(const [id,cap,damage,rate,velocity,burstSize,shotsPerTrigger] of [['SW T',10
  assert(Math.abs(RD20_AA_STRENGTH-ARV1_ASSIST_STRENGTH)<1e-6,'RD20 must carry full ARV1.1 (1.76x) strength');
 
  const m20=duel('RD20'),[p20,t20]=arrange(m20,2,85,73);
- p20.yaw=0.06;
+ p20.yaw=0.03;
  const y20=p20.yaw,pt20=p20.pitch;
  forward(m20,p20,160);
  assert(p20.rd.locked&&p20.rd.focusId===t20.id,'RD20 ARV1.1 must lock cleanly');
@@ -265,17 +282,19 @@ for(const [id,cap,damage,rate,velocity,burstSize,shotsPerTrigger] of [['SW T',10
  pF.stock=1190;pF.ammoClock=0;pF.ammoRate=1.5;
  forward(mFire,pF,360);assert.equal(pF.stock,1193,'DF40 II with tanker 1.5x boost must recover 3 rounds/sec');
 
- // 2. Auto-Aim 1.3 wider acquire cone than RD40 Auto-Aim 1.2 (0.155 rad: RD40 misses, DF40 II locks!)
+ // 2. Auto-Aim 1.3 wider acquire cone than RD40 Auto-Aim 1.2 (0.064 rad: RD40 misses, DF40 II locks!)
  const mRdMiss=duel('RD40'),[pRdM]=arrange(mRdMiss,2,85,73);
- pRdM.yaw=0.155;forward(mRdMiss,pRdM,140);
- assert(!pRdM.rd.locked,'RD40 Auto-Aim 1.2 should NOT acquire outside 0.1449 rad cone');
+ pRdM.yaw=0.064;forward(mRdMiss,pRdM,140);
+ assert(!pRdM.rd.locked,'RD40 Auto-Aim 1.2 should NOT acquire outside 0.0594 rad cone');
  const ev13=[],m13=duel(DF40II,'unlimited',2,ev13),[p13,t13]=arrange(m13,2,85,73);
- p13.yaw=0.155;forward(m13,p13,90);
- assert(p13.df40.locked&&p13.df40.focusId===t13.id,'DF40 II Auto-Aim 1.3 MUST lock cleanly at 0.155 rad (evolved beyond AA1.2)');
+ p13.yaw=0.064;forward(m13,p13,90);
+ assert(p13.df40.locked&&p13.df40.focusId===t13.id,'DF40 II Auto-Aim 1.3 MUST lock cleanly at 0.064 rad (evolved beyond AA1.2)');
  assert(ev13.some(e=>e.type==='rdlock'&&e.gun===DF40II));
- // Expanded hold cone (0.27 rad > RD40 0.253 rad) + smooth magnetic tracking + 2 simultaneous ARV1.3 guided shots
- p13.yaw=0.27;forward(m13,p13,12);
- assert(p13.df40.locked&&p13.yaw<0.266,'Auto-Aim 1.3 must sustain lock at 0.27 rad and smoothly pull aim toward target');
+ // Expanded hold cone (0.115 rad > RD40 0.1068 rad) + ZERO forced camera pull + 2 simultaneous ARV1.3 guided shots
+ p13.yaw=0.115;const df13YawBefore=p13.yaw,df13PitchBefore=p13.pitch;forward(m13,p13,12);
+ assert(p13.df40.locked,'Auto-Aim 1.3 must sustain lock at 0.115 rad');
+ assert.equal(p13.yaw,df13YawBefore,'Auto-Aim 1.3 must NOT forcibly pull player camera yaw');
+ assert.equal(p13.pitch,df13PitchBefore,'Auto-Aim 1.3 must NOT forcibly pull player camera pitch');
  m13.shots.length=0;p13.cooldown=0;
  assert(m13.trigger(p13));
  assert.equal(m13.shots.length,2);
@@ -298,16 +317,16 @@ for(const [id,cap,damage,rate,velocity,burstSize,shotsPerTrigger] of [['SW T',10
  assert(mAcc2.trigger(pA2));const accelDirX=mAcc2.shots.reduce((sum,s)=>sum+s.dir[0],0)/mAcc2.shots.length;
  assert(accelDirX>constVelDirX+0.0003,`ARV1.3 2nd-order lead must bias further ahead for accelerating target (${accelDirX.toFixed(4)} vs ${constVelDirX.toFixed(4)})`);
 
- // 4. Auto-Aim 1.4 Overdrive: locks at 0.205 rad (outside AA1.3 0.1707 rad), snap-locks in <=0.08s, ultra-tight 2-round convergence,
+ // 4. Auto-Aim 1.4 Overdrive: locks at 0.082 rad (outside AA1.3 0.0700 rad), snap-locks in <=0.08s, ultra-tight 2-round convergence,
  //    early manual deactivation cools without lockout, AND sustained use hits 100% OVERHEAT with 6.0s lockout -> ready recovery!
  const ev14=[],m14=duel(DF40II,'unlimited',2,ev14),[p14,t14]=arrange(m14,2,85,73);
- p14.yaw=0.205;forward(m14,p14,90);
- assert(!p14.df40.locked,'Auto-Aim 1.3 must NOT lock outside its 0.1707 rad cone');
+ p14.yaw=0.082;forward(m14,p14,90);
+ assert(!p14.df40.locked,'Auto-Aim 1.3 must NOT lock outside its 0.0700 rad cone');
  const onRes=m14.toggleAA14(p14);
  assert(onRes.ok&&p14.df40.aa14Active&&p14.df40.aaVersion==='1.4','toggleAA14 must engage Auto-Aim 1.4 Overdrive');
  assert(ev14.some(e=>e.type==='aa14'&&e.state==='on'));
- forward(m14,p14,32); // ~0.089s -> AA1.4 snap-locks in 0.06s even at 0.205 rad!
- assert(p14.df40.locked&&p14.df40.focusId===t14.id,'Auto-Aim 1.4 MUST rapidly snap-lock at 0.205 rad');
+ forward(m14,p14,32); // ~0.089s -> AA1.4 snap-locks in 0.06s even at 0.082 rad!
+ assert(p14.df40.locked&&p14.df40.focusId===t14.id,'Auto-Aim 1.4 MUST rapidly snap-lock at 0.082 rad');
  assert(p14.df40.aa14Heat>0&&p14.df40.aa14Heat<30,'Running AA1.4 must accumulate thermal heat');
  // Fire in AA1.4 -> tighter cluster across both simultaneous shots than AA1.3!
  m14.shots.length=0;p14.cooldown=0;
@@ -364,7 +383,7 @@ for(const [id,cap,damage,rate,velocity,burstSize,shotsPerTrigger] of [['SW T',10
  for(const gun of ['DF1 OUT','RD20','RD30','RD40',DF40II]){
   const mOff=new Match({mode:'1v1',limit:'unlimited',loadout:gun,autoAim:false});
   const [p,t]=arrange(mOff,2,85,72);
-  p.yaw+=0.05;
+  p.yaw=0.025;
   const yawBefore=p.yaw,pitchBefore=p.pitch;
   forward(mOff,p,200);
   const st=p.df||p.rd||p.df40;
@@ -479,6 +498,7 @@ for(const [id,cap,damage,rate,velocity,burstSize,shotsPerTrigger] of [['SW T',10
  const ev=[],m=duel('DF1 OUT','points',2,ev),[p,t]=arrange(m,2,85,75);const target=targetPoint(t);p.yaw=0;p.pitch=Math.atan2(target[1]-eyeOf(p)[1],10);const until=(fn)=>{for(let i=0;i<24000&&!fn();i++){m.time+=h;m.systems(p,h);if(!p.cooldown&&!p.burstLeft)m.trigger(p);m.shots=m.shots.filter(s=>m.projectile(s,h));}};until(()=>!t.alive);assert(!t.alive&&p.kills===1);m.damage(t,p,1000);assert.deepEqual(m.scores,[1,0]);assert.equal(p.earned,10);assert.equal(t.earned,0);m.spawn(t);assert.equal(t.shield,25);m.damage(t,p,126);assert(m.ended&&m.winner===0);assert.deepEqual(m.scores,[2,0]);assert.equal(p.earned,20);assert.equal(new Set(ev.filter(e=>e.type==='point').map(e=>e.receipt)).size,2);
 }
 for (const [mode,counts] of Object.entries(modes)) {
+ if(mode==='zombie'||mode==='br'||mode==='zombieChallenge')continue;
  const m=new Match({mode,limit:'points',multiplier:2,loadout:'DF1 OUT'});assert.deepEqual(m.goals,counts.map(c=>c*2));assert(m.actors.every(a=>a.human||a.gun!=='DF1 OUT'));
  for(let i=0;i<360*250&&!m.ended;i++)m.step(h,{});assert(m.ended);assert(m.nv.metrics.crouch+m.nv.metrics.scope>0);assert(m.nv.metrics.cover+m.nv.metrics.disengage+m.nv.metrics.evade>0,'NV2 tactical survival behaviors active');assert(m.nv.metrics.beliefTrack+m.nv.metrics.commanderOrders+m.nv.metrics.suppress+m.nv.metrics.crossfire>0,'NV2 cognitive behaviors active');assert(m.nv.metrics.neuralInferences>0&&m.nv.metrics.neuralUpdates>0&&m.nv.metrics.lookaheadPlans>0,'NV2 deep transformer neural core & minimax lookahead active');
  const hitRate=m.nv.metrics.npcShots>0?m.nv.metrics.npcHits/m.nv.metrics.npcShots:0;
@@ -1469,9 +1489,9 @@ for (const [mode,counts] of Object.entries(modes)) {
   forward(m,p,180);assert.equal(p.reload,0,'Must not reload with 0 stock');
   forward(m,p,200);assert(p.reload>0&&p.autoReloading,'Must auto-reload as soon as 1 round regens into stock');
  }
- // 12B. BAIZER 200 (+20) & BAIZER 400 (+40) purple road pickups: walkable placement, additive stacking up to 100, non-regenerating consumption, absorption order, 3D geometry
+ // 12B. BAIZER 200 (+20) & BAIZER 400 (+40) purple road pickups: walkable placement, additive stacking up to 200, non-regenerating consumption, absorption order, 3D geometry
  {
-  assert.equal(BAIZER_MAX_STACK,100,'BAIZER max stack must be 100');
+  assert.equal(BAIZER_MAX_STACK,200,'BAIZER max stack must be 200');
   assert(baizerPickups.length>=6,'Map must place BAIZER 200 and BAIZER 400 pickups on roads');
   assert(baizerPickups.some(b=>b.kind==='BAIZER 200'&&b.amount===20)&&baizerPickups.some(b=>b.kind==='BAIZER 400'&&b.amount===40));
   for(const b of baizerPickups){
@@ -1485,7 +1505,7 @@ for (const [mode,counts] of Object.entries(modes)) {
   p.x=bz200s[0].x;p.z=bz200s[0].z;p.y=0;
   m.updateBaizers(h);
   assert.equal(p.baizerShield,20,'BAIZER 200 must grant +20 purple shield');
-  assert.equal(p.baizerMax,100);
+  assert.equal(p.baizerMax,200);
   assert(bz200s[0].cooldown>20,'Picked up BAIZER 200 must enter cooldown');
   assert(ev.some(x=>x.type==='baizer'&&x.kind==='BAIZER 200'&&x.amount===20&&x.total===20));
   // Stack BAIZER 400 (+40) -> 20 + 40 = 60!
@@ -1496,26 +1516,25 @@ for (const [mode,counts] of Object.entries(modes)) {
   p.x=bz200s[1].x;p.z=bz200s[1].z;
   m.updateBaizers(h);
   assert.equal(p.baizerShield,80,'Second BAIZER 200 must stack to 80');
-  // Stack another BAIZER 400 (+40) -> capped at 100!
-  const bz400Next=bz400s[1]||bz400s[0];bz400Next.cooldown=0;
-  p.x=bz400Next.x;p.z=bz400Next.z;
-  m.updateBaizers(h);
-  assert.equal(p.baizerShield,100,'BAIZER must cap at 100 max stock');
-  // Walking over a fresh BAIZER while at 100 must NOT consume it!
+  // Stack up to 200 cap!
+  const bz400Next=bz400s[1]||bz400s[0];
+  for(let k=0;k<4;k++){bz400Next.cooldown=0;p.x=bz400Next.x;p.z=bz400Next.z;m.updateBaizers(h);}
+  assert.equal(p.baizerShield,200,'BAIZER must cap at 200 max stock');
+  // Walking over a fresh BAIZER while at 200 must NOT consume it!
   const bzFresh=m.baizers.find(b=>b.cooldown<=0);
   if(bzFresh){
    p.x=bzFresh.x;p.z=bzFresh.z;
    m.updateBaizers(h);
-   assert.equal(p.baizerShield,100);
-   assert.equal(bzFresh.cooldown,0,'Unused BAIZER pickup at 100 cap must stay on road');
+   assert.equal(p.baizerShield,200);
+   assert.equal(bzFresh.cooldown,0,'Unused BAIZER pickup at 200 cap must stay on road');
   }
-  // One-time consumable & non-regenerating + damage absorption order (BAIZER 100 -> 25 Shield -> HP)
+  // One-time consumable & non-regenerating + damage absorption order (BAIZER 200 -> 25 Shield -> HP)
   const r1=m.damage(p,e,15);
   assert(r1.baizer&&!r1.baizerBreak&&!r1.shield);
-  assert.deepEqual([p.baizerShield,p.shield,p.hp],[85,25,100],'Damage must hit purple BAIZER shield first');
+  assert.deepEqual([p.baizerShield,p.shield,p.hp],[185,25,100],'Damage must hit purple BAIZER shield first');
   forward(m,p,360*15);
-  assert.equal(p.baizerShield,85,'Purple BAIZER shield is one-time consumable and MUST NOT regenerate');
-  const r2=m.damage(p,e,95); // Breaks remaining 85 BAIZER + absorbs 10 from 25 base shield!
+  assert.equal(p.baizerShield,185,'Purple BAIZER shield is one-time consumable and MUST NOT regenerate');
+  const r2=m.damage(p,e,195); // Breaks remaining 185 BAIZER + absorbs 10 from 25 base shield!
   assert(r2.baizer&&r2.baizerBreak&&r2.shield&&!r2.shieldBreak);
   assert.deepEqual([p.baizerShield,p.shield,p.hp],[0,15,100],'Overflow from broken BAIZER must flow into 25 base shield');
   const r3=m.damage(p,e,25); // Breaks remaining 15 base shield + deals 10 HP!
@@ -1527,17 +1546,20 @@ for (const [mode,counts] of Object.entries(modes)) {
   const fxNoBz=movingDetails(m,1.0,true,false);
   assert(fxWithBz.count>fxNoBz.count,'Active purple road BAIZER pickups must render 3D meshes in movingDetails');
  }
- // 12C. Random Single Assigned Skill (1 per match from shaffer/heal), 5-Kill Charge Skill System (Max 3 stock), Shaffer (12s) & Recharge Heal
+ // 12C. Random Single Assigned Skill (1 per match from shaffer/heal/flow/stunlauncher), 5-Kill Charge Skill System (Max 3 stock), Shaffer (12s) & Recharge Heal
  {
-  assert.deepEqual(SKILL_POOL,['shaffer','heal']);
-  // Verify random single assignment covers both skills across seeds
+  assert.deepEqual(SKILL_POOL,['shaffer','heal','flow','stunlauncher']);
+  assert.deepEqual(PLAYER_SKILL_POOL,['shaffer','heal','flow','stunlauncher']);
+  assert.deepEqual(NPC_SKILL_POOL,['shaffer','heal','stunlauncher','judgment']);
+  // Verify random single assignment covers all 4 player skills across seeds, and NPCs only get NPC_SKILL_POOL
   const seenSkills=new Set();
-  for(let seed=1;seed<=40;seed++){
+  for(let seed=1;seed<=60;seed++){
    const rm=new Match({mode:'1v1',limit:'unlimited',loadout:'SW T',skillSeed:seed});
-   assert(SKILL_POOL.includes(rm.player.assignedSkill),'Every match must randomly assign strictly 1 skill');
+   assert(SKILL_POOL.includes(rm.player.assignedSkill),'Every match must randomly assign strictly 1 player skill');
+   assert(NPC_SKILL_POOL.includes(rm.actors[1].assignedSkill)&&rm.actors[1].assignedSkill!=='flow','NPCs must only receive skills from NPC_SKILL_POOL (never flow)');
    seenSkills.add(rm.player.assignedSkill);
   }
-  assert.equal(seenSkills.size,2,'Random skill assignment must span both shaffer and heal');
+  assert.equal(seenSkills.size,4,'Random skill assignment must span all 4 player skills');
 
   // Test Heal-assigned match: strictly allows heal and rejects shaffer!
   const evH=[],mH=new Match({mode:'1v1',limit:'unlimited',loadout:'DF40 II',playerSkill:'heal'},x=>evH.push(x)),[pH,eH]=mH.actors;
@@ -1610,14 +1632,14 @@ for (const [mode,counts] of Object.entries(modes)) {
   assert.equal(p.shafferTimer,0,'Shaffer must expire cleanly after 12 seconds');
   for(let i=0;i<25;i++){m.time+=0.05;m.nv.perceive(e,bE)}
   assert(bE.contacts.get(p.id)?.seen,'Enemy AI must be able to perceive player again once Shaffer expires');
-  console.log('Auto-Reload, Shield 25, BAIZER 100 Stack & Random Single Skill (Shaffer 12s / Recharge Heal) OK:',{baseShield:BASE_SHIELD_MAX,baizerMax:BAIZER_MAX_STACK,baizerPickups:baizerPickups.length,maxCharges:MAX_SKILL_CHARGES,shafferSec:SHAFFER_DURATION});
+  console.log('Auto-Reload, Shield 25, BAIZER 200 Stack & Random Single Skill OK:',{baseShield:BASE_SHIELD_MAX,baizerMax:BAIZER_MAX_STACK,baizerPickups:baizerPickups.length,maxCharges:MAX_SKILL_CHARGES,shafferSec:SHAFFER_DURATION});
  }
  {
-  // 13. Randomly placed 50-round Ammo Crates + Player-only NV2.6 +7 Allied Reinforcements (2 uses/match, HP 150, No Shield, Disappear on Death)
+  // 13. Randomly placed 50-round Ammo Crates + Player-only NV2.6 +7 Allied Reinforcements (4 uses/match, HP 200, No Shield, Disappear on Death, No Kill Count)
   assert.equal(AMMO_BOX_AMOUNT,50);
-  assert.equal(REINFORCE_MAX_USES,2);
+  assert.equal(REINFORCE_MAX_USES,4);
   assert.equal(REINFORCE_COUNT,7);
-  assert.equal(REINFORCE_HP,150);
+  assert.equal(REINFORCE_HP,200);
   assert.equal(REINFORCE_SHIELD,0);
   const evA=[],mA=new Match({mode:'1v1',limit:'unlimited',loadout:DF40II,ammoSeed:101},x=>evA.push(x));
   const mB=new Match({mode:'1v1',limit:'unlimited',loadout:DF40II,ammoSeed:202});
@@ -1637,21 +1659,22 @@ for (const [mode,counts] of Object.entries(modes)) {
   const fxNoBoxes=movingDetails(mB,1.0,true,false);
   assert(fxWithBoxes.count>fxNoBoxes.count,'Active 3D ammo boxes must render in movingDetails');
 
-  // Player-only NV2.6 +7 allied reinforcements (max 2 uses/match, 150 HP, 0 shield, disappear permanently on death)
-  assert.equal(mA.reinforceUsesLeft,2,'Player must start with 2 reinforcement calls per match');
+  // Player-only NV2.6 +7 allied reinforcements (max 4 uses/match, 200 HP, 0 shield, disappear permanently on death, excluded from kill count)
+  assert.equal(mA.reinforceUsesLeft,4,'Player must start with 4 reinforcement calls per match');
   assert.equal(mA.callReinforcements(eA),null,'NPCs must NEVER be able to call player reinforcements');
   const w1=mA.callReinforcements(pA);
-  assert(w1&&w1.ok&&w1.count===7&&w1.usesLeft===1,'First reinforcement call must spawn 7 allied NPCs and leave 1 use');
+  assert(w1&&w1.ok&&w1.count===7&&w1.usesLeft===3,'First reinforcement call must spawn 7 allied NPCs and leave 3 uses');
   assert.equal(mA.actors.length,2+7,'Actors list must grow by +7');
   for(const u of w1.units){
    assert.equal(u.team,pA.team,'Reinforcements must be on player team');
    assert.equal(u.human,false);
-   assert.equal(u.hp,150,'Reinforcements must have 150 HP');
-   assert.equal(u.maxHp,150);
+   assert.equal(u.hp,200,'Reinforcements must have 200 HP');
+   assert.equal(u.maxHp,200);
    assert.equal(u.shield,0,'Reinforcements must have 0 shield');
    assert.equal(u.maxShield,0);
    assert.equal(u.aiVersion,'NV2.6','Reinforcements must run NV2.6 engine');
    assert.equal(u.noRespawn,true);
+   assert.equal(u.isReinforcement,true);
    const br=mA.nv.brains.get(u.id);
    assert(br&&br.forceMode===true,'Reinforcement brain must be attached to NV2.6 Force engine');
   }
@@ -1663,24 +1686,390 @@ for (const [mode,counts] of Object.entries(modes)) {
   assert.equal(u0.baizerShield,0,'No-shield reinforcements must not pick up BAIZER shields');
   forward(mA,u0,360*6);
   assert.equal(u0.shield,0,'No-shield reinforcements must NEVER regenerate shield');
-  // Verify reinforcements disappear permanently on death (no respawn)
+  // Verify reinforcements disappear permanently on death AND do NOT count toward kill count or team score
+  const killsBefore=eA.kills,scoreBefore=mA.scores[1];
   mA.damage(u0,eA,150);
-  assert.equal(u0.alive,false,'150 damage must kill 150-HP no-shield reinforcement');
+  assert.equal(u0.alive,true,'150 damage must leave 200-HP reinforcement alive at 50 HP');
+  assert.equal(u0.hp,50);
+  mA.damage(u0,eA,50);
+  assert.equal(u0.alive,false,'200 total damage must kill 200-HP no-shield reinforcement');
   assert.equal(u0.vanished,true,'Killed reinforcement must be marked vanished');
+  assert.equal(eA.kills,killsBefore,'Killing a reinforcement must NOT increment attacker kill count');
+  assert.equal(mA.scores[1],scoreBefore,'Killing a reinforcement must NOT increment team score');
   forward(mA,u0,360*10);
   assert.equal(u0.alive,false,'Killed reinforcement must NEVER respawn');
-  // Second call works (+7 more), third call is blocked (strictly 2 uses per match)
-  const w2=mA.callReinforcements(pA);
-  assert(w2&&w2.ok&&w2.count===7&&w2.usesLeft===0,'Second reinforcement call must spawn 7 more allies and exhaust uses');
-  assert.equal(mA.callReinforcements(pA),null,'Third reinforcement call must be rejected (max 2 uses/match)');
+  // Calls 2, 3, 4 work; 5th call is blocked (strictly 4 uses per match)
+  assert(mA.callReinforcements(pA)?.usesLeft===2);
+  assert(mA.callReinforcements(pA)?.usesLeft===1);
+  assert(mA.callReinforcements(pA)?.usesLeft===0);
+  assert.equal(mA.callReinforcements(pA),null,'Fifth reinforcement call must be rejected (max 4 uses/match)');
   // Even in Lab mode with legacy NV1 AI, reinforcements STILL run NV2.6 Force!
   const mLegacy=new Match({mode:'lab',limit:'unlimited',teamAiModels:['nv1','nv1'],lab:{teamACount:1,teamBCount:1,teamAAi:'nv1',teamBAi:'nv1'}});
   const wLab=mLegacy.callReinforcements(mLegacy.player);
   assert(wLab&&wLab.count===7&&wLab.units.every(u=>mLegacy.nv.brains.get(u.id)?.forceMode===true),'Reinforcements must run NV2.6 Force even in legacy-AI Lab matches');
-  console.log('Random 50-Round Ammo Boxes & Player-Only NV2.6 +7 Reinforcements (2 uses, 150 HP, 0 Shield, No Respawn) OK:',{ammoBoxes:mA.ammoBoxes.length,ammoAmount:AMMO_BOX_AMOUNT,reinforceUses:REINFORCE_MAX_USES,reinforceCount:REINFORCE_COUNT,reinforceHp:REINFORCE_HP,reinforceShield:REINFORCE_SHIELD});
+  console.log('Random 50-Round Ammo Boxes & Player-Only NV2.6 +7 Reinforcements (4 uses, 200 HP, 0 Shield, No Kill Count) OK:',{ammoBoxes:mA.ammoBoxes.length,ammoAmount:AMMO_BOX_AMOUNT,reinforceUses:REINFORCE_MAX_USES,reinforceCount:REINFORCE_COUNT,reinforceHp:REINFORCE_HP,reinforceShield:REINFORCE_SHIELD});
+ }
+ {
+  // 14. SR 1U SMG, FLOW (6s 0.4x), Stun Launcher (15 shots, 10 dmg, 2m 5-dmg splash, lock-on), Zombie Mode, Battle Royale Mode, Destructible Gas Pipes, DF40 II 12-pellet Scatter Mode, NPC Skills & Judgment Giant Mech
+  // 14A. SR 1U SMG specs: 40 mag, rate 230, velocity 90 (324 m/s), stockCap 1000, full-auto 1 round/shot, 7 dmg, 4s auto-regen (0.25/s), usable by NPCs
+  const sr=weapons['SR 1U'];
+  assert(sr&&!sr.playerOnly&&npcWeapons.includes('SR 1U'),'SR 1U must be open to both player and NPCs');
+  assert.deepEqual([sr.capacity,sr.rate,sr.velocity,sr.stockCap,sr.damage,sr.burst,sr.pellets,sr.auto],[40,230,90,1000,7,1,1,true]);
+  assert(Math.abs(sr.speed-324)<1e-6&&Math.abs(sr.stockRegen-0.25)<1e-6,'SR 1U must have 324 m/s speed and 0.25/s (4s per round) regen');
+  const mSr=duel('SR 1U'),pSr=mSr.player;
+  assert.equal(pSr.mag,40);assert.equal(pSr.stock,1000);
+  assert(mSr.trigger(pSr));assert.equal(mSr.shots.length,1);assert.equal(pSr.mag,39);
+  pSr.stock=990;pSr.ammoClock=0;pSr.ammoRate=1;
+  forward(mSr,pSr,360*4);
+  assert.equal(pSr.stock,991,'SR 1U must auto-regen 1 round every 4 seconds');
+  assert(viewModel('SR 1U').count>100&&character(1,'SR 1U','standard','high').count>100);
+
+  // 14B. FLOW State (player-only, 6s duration, 0.4x non-player world speed)
+  assert.equal(FLOW_DURATION,6.0);assert.equal(FLOW_WORLD_SCALE,0.4);
+  const mFlow=new Match({mode:'1v1',limit:'unlimited',loadout:'SR 1U',playerSkill:'flow'}),[pFl,eFl]=mFlow.actors;
+  pFl.skillCharges=1;eFl.skillCharges=1;eFl.assignedSkill='flow';
+  assert(!mFlow.useSkill(eFl,'flow'),'FLOW must be strictly player-only');
+  assert(mFlow.useSkill(pFl,'flow'),'Player must activate FLOW with 1 charge');
+  assert.equal(pFl.flowTimer,6.0);
+  assert.equal(mFlow.worldTimeScale,0.4,'Non-player world time scale must drop to 0.4x during FLOW');
+  // Step 1 second: player clock advances 1.0s while enemy cooldown only advances ~0.4s
+  pFl.cooldown=2.0;eFl.cooldown=2.0;
+  for(let i=0;i<360;i++) mFlow.step(h,{});
+  assert(Math.abs(pFl.cooldown-1.0)<0.05,'Player systems must run at full 1.0x speed during FLOW');
+  assert(Math.abs(eFl.cooldown-1.6)<0.08,'Enemy systems must run at 0.4x speed during FLOW');
+  for(let i=0;i<360*6;i++) mFlow.step(h,{});
+  assert.equal(pFl.flowTimer,0,'FLOW must expire cleanly after 6 seconds');
+  assert.equal(mFlow.worldTimeScale,1.0,'World time scale must restore to 1.0x after FLOW');
+
+  // 14C. Stun Launcher (15 shots, 10 direct dmg, rate 60, vel 30 = 108 m/s, lock-on homing, 2m 5-dmg splash, auto-revert)
+  const sl=weapons[STUN_LAUNCHER];
+  assert(sl&&sl.capacity===15&&sl.damage===10&&sl.rate===60&&sl.velocity===30&&Math.abs(sl.speed-108)<1e-6&&sl.auto===true);
+  assert.equal(STUN_LAUNCHER_AMMO,15);assert.equal(STUN_LAUNCHER_DAMAGE,10);assert.equal(STUN_LAUNCHER_SPLASH_DAMAGE,5);assert.equal(STUN_LAUNCHER_SPLASH_RADIUS,2.0);
+  const mSl=new Match({mode:'1v1',limit:'unlimited',loadout:'SR 1U',playerSkill:'stunlauncher'}),[pSl,eSl]=mSl.actors;
+  pSl.skillCharges=1;
+  assert(mSl.useSkill(pSl,'stunlauncher'));
+  assert.equal(pSl.gun,STUN_LAUNCHER);assert.equal(pSl.stunLauncher.shotsLeft,15);assert.equal(pSl.mag,15);assert.equal(pSl.stunLauncher.prevGun,'SR 1U');
+  // Lock on & fire 1st rocket: verify rocket is guided and deals 5 splash damage within 2m
+  arrange(mSl,2,85,73);pSl.yaw=0;pSl.pitch=0;
+  mSl.findLauncherTarget(pSl);
+  assert(mSl.trigger(pSl));
+  assert.equal(mSl.shots.length,1);
+  assert(mSl.shots[0].rocket&&mSl.shots[0].guided&&mSl.shots[0].homingTargetId===eSl.id,'Stun Launcher rocket must lock onto enemy');
+  assert.equal(pSl.stunLauncher.shotsLeft,14);
+  // Test 2m splash radius directly
+  eSl.hp=100;eSl.shield=0;eSl.x=0;eSl.y=0;eSl.z=10;
+  mSl.detonateRocket(mSl.shots[0],[1.5,0.5,10],null,mSl.time);
+  assert.equal(eSl.hp,95,'Rocket explosion within 2m must deal 5 splash damage');
+  // Exhaust remaining 14 shots -> automatically reverts to SR 1U!
+  for(let k=0;k<14;k++){pSl.cooldown=0;assert(mSl.trigger(pSl));}
+  assert.equal(pSl.stunLauncher,null);
+  assert.equal(pSl.gun,'SR 1U','Stun Launcher must revert to original gun after 15th rocket');
+
+  // 14D. Zombie Mode (4/sec from [0, -84], zombieKills benchmark, reinforcements usable, ends on player death)
+  assert.equal(ZOMBIE_SPAWN_RATE,4);assert.deepEqual(ZOMBIE_SPAWN_POINT,[0,-84]);
+  const mZ=new Match({mode:'zombie',limit:'unlimited',loadout:'DF40 II'});
+  assert.equal(mZ.isZombie,true);assert.equal(mZ.actors.length,1,'Zombie mode starts with player only before wave spawns');
+  for(let i=0;i<360;i++) mZ.step(h,{}); // 1.0s -> 4 zombies spawned
+  const zList=mZ.actors.filter(a=>a.isZombie);
+  assert.equal(zList.length,4,'Zombie mode must spawn 4 zombies per second');
+  assert(zList.every(z=>z.team===1&&z.noRespawn&&Math.hypot(z.x-ZOMBIE_SPAWN_POINT[0],z.z-ZOMBIE_SPAWN_POINT[1])<20),'Zombies must spawn from opposite-side point');
+  mZ.damage(zList[0],mZ.player,200);
+  assert.equal(mZ.zombieKills,1,'Killing a zombie must increment zombieKills');
+  const wZ=mZ.callReinforcements(mZ.player);
+  assert(wZ&&wZ.ok&&wZ.count===7,'Player reinforcements must be usable in Zombie mode');
+  mZ.damage(mZ.player,zList[1],500);
+  assert.equal(mZ.ended,true,'Zombie mode must finish when player dies');
+
+  // 14E. Battle Royale Mode (single life, player death enters spectator mode while allies remain)
+  assert.deepEqual(modes.br,[5,5]);
+  const mBr=new Match({mode:'br',limit:'unlimited',loadout:'SR 1U'});
+  assert.equal(mBr.isBR,true);
+  assert(mBr.actors.every(a=>a.noRespawn===true),'All Battle Royale combatants must have single life (noRespawn)');
+  const brEnemy=mBr.actors.find(a=>a.team===1);
+  mBr.damage(mBr.player,brEnemy,500);
+  assert.equal(mBr.player.alive,false);
+  assert.equal(mBr.spectating,true,'Player dying in Battle Royale while allies survive must enter spectator mode');
+  assert.equal(mBr.ended,false,'Battle Royale must continue while teammates/opponents are still alive');
+
+  // 14F. Destructible Gas Pipes (random placement, 30 HP, 5m radius 25-dmg shockwave to ALL teams)
+  assert.equal(GAS_PIPE_COUNT,6);assert.equal(GAS_PIPE_HP,30);assert.equal(GAS_PIPE_RADIUS,5.0);assert.equal(GAS_PIPE_DAMAGE,25);
+  const evG=[],mG=new Match({mode:'1v1',limit:'unlimited',loadout:'SR 1U',ammoSeed:77},x=>evG.push(x)),[pG,eG]=mG.actors;
+  assert.equal(mG.gasPipes.length,GAS_PIPE_COUNT);
+  const pipe0=mG.gasPipes[0];
+  pG.x=pipe0.x+2.0;pG.z=pipe0.z;pG.y=0;pG.shield=0;pG.hp=100;
+  eG.x=pipe0.x-3.0;eG.z=pipe0.z;eG.y=0;eG.shield=0;eG.hp=100;
+  mG.damageGasPipe(pipe0,30,pG);
+  assert.equal(pipe0.alive,false,'30 damage must destroy gas pipe');
+  assert.equal(pG.hp,75,'Gas pipe shockwave must deal 25 damage to shooter within 5m');
+  assert.equal(eG.hp,75,'Gas pipe shockwave must deal 25 damage to enemy within 5m');
+  assert(evG.some(x=>x.type==='gasPipeBlast'),'Gas pipe destruction must emit gasPipeBlast event');
+
+  // 14G. DF40 II 12-Pellet Scatter Mode (12 simultaneous shots, 1.2 dmg each)
+  assert.equal(DF40II_SCATTER_PELLETS,12);assert.equal(DF40II_SCATTER_DAMAGE,1.2);
+  const mSc=duel(DF40II),pSc=mSc.player;
+  const scOn=mSc.toggleDF40Scatter(pSc);
+  assert(scOn.ok&&scOn.scatterMode===true&&pSc.df40.scatterMode===true);
+  mSc.shots.length=0;pSc.cooldown=0;pSc.mag=600;
+  assert(mSc.trigger(pSc));
+  assert.equal(mSc.shots.length,12,'DF40 II scatter mode must fire 12 simultaneous pellets');
+  assert(mSc.shots.every(s=>Math.abs(s.damage-1.2)<1e-6),'Every DF40 II scatter pellet must deal 1.2 damage');
+  assert.equal(pSc.mag,588,'DF40 II scatter salvo must consume 12 rounds');
+
+  // 14H. NPC-Only Skill: 審判の時 (Judgment) — 6 Distinct Giant Mech Classes
+  assert.equal(JUDGMENT_DURATION,18.0);assert.equal(MECH_TYPE_LIST.length,6,'Must have 6 giant mech classes');
+  assert.equal(JUDGMENT_MECH_HP,500);assert.equal(JUDGMENT_MECH_SHIELD,150);
+  const mJ=new Match({mode:'1v1',limit:'unlimited',loadout:'SR 1U'}),[pJ,eJ]=mJ.actors;
+  pJ.skillCharges=1;pJ.assignedSkill='judgment';
+  assert(!mJ.useSkill(pJ,'judgment'),'Human player MUST NOT be able to activate NPC-only Judgment skill');
+  const seenMechHp=new Set(),seenMechMult=new Set();
+  for(const mKey of MECH_TYPE_LIST){
+   const spec=MECH_TYPES[mKey];
+   assert(spec&&spec.hp>=360&&spec.damageMult>=2.2,`Mech ${mKey} must have high durability and ultra firepower`);
+   eJ.skillCharges=1;eJ.assignedSkill='judgment';
+   assert(mJ.useSkill(eJ,'judgment',{mechType:mKey}),`NPC must activate ${mKey} mech`);
+   assert.equal(eJ.inMech,true);assert.equal(eJ.mechType,mKey);
+   assert.equal(eJ.maxHp,spec.hp);assert.equal(eJ.hp,spec.hp);
+   assert.equal(eJ.maxShield,spec.shield);assert.equal(eJ.shield,spec.shield);
+   assert.equal(eJ.mechTimer,JUDGMENT_DURATION);
+   mJ.shots.length=0;eJ.cooldown=0;eJ.burstLeft=0;eJ.reload=0;eJ.mag=weapons[eJ.gun].capacity;
+   assert(mJ.trigger(eJ));
+   const baseSalvo=weapons[eJ.gun].pellets||1;
+   if(spec.extraPellets) assert.equal(mJ.shots.length,baseSalvo+spec.extraPellets,'Cerberus mech must fire extra simultaneous pellets');
+   if(spec.splash) assert.equal(eJ.mechSpec.splash,true,'Apocalypse mech must enable splash detonation');
+   const expDmg=Math.round(weapons[eJ.gun].damage*spec.damageMult*10)/10;
+   assert(mJ.shots.every(s=>Math.abs(s.damage-expDmg)<1e-6),`${mKey} shots must scale damage by ${spec.damageMult}x`);
+   const fxMech=movingDetails(mJ,1.0,true,false);
+   assert(fxMech.count>0,`${mKey} mech must render 3D silhouette in movingDetails`);
+   seenMechHp.add(spec.hp);seenMechMult.add(spec.damageMult);
+   mJ.revertMech(eJ);
+   assert.equal(eJ.inMech,false);
+  }
+  assert(seenMechHp.size>=4&&seenMechMult.size>=4,'6 giant mech classes must have distinct stat profiles');
+  // Also verify natural 18s expiry revert
+  eJ.skillCharges=1;assert(mJ.useSkill(eJ,'judgment',{mechType:'titan'}));
+  forward(mJ,eJ,360*19);
+  assert.equal(eJ.inMech,false,'Judgment mech must revert cleanly after 18 seconds');
+  assert.equal(eJ.maxHp,100);assert(eJ.shield<=BASE_SHIELD_MAX);
+
+  console.log('Part B Suite OK (SR 1U, FLOW 6s/0.4x, Stun Launcher, Zombie Mode, Battle Royale, Gas Pipes, DF40 II 12-Pellet Scatter, 6 NPC Judgment Mechs)');
+
+  // 15. Part C Suite: 4 Weathers, Ultra-Realistic Blood Splatter, Purchasable Escort Drones, Timed Container Raids & Zombie Helicopter, H1 ZONBI (NV2.7), Zombie Challenge
+  // 15A. 4 Weather Modes (clear, rain -40% vis, storm -60% vis + warp, disaster worst vis + heavy warp + squad fracture)
+  assert.deepEqual(WEATHER_LIST,['clear','rain','storm','disaster']);
+  assert.equal(WEATHERS.clear.visibility,1.0);
+  assert.equal(WEATHERS.rain.visibility,0.60,'Rain must reduce visibility by 40%');
+  assert.equal(WEATHERS.storm.visibility,0.40,'Storm must reduce visibility by 60%');
+  assert(WEATHERS.storm.ballisticWarp>0,'Storm must begin warping bullet trajectories');
+  assert(WEATHERS.disaster.visibility<WEATHERS.storm.visibility,'Disaster must have worst visibility');
+  assert(WEATHERS.disaster.ballisticWarp>WEATHERS.storm.ballisticWarp*2,'Disaster must heavily warp bullet trajectories');
+  assert.equal(WEATHERS.disaster.squadFracture,true,'Disaster must fracture squads');
+  const mDis=new Match({mode:'3v3',limit:'unlimited',loadout:'SR 1U',weather:'disaster'});
+  assert.equal(mDis.squadFractured,true);
+  const ally0=mDis.actors.find(a=>a.team===0&&!a.human);
+  assert(mDis.areHostile(mDis.player,ally0),'Squad fracture in Super Disaster weather must make teammates mutually hostile');
+  // Verify ballistic warp deflects a shot in storm/disaster more than in clear weather
+  const mClr=new Match({mode:'1v1',limit:'unlimited',loadout:'SR 1U',weather:'clear'});
+  const mStm=new Match({mode:'1v1',limit:'unlimited',loadout:'SR 1U',weather:'disaster'});
+  mClr.player.x=0;mClr.player.z=40;mClr.player.yaw=0;mClr.player.pitch=0;
+  mStm.player.x=0;mStm.player.z=40;mStm.player.yaw=0;mStm.player.pitch=0;
+  mClr.trigger(mClr.player);mStm.trigger(mStm.player);
+  const sClr=mClr.shots[0],sStm=mStm.shots[0];
+  for(let i=0;i<60;i++){if(mClr.shots.length)mClr.projectile(sClr,h);if(mStm.shots.length)mStm.projectile(sStm,h);}
+  assert(Math.abs(sStm.dir[0])+Math.abs(sStm.dir[1])>Math.abs(sClr.dir[0])+Math.abs(sClr.dir[1]),'Disaster weather must measurably warp projectile trajectory');
+
+  // 15B. Ultra-Realistic Blood Splatter (3D droplets, arterial mist, decals, expanding kill pool, bloodSplatter event)
+  const evBl=[],mBl=new Match({mode:'1v1',limit:'unlimited',loadout:'SR 1U'},x=>evBl.push(x)),[pBl,eBl]=mBl.actors;
+  eBl.x=2;eBl.z=50;eBl.y=0;eBl.shield=0;eBl.hp=100;
+  mBl.damage(eBl,pBl,40,[0,0,-1],{point:[2,1.2,50]});
+  assert(mBl.bloodDroplets.length>=15,'Hit must spawn physical arterial blood droplets');
+  assert(mBl.bloodMist.length>=3,'Hit must spawn volumetric blood mist');
+  assert(evBl.some(x=>x.type==='bloodSplatter'),'Hit must emit bloodSplatter event');
+  mBl.damage(eBl,pBl,200,[0,0,-1],{point:[2,1.2,50]});
+  assert(mBl.bloodDecals.some(d=>d.pool),'Lethal hit must spawn an expanding coagulating blood pool decal');
+  for(let i=0;i<180;i++) mBl.updateBlood(h);
+  assert(mBl.bloodDecals.length>=5,'Settled blood droplets must stain floor/wall surfaces as decals');
+  const fxBlood=movingDetails(mBl,1.0,true,false);
+  assert(fxBlood.count>0,'Blood droplets/mist/decals must render 3D geometry in movingDetails');
+
+  // 15C. Purchasable Escort Drones (100 ammo cost, unlimited buys, 50 HP / 0 shield, NV2.6, 10m range, 2/s twin barrels, vel 60, 3 dmg, NPC-targetable)
+  assert.equal(DRONE_AMMO_COST,100);assert.equal(DRONE_HP,50);assert.equal(DRONE_RANGE,10.0);
+  assert.equal(DRONE_FIRE_RATE,2.0);assert.equal(DRONE_SHOT_VELOCITY,60);assert.equal(DRONE_SHOT_DAMAGE,3);assert.equal(DRONE_BARRELS,2);
+  const evDr=[],mDr=new Match({mode:'1v1',limit:'unlimited',loadout:DF40II},x=>evDr.push(x)),[pDr,eDr]=mDr.actors;
+  pDr.stock=250;pDr.mag=0;
+  const buy1=mDr.buyDrone(pDr);
+  const buy2=mDr.buyDrone(pDr);
+  assert(buy1&&buy1.ok&&buy2&&buy2.ok,'Player must be able to buy multiple drones at 100 rounds each');
+  assert.equal(pDr.stock,50,'Buying 2 drones must deduct 200 rounds');
+  assert(!mDr.buyDrone(pDr),'Buying a drone with <100 total rounds must fail');
+  const d1=buy1.drone;
+  assert.equal(d1.isDrone,true);assert.equal(d1.hp,50);assert.equal(d1.maxHp,50);assert.equal(d1.shield,0);
+  assert.equal(d1.aiVersion,'NV2.6');assert.equal(d1.noRespawn,true);
+  // Position enemy within 10m of drone with clear LOS so drone fires its twin guns
+  pDr.x=0;pDr.z=60;d1.x=0;d1.z=58;d1.y=2.8;eDr.x=0;eDr.z=52;eDr.y=0;eDr.hp=100;eDr.shield=0;
+  d1.droneFireCd=0;mDr.shots.length=0;
+  mDr.updateDrones(0.05);
+  mDr.updateDrones(0.55);
+  const droneShots=mDr.shots.filter(s=>s.owner===d1);
+  assert.equal(droneShots.length,2,'Drone must fire 2 shots/sec via alternating twin small guns within 10m');
+  assert(droneShots.every(s=>s.damage===3&&Math.abs(s.speed-216)<1e-6),'Drone shots must deal 3 dmg at vel 60 (216 m/s)');
+  // Verify NPCs include enemy drones in hostile perception & can destroy them
+  assert(mDr.areHostile(eDr,d1),'Enemy NPCs must treat opposing drones as valid hostile targets');
+  const d1HpBefore=d1.hp;
+  mDr.damage(d1,eDr,50);
+  assert.equal(d1HpBefore,50);assert.equal(d1.alive,false,'50 damage must destroy escort drone permanently');
+
+  // 15D. Timed Container Zombie Raids (5m: 5x 80HP RD30 + Heli, 10m: 40x 50HP unarmed, 20m: 30x 50HP unarmed) & Shootable Zombie Helicopter
+  assert.equal(RAID_5M_TIME,300);assert.equal(RAID_5M_COUNT,5);assert.equal(RAID_5M_HP,80);assert.equal(RAID_5M_GUN,'RD30');
+  assert.equal(RAID_10M_TIME,600);assert.equal(RAID_10M_COUNT,40);assert.equal(RAID_10M_HP,50);
+  assert.equal(RAID_20M_TIME,1200);assert.equal(RAID_20M_COUNT,30);assert.equal(HELI_HP,450);
+  const evRd=[],mRd=new Match({mode:'3v3',limit:'unlimited',loadout:'SR 1U'},x=>evRd.push(x));
+  mRd.time=RAID_5M_TIME;mRd.updateTimedEvents(h);
+  const z5m=mRd.actors.filter(a=>a.isZombie&&a.armedZombie);
+  assert.equal(z5m.length,5,'5-minute raid must spawn 5 armed zombies');
+  assert(z5m.every(z=>z.maxHp===80&&z.gun==='RD30'),'5-minute raid zombies must have 80 HP and RD30');
+  assert(mRd.helicopter&&mRd.helicopter.alive&&mRd.helicopter.hp===HELI_HP,'Zombie helicopter must deploy on 5-minute raid');
+  // Verify helicopter fires indiscriminately at non-zombie combatants and can be shot down
+  mRd.helicopter.fireCd=0;mRd.shots.length=0;
+  mRd.updateHelicopter(0.05);
+  assert(mRd.shots.some(s=>s.fromHeli),'Zombie helicopter must fire indiscriminately at combatants');
+  mRd.damageHelicopter(HELI_HP,mRd.player);
+  assert.equal(mRd.helicopter.alive,false,'Players/NPCs must be able to shoot down the zombie helicopter');
+  assert(evRd.some(x=>x.type==='heliDestroyed'),'Destroying helicopter must emit heliDestroyed');
+  mRd.time=RAID_10M_TIME;mRd.updateTimedEvents(h);
+  const z10m=mRd.actors.filter(a=>a.isZombie&&!a.armedZombie);
+  assert.equal(z10m.length,40,'10-minute raid must spawn 40 unarmed 50-HP zombies from container');
+  assert(z10m.every(z=>z.maxHp===50&&z.gun==='CLAW'),'10-minute raid zombies must be unarmed 50-HP');
+  mRd.time=RAID_20M_TIME;mRd.updateTimedEvents(h);
+  const z20m=mRd.actors.filter(a=>a.isZombie&&!a.armedZombie);
+  assert.equal(z20m.length,70,'20-minute raid must add +30 unarmed zombies (70 total)');
+
+  // 15E. H1 ZONBI (NV2.7 ZONBI engine, 400 HP, 2 lives, DF40 II, 1.5 Scherp AA, 3 escort drones)
+  assert.equal(NV27_ZONBI_VERSION,'NV2.7 ZONBI');
+  assert.equal(H1_ZONBI_HP,400);assert.equal(H1_ZONBI_LIVES,2);assert.equal(H1_ZONBI_GUN,DF40II);assert.equal(H1_ZONBI_DRONES,3);
+  const evH1=[],mH1=new Match({mode:'1v1',limit:'unlimited',loadout:'SR 1U',h1Zonbi:true},x=>evH1.push(x));
+  const boss=mH1.h1ZonbiActor;
+  assert(boss&&boss.alive&&boss.isH1Zonbi,'h1Zonbi option must spawn H1 ZONBI');
+  assert.equal(boss.aiVersion,'NV2.7 ZONBI');
+  assert.equal(boss.maxHp,400);assert.equal(boss.hp,400);
+  assert.equal(boss.lives,2);assert.equal(boss.gun,DF40II);assert.equal(boss.aaOverride,'1.5');
+  const h1Drones=mH1.actors.filter(a=>a.isDrone&&a.ownerId===boss.id&&a.alive);
+  assert.equal(h1Drones.length,3,'H1 ZONBI must deploy with 3 escort drones');
+  // Kill H1 ZONBI once -> must schedule respawn with 1 life left, then respawn at full 400 HP
+  mH1.damage(boss,mH1.player,999);
+  assert.equal(boss.lives,1,'H1 ZONBI must decrement to 1 remaining life on first death');
+  assert.equal(boss.noRespawn,false,'H1 ZONBI must remain respawnable while lives > 0');
+  assert(evH1.some(x=>x.type==='h1ZonbiRespawn'));
+  forward(mH1,boss,360*4);
+  assert.equal(boss.alive,true,'H1 ZONBI must respawn after respawn timer (2 lives)');
+  assert.equal(boss.hp,400,'H1 ZONBI must respawn with full 400 HP');
+  // Kill H1 ZONBI second time -> permanently defeated
+  mH1.damage(boss,mH1.player,999);
+  assert.equal(boss.alive,false,'H1 ZONBI must stay defeated after losing both lives');
+  assert.equal(boss.noRespawn,true);
+  assert(evH1.some(x=>x.type==='h1ZonbiDefeated'));
+
+  // 15F. Zombie Challenge Mode (Reverse Zombie Mode: 50 HP unarmed player zombie, 50 initial, 3/s center spawn, 2 RD30 NV2.6 noRespawn hunters, 4 roles, survival ranking)
+  assert.equal(ZOMBIE_CHALLENGE_HP,50);assert.equal(ZOMBIE_CHALLENGE_INITIAL,50);assert.equal(ZOMBIE_CHALLENGE_SPAWN_RATE,3);
+  assert.equal(ZOMBIE_ROLE_LIST.length,4,'Zombie Challenge must provide 4 zombie roles');
+  for(const rKey of ZOMBIE_ROLE_LIST) assert(ZOMBIE_ROLES[rKey]&&ZOMBIE_ROLES[rKey].speedMult>0&&ZOMBIE_ROLES[rKey].meleeDmg>0);
+  const mZc=new Match({mode:'zombieChallenge',limit:'unlimited',zombieRole:'caller'});
+  assert.equal(mZc.isZombieChallenge,true);
+  const pZc=mZc.player;
+  assert.equal(pZc.isZombie,true);assert.equal(pZc.gun,'CLAW');assert.equal(pZc.maxHp,50);assert.equal(pZc.hp,50);
+  assert.equal(pZc.shield,0);assert.equal(pZc.maxShield,0);assert.equal(pZc.noRespawn,true);
+  assert.equal(pZc.zombieRole,'caller');
+  const initZombies=mZc.actors.filter(a=>a.team===0&&a.isZombie);
+  const initHunters=mZc.actors.filter(a=>a.team===1&&!a.isZombie);
+  assert.equal(initZombies.length,50,'Zombie Challenge must start with 50 zombies on stage');
+  assert.equal(initHunters.length,2,'Zombie Challenge must oppose zombies with 2 RD30 NV2.6 NPCs');
+  assert(initHunters.every(u=>u.gun==='RD30'&&u.noRespawn===true&&u.aiVersion==='NV2.6'),'Hunters must be RD30-equipped NV2.6 NPCs with no respawn');
+  assert(initZombies.filter(z=>!z.human).every(z=>z.aiVersion==='NV2.7 ZONBI'&&z.maxHp===50&&z.gun==='CLAW'),'AI zombies must run NV2.7 ZONBI unarmed 50 HP');
+  // Step 1.0s -> 3 more zombies must spawn from stage center [0, 0]
+  for(let i=0;i<360;i++) mZc.step(h,{});
+  const after1sZombies=mZc.actors.filter(a=>a.team===0&&a.isZombie);
+  assert.equal(after1sZombies.length,53,'Zombie Challenge must spawn 3 zombies/sec from center');
+  // Verify unarmed melee attack damages hunter
+  const h0=initHunters[0];
+  pZc.x=h0.x;pZc.z=h0.z+1.4;pZc.y=0;pZc.cooldown=0;h0.shield=0;h0.hp=100;
+  assert(mZc.trigger(pZc),'Unarmed zombie melee strike must execute on trigger');
+  assert(h0.hp<100,'Unarmed zombie melee strike must damage hunter NPC');
+  // Verify survival ranking is computed on player death
+  mZc.damage(pZc,h0,200);
+  assert.equal(mZc.ended,true,'Zombie Challenge must end when player zombie dies (single life)');
+  assert(mZc.zombieChallengeRanking&&mZc.zombieChallengeRanking.totalZombies>=50&&mZc.zombieChallengeRanking.playerRank>=1,'Zombie Challenge must compute survival time ranking vs NV2.7 ZONBI zombies');
+
+  console.log('Part C Suite OK (6 Giant Mechs, 4 Weathers + Squad Fracture, Ultra-Realistic Blood Splatter, Purchasable NV2.6 Escort Drones, 5m/10m/20m Container Raids + Helicopter, H1 ZONBI NV2.7, Zombie Challenge 4 Roles & Ranking)');
+
+  // 16. NV Super Soldier (NVSS) Suite: Entity-Set Transformer, Colab Weight Loader, Zero-Shot Future-Feature Adaptation & 10x Human Realism
+  {
+   // 16A. Flash & Hogan 5th-order Minimum-Jerk kinematics & Colab JSON weight loader round-trip
+   assert.equal(NVSSHumanRealism.minJerk(0),0);
+   assert.equal(NVSSHumanRealism.minJerk(0.5),0.5);
+   assert.equal(NVSSHumanRealism.minJerk(1),1);
+   const baseW=createBaselineNVSSWeights();
+   const colabPayload={
+    version:'NVSS-1.0-COLAB-RL',trainedSteps:125000000,trainedMatches:1800000,source:'colab-pro-a100',
+    weights:Object.fromEntries(['wSelf','bSelf','wEnt','bEnt','wQ','wK','wV','wO','wGate','wUp','wDown','wTactic','bTactic','wMotor','bMotor','wCap','bCap','wVal','bVal'].map(k=>[k,Array.from(baseW[k])]))
+   };
+   const loadedW=loadNVSSWeights(JSON.stringify(colabPayload),false);
+   assert.equal(loadedW.trainedSteps,125000000);assert.equal(loadedW.trainedMatches,1800000);
+   const net=new NVSSPolicyNet();
+   net.selfVec[0]=0.85;net.entCount=2;net.entTokens[8]=1;net.entTokens[13]=1;
+   const out=net.forward(loadedW);
+   assert(Number.isFinite(out.value)&&out.tacticProb>0&&out.tacticProb<=1,'NVSS Transformer forward pass must produce finite policy & value');
+   resetNVSSWeights();
+
+   // 16B. Full NVSS vs NV2.6 Force live match + zero-shot future capability/entity injection + drone & weather adaptation
+   const mNv=new Match({mode:'3v3',allNpc:true,limit:'unlimited',teamAiModels:['nvss','human'],weather:'storm'});
+   assert(mNv.nv.engines&&mNv.nv.engines[0] instanceof NVSuperSoldier,'Team A must run NV Super Soldier (NVSS)');
+   const nvEng=mNv.nv.engines[0];
+   let futureUsed=0;
+   mNv.customEntities=[{x:0,y:1.2,z:25,hostile:false,pickup:true,threat:0.2,alive:true}];
+   mNv.dynamicCapabilities=[{
+    id:'future_quantum_pulse_v99',
+    descriptor:[0.85,0.65,0.55,0.60,0.40,0.95,0.40,1.0],
+    canUse:(a)=>a.alive&&futureUsed<3,
+    execute:()=>{futureUsed++;return true;}
+   }];
+   // Give NVSS units generous stock & position opposing squads within storm visibility range for active combat
+   for(const a of mNv.actors){
+    if(a.team===0){a.stock=400;a.x=(a.slot-1)*3;a.z=62;a.y=0;}
+    else{a.x=(a.slot-1)*3;a.z=44;a.y=0;}
+   }
+   for(let i=0;i<360*8;i++) mNv.step(h,{});
+   assert(nvEng.metrics.nvssInferences>=100,'NVSS must continuously run Entity-Set Transformer inference');
+   assert(nvEng.metrics.nvssMinJerkTrajectories>0,'NVSS must execute biomechanical Minimum-Jerk aim trajectories');
+   assert(nvEng.metrics.nvssSaccades>0||nvEng.metrics.nvssWeatherCompensations>0,'NVSS must perform saccades & storm ballistic compensation');
+   assert(nvEng.metrics.nvssDroneBuys>0,'NVSS must autonomously deploy NV2.6 escort drones with excess ammo');
+   assert(futureUsed>0,'NVSS must zero-shot discover and activate brand-new unknown future capabilities');
+   assert(nvEng.metrics.nvssFeatureAdaptations>=futureUsed,'NVSS must record feature adaptation telemetry');
+   assert(nvEng.metrics.nvssHumanRealismScore>0,'NVSS must compute human-realism index');
+
+   // 16C. NVSS Tactical Gas-Pipe Trap Sniping (open main yard with guaranteed LOS)
+   const mTrap=new Match({mode:'1v1',allNpc:true,limit:'unlimited',aiModel:'nvss',ammoSeed:42});
+   const [nvA,nvB]=mTrap.actors;
+   const pipe=mTrap.gasPipes[0];
+   pipe.x=0;pipe.z=52;pipe.y=0;pipe.alive=true;pipe.hp=30;
+   nvB.x=1.5;nvB.z=52;nvB.y=0;nvB.hp=100;nvB.shield=0;
+   nvA.x=0;nvA.z=62;nvA.y=0;nvA.yaw=0;nvA.pitch=0;nvA.cooldown=0;nvA.mag=weapons[nvA.gun].capacity;
+   for(let i=0;i<360*2&&pipe.alive;i++) mTrap.step(h,{});
+   assert(mTrap.nv.metrics.nvssGasPipeTraps>0||!pipe.alive,'NVSS must detect enemies next to gas pipes and snipe them');
+
+   console.log('NV Super Soldier (NVSS) Suite OK:',{
+    version:NVSS_VERSION,
+    inferences:nvEng.metrics.nvssInferences,
+    minJerk:nvEng.metrics.nvssMinJerkTrajectories,
+    saccades:nvEng.metrics.nvssSaccades,
+    mindGames:nvEng.metrics.nvssMindGames,
+    droneBuys:nvEng.metrics.nvssDroneBuys,
+    futureCapUsed:futureUsed,
+    gasPipeTraps:mTrap.nv.metrics.nvssGasPipeTraps,
+    realismScore:nvEng.metrics.nvssHumanRealismScore
+   });
+  }
  }
 }
-console.log('360Hz sim, weapon specs (DF1 OUT 95-mag 2x rate, MS10, RD20/30/40, DF40 II 600-mag 2-shot dmg-4 vel-112 rate-260 stock-1200 2/s ARV1.3/AA1.3/AA1.4), Random 50-Round Ammo Boxes, NV2.6 +7 Reinforcements (2 uses, 150 HP, 0 Shield, No Respawn), Auto-Aim 1.5 Scherp (Lab-exclusive), Lab Mode 10-Gen AI Arena, MagnusAero 1.0, KineticFlow 1.0, QuantumTick 1.0, Auto-Reload, Shield 25, BAIZER 100 Stack, Random Single Skill, FluxGI 1.0, SchlierenOptics 1.0, BallisticCore-X, EchoPulse 1.0, NV-Synapse 1.0, AeroVortex 1.0, ThermoFlux 1.0, SpectraField 1.0, ResonanceCore 1.0, ChronoTrace 1.0, FermatCore 1.0, Lightweight Mode LOD, 16-joint sculpted rig, KHDR, Shadow Flame 1.0 Flash/Pro, Sound Engin 2.0, NV2.6 Force, NV2.1 Spy, and all matches passed.');
+console.log('360Hz sim, weapon specs (DF1 OUT, MS10, RD20/30/40, DF40 II 600-mag 2-shot/12-pellet-scatter, SR 1U SMG), Narrowed Non-Forced Auto-Aim, FLOW 6s/0.4x, Stun Launcher, Zombie Mode, Zombie Challenge (4 Roles, NV2.7 ZONBI Ranking), Battle Royale, Destructible Gas Pipes, 6 NPC Judgment Mechs, 4 Weathers (Squad Fracture), Ultra-Realistic Blood Splatter, Purchasable NV2.6 Escort Drones, Timed Container Raids + Helicopter, H1 ZONBI (NV2.7), NV Super Soldier (NVSS + Colab Pro GPU RL), Random 50-Round Ammo Boxes, NV2.6 +7 Reinforcements, BAIZER 200 Stack, Sound Engin 2.0, Lightweight LOD, and all matches passed.');
 
 
 
