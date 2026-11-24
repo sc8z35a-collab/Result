@@ -2,7 +2,7 @@ import {PilotEquipment} from './df-hud.js';
 import {eyeOf} from './posture.js';
 import {Renderer, effectiveSize} from './renderer.js';
 import {titleCamera} from './harbor.js';
-import {Match, modes, weapons, BASE_SHIELD_MAX, BAIZER_MAX_STACK, MAX_SKILL_CHARGES, KILLS_PER_SKILL_CHARGE, normalizeLabConfig} from './match.js';
+import {Match, modes, weapons, BASE_SHIELD_MAX, BAIZER_MAX_STACK, REINFORCE_MAX_USES, REINFORCE_COUNT, MAX_SKILL_CHARGES, KILLS_PER_SKILL_CHARGE, normalizeLabConfig} from './match.js';
 import {obstruction} from './yard.js';
 import {forward, add, clamp} from './geometry.js';
 import {SoundEngin, SOUND_ENGIN_VERSION} from './audio.js';
@@ -559,8 +559,8 @@ document.addEventListener('click', e => {
 coarsePointer.addEventListener?.('change', e => setInputType(e.matches));
 function controls() {
   const rows = touch
-    ? [['移動 / ダッシュ', '左スティック（前傾ダッシュ）'], ['視点', '右スワイプ / 射撃ドラッグ'], ['発射 / 装填', '射撃ボタン / R'], ['技（5撃破毎・最大3）', '下部 技ボタン'], ['ジャンプ / しゃがみ', '↑ / しゃがみ'], ['全画面', '画面タップで自動全画面'], ['オートエイム', '対戦設定で変更'], ['FLIR / 煙幕 / 解析', '左下ボタン']]
-    : [['移動 / ダッシュ', 'WASD / Shift'], ['視点', 'マウス / 矢印キー'], ['発射 / 装填', '左クリック・F / R'], ['技（5撃破毎・最大3）', '4 / Z'], ['ジャンプ / しゃがみ', 'Space / Ctrl'], ['全画面', '画面クリックで自動全画面'], ['オートエイム', '対戦設定で変更'], ['FLIR / 煙幕 / 解析', 'T / G / L / K / M'], ['一時停止', 'Esc / P']];
+    ? [['移動 / ダッシュ', '左スティック（前傾ダッシュ）'], ['視点', '右スワイプ / 射撃ドラッグ'], ['発射 / 装填', '射撃ボタン / R'], ['技（5撃破毎・最大3）', '下部 技ボタン'], ['NV2.6 増援 (+7体·2回)', '下部 増援ボタン'], ['ジャンプ / しゃがみ', '↑ / しゃがみ'], ['全画面', '画面タップで自動全画面'], ['オートエイム', '対戦設定で変更'], ['FLIR / 煙幕 / 解析', '左下ボタン']]
+    : [['移動 / ダッシュ', 'WASD / Shift'], ['視点', 'マウス / 矢印キー'], ['発射 / 装填', '左クリック・F / R'], ['技（5撃破毎・最大3）', '4 / Z'], ['NV2.6 増援 (+7体·2回)', '6 / N'], ['ジャンプ / しゃがみ', 'Space / Ctrl'], ['全画面', '画面クリックで自動全画面'], ['オートエイム', '対戦設定で変更'], ['FLIR / 煙幕 / 解析', 'T / G / L / K / M'], ['一時停止', 'Esc / P']];
   if (match?.player.df)rows.push(...(touch ? [['DF1 OUT', '右側専用ボタン']] : [['範囲 / P1', 'Q / X'], ['照準 / レンズ', '右クリック・C / V'], ['EVR1 購入', 'B']]));
   if (match?.player.df40)rows.push(...(touch ? [['DF40 II · AA1.4', '右側 AA1.4 ボタン']] : [['AA 1.4 起動/解除', 'X / E']]));
   $('controls').innerHTML = rows.map(([a, b]) => `<span>${a}</span><b>${b}</b>`).join('')
@@ -747,7 +747,7 @@ function lobby() {
     ? '無制限試合（時間・得点制限なし）'
     : `勝利条件：味方 ${a * v} 点 ／ 敵 ${b * v} 点先取`;
   const w = weapons[rules.loadout];
-  const modeLabel = rules.loadout === 'DF40 II' ? '4発同時' : w.auto && w.pellets > 1 ? `${w.pellets}発同時` : w.auto && w.burst > 1 ? `${w.burst}発連射` : w.auto ? 'フルオート' : w.burst > 1 ? w.burst + '点' : '単発';
+  const modeLabel = w.auto && w.pellets > 1 ? `${w.pellets}発同時` : w.auto && w.burst > 1 ? `${w.burst}発連射` : w.auto ? 'フルオート' : w.burst > 1 ? w.burst + '点' : '単発';
   const effDmg = w.pellets > 1 ? w.damage * w.pellets : w.damage;
   const dmgLabel = w.pellets > 1 ? `${w.damage}×${w.pellets}` : `${w.damage}`;
   const dmgPct = clamp((effDmg / 60) * 100, 12, 100).toFixed(0);
@@ -1313,6 +1313,16 @@ function event(e) {
     $('combatNotice').textContent = `BAIZER +${gained} (${tot}/${BAIZER_MAX_STACK})`;
     noticeUntil = match.time + 2.2;
   }
+  if (e.type === 'ammoBox' && p && e.actor === p) {
+    const gained = e.gained ?? e.amount;
+    $('combatNotice').textContent = `弾薬箱 +${gained}発`;
+    noticeUntil = match.time + 2.0;
+  }
+  if (e.type === 'reinforce' && p && e.actor === p) {
+    $('combatNotice').textContent = `NV2.6 増援 +${e.count}体展開 (残${e.usesLeft}/${REINFORCE_MAX_USES})`;
+    noticeUntil = match.time + 2.6;
+    feed.push({line: `NV2.6 増援 +${e.count}体 展開`, team: p.team, until: match.time + 4.5});
+  }
   if (e.type === 'skill_charge' && p && e.actor === p) {
     const skName = p.assignedSkill === 'shaffer' ? 'シャッファー' : p.assignedSkill === 'heal' ? 'リチャージヒール' : '';
     if (skName) {
@@ -1368,6 +1378,20 @@ function triggerSkill(skill) {
   const ok = match.useSkill(a, chosen);
   if (ok) hud();
   return ok;
+}
+function triggerReinforce() {
+  if (screen !== 'game' || !match || match.spectating || !match.player?.alive) return false;
+  if ((match.reinforceUsesLeft || 0) <= 0) {
+    $('combatNotice').textContent = `NV2.6 増援 0/${REINFORCE_MAX_USES}`;
+    noticeUntil = match.time + 1.2;
+    return false;
+  }
+  const res = match.callReinforcements(match.player);
+  if (res?.ok) {
+    hud();
+    return true;
+  }
+  return false;
 }
 function hud() {
   if (!match) return;
@@ -1453,11 +1477,12 @@ function hud() {
     if (!hideSh) setTxt($('shafferBadge'), `シャッファー ${a.shafferTimer.toFixed(1)}s`);
   }
   const assigned = a.assignedSkill || null;
-  setHid($('skillBar'), spec || !assigned);
+  setHid($('skillBar'), spec);
   const charges = a.skillCharges || 0;
   const kills = a.skillKills || 0;
   const pips = $('skillPips');
   if (pips) {
+    setHid(pips.parentElement, !assigned);
     const kids = pips.children;
     for (let i = 0; i < kids.length; i++) setCls(kids[i], 'is-full', i < charges);
   }
@@ -1477,6 +1502,15 @@ function hud() {
     setCls(btnHl, 'is-ready', charges > 0 && a.hp < maxHp && a.alive);
     const dis = !a.alive || charges <= 0 || a.hp >= maxHp;
     if (btnHl.disabled !== dis) btnHl.disabled = dis;
+  }
+  const btnRf = $('btnReinforce');
+  if (btnRf) {
+    const rfLeft = match.reinforceUsesLeft || 0;
+    setHid(btnRf, spec);
+    setCls(btnRf, 'is-ready', rfLeft > 0 && a.alive);
+    const dis = !a.alive || rfLeft <= 0;
+    if (btnRf.disabled !== dis) btnRf.disabled = dis;
+    setTxt($('reinforceLabel'), `NV2.6 増援 ${rfLeft}/${REINFORCE_MAX_USES}`);
   }
   setTxt($('gunName'), spec ? `${a.name} · ${a.gun}` : a.gun);
   setTxt($('magVal'), a.mag);
@@ -1509,6 +1543,17 @@ function hud() {
     }
   }
   setTxt($('baizerHint'), spec || !a.alive || !nearestBz ? '' : `${nearestBz.kind} ${Math.round(Math.sqrt(nearestBzDist2))}m`);
+  let nearestAb = null, nearestAbDist2 = 324;
+  const ammoBoxes = match.ammoBoxes;
+  if (ammoBoxes) {
+    for (let i = 0; i < ammoBoxes.length; i++) {
+      const box = ammoBoxes[i];
+      if (box.cooldown > 0) continue;
+      const dx = box.x - a.x, dz = box.z - a.z, d2 = dx * dx + dz * dz;
+      if (d2 < nearestAbDist2) { nearestAbDist2 = d2; nearestAb = box; }
+    }
+  }
+  setTxt($('ammoBoxHint'), spec || !a.alive || !nearestAb ? '' : `弾薬箱(+50) ${Math.round(Math.sqrt(nearestAbDist2))}m`);
   setHid($('respawn'), spec || a.alive);
   $('reticle').hidden = !a.alive || !!a.df?.ads;
   if (spec && spectateCam !== 'fps') $('reticle').hidden = true;
@@ -1671,7 +1716,7 @@ document.addEventListener('keydown', e => {
   }
   if (screen !== 'game' || !match || document.hidden || e.target?.closest?.('input, textarea, select, [contenteditable=true]')) return;
   if (e.code === 'Space' && e.target?.closest?.('button')) return;
-  if (['Space', 'Tab', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyF', 'KeyR', 'KeyT', 'KeyG', 'KeyL', 'KeyK', 'KeyM', 'Digit0', 'Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6', 'Digit7', 'Digit8', 'Digit9', 'KeyZ', 'KeyH'].includes(e.code)) e.preventDefault();
+  if (['Space', 'Tab', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyF', 'KeyR', 'KeyT', 'KeyG', 'KeyL', 'KeyK', 'KeyM', 'Digit0', 'Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6', 'Digit7', 'Digit8', 'Digit9', 'KeyZ', 'KeyH', 'KeyN'].includes(e.code)) e.preventDefault();
   keys.add(e.code);
   if (e.repeat) return;
   if (e.code === 'KeyP') { doPause(); return; }
@@ -1706,6 +1751,7 @@ document.addEventListener('keydown', e => {
   if (e.code === 'KeyT') toggleFlir();
   if (e.code === 'KeyG') triggerSmokeVent();
   if (e.code === 'Digit4' || e.code === 'KeyZ' || e.code === 'Digit5' || e.code === 'KeyH') triggerSkill(match.player?.assignedSkill);
+  if (e.code === 'Digit6' || e.code === 'KeyN') triggerReinforce();
   if (e.code === 'KeyK') {
     settings.fermatCore = !settings.fermatCore;
     save();
@@ -1891,7 +1937,8 @@ for (const [id, action] of [
   ['touchSmoke', () => triggerSmokeVent()],
   ['touchChrono', () => toggleChrono()],
   ['btnShaffer', () => triggerSkill('shaffer')],
-  ['btnHeal', () => triggerSkill('heal')]
+  ['btnHeal', () => triggerSkill('heal')],
+  ['btnReinforce', () => triggerReinforce()]
 ]) {
   const el = $(id);
   if (el) el.onclick = () => { el.blur?.(); if (screen === 'game') action(); };

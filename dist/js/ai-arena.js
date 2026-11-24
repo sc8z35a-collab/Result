@@ -97,8 +97,20 @@ export class ArenaCompositeAI {
     return out;
   }
 
+  _getReinforceEngine() {
+    if (!this.reinforceEngine) {
+      this.reinforceEngine = new NV2(this.match);
+      this.reinforceEngine.teamAiTier = ['force', 'force'];
+    }
+    return this.reinforceEngine;
+  }
+
+  _allEngines() {
+    return this.reinforceEngine ? [...this.engines, this.reinforceEngine] : this.engines;
+  }
+
   attach(actor) {
-    const eng = this.engines[actor.team];
+    const eng = actor?.forceNv26 ? this._getReinforceEngine() : this.engines[actor.team];
     if (!eng) return;
     eng.attach(actor);
     const b = eng.brains.get(actor.id);
@@ -108,51 +120,52 @@ export class ArenaCompositeAI {
   tick(dt) {
     this.engines[0].tick(dt);
     this.engines[1].tick(dt);
+    if (this.reinforceEngine) this.reinforceEngine.tick(dt);
     this.metrics = this._mergedMetrics();
   }
 
   learn(actor, positive) {
-    const eng = this.engines[actor?.team];
+    const eng = actor?.forceNv26 ? this.reinforceEngine : this.engines[actor?.team];
     eng?.learn?.(actor, positive);
   }
 
   onHit(v, owner, dir, power, shieldBreak) {
-    if (v && !v.human) this.engines[v.team]?.onHit?.(v, owner, dir, power, shieldBreak);
+    if (v && !v.human) (v.forceNv26 ? this.reinforceEngine : this.engines[v.team])?.onHit?.(v, owner, dir, power, shieldBreak);
     if (owner && !owner.human && owner.team !== v?.team) {
-      this.engines[owner.team]?.onHit?.(v, owner, dir, power, shieldBreak);
+      (owner.forceNv26 ? this.reinforceEngine : this.engines[owner.team])?.onHit?.(v, owner, dir, power, shieldBreak);
     }
   }
 
   onKill(killer, victim) {
-    for (const eng of this.engines) eng.onKill?.(killer, victim);
+    for (const eng of this._allEngines()) eng.onKill?.(killer, victim);
   }
 
   onReload(actor) {
-    for (const eng of this.engines) eng.onReload?.(actor);
+    for (const eng of this._allEngines()) eng.onReload?.(actor);
   }
 
   onTanker(actor, tk) {
-    for (const eng of this.engines) eng.onTanker?.(actor, tk);
+    for (const eng of this._allEngines()) eng.onTanker?.(actor, tk);
   }
 
   onShotFired(actor, source) {
-    for (const eng of this.engines) {
+    for (const eng of this._allEngines()) {
       if (eng.onShotFired) eng.onShotFired(actor, source);
       else eng.sound?.(actor);
     }
   }
 
   onBulletWhiz(v, s, d) {
-    if (v) this.engines[v.team]?.onBulletWhiz?.(v, s, d);
+    if (v) (v.forceNv26 ? this.reinforceEngine : this.engines[v.team])?.onBulletWhiz?.(v, s, d);
   }
 
   onEchoArrival(rep) {
     const listener = this.match.actors[rep?.listenerId];
-    if (listener) this.engines[listener.team]?.onEchoArrival?.(rep);
+    if (listener) (listener.forceNv26 ? this.reinforceEngine : this.engines[listener.team])?.onEchoArrival?.(rep);
   }
 
   onShafferCloak(actor) {
-    for (const eng of this.engines) {
+    for (const eng of this._allEngines()) {
       if (eng.onShafferCloak) eng.onShafferCloak(actor);
       else if (actor) {
         // Legacy NV1/NV1.1/NV1.2/NV1.3 purge visual contact immediately on Shaffer cloak!
@@ -170,11 +183,13 @@ export class ArenaCompositeAI {
   }
 
   onMatchEnd() {
-    for (const eng of this.engines) eng.onMatchEnd?.();
+    for (const eng of this._allEngines()) eng.onMatchEnd?.();
   }
 
   issuePlayerSquadOrder(kind, a) {
-    return this.engines[a?.team ?? 0]?.issuePlayerSquadOrder?.(kind, a) || null;
+    const r = this.engines[a?.team ?? 0]?.issuePlayerSquadOrder?.(kind, a) || null;
+    const r2 = this.reinforceEngine?.issuePlayerSquadOrder?.(kind, a) || null;
+    return r || r2;
   }
 }
 

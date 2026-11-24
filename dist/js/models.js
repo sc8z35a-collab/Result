@@ -944,6 +944,7 @@ const _C_RC_FL = color('#fff6d8'), _C_RC_GD = color('#ffd872'), _C_RC_PN = color
 const _C_WL_FP1 = color('#e2a8ff'), _C_WL_FM1 = color('#9ef6ff'), _C_WL_FST = color('#fff4be'), _C_WL_FDF = color('#ffdf9e');
 const _C_WL_RP1 = color('#c87eff'), _C_WL_RM1 = color('#5ceeff'), _C_WL_RST = color('#ffd56e'), _C_WL_RDF = color('#d8c29e');
 const _C_WL_SP1 = color('#d898ff'), _C_WL_SM1 = color('#74f4ff'), _C_WL_SST = color('#ffd562'), _C_WL_SWD = color('#b68c5a'), _C_WL_SDF = color('#d6ccb8');
+const _C_AMMO_BODY = color('#4d5e3a'), _C_AMMO_LID = color('#3a482c'), _C_AMMO_BAND = color('#f2b840'), _C_AMMO_GLOW = color('#ffd966'), _C_REINF_FX = color('#5ce6ff');
 
 // Smoothly maps projectile visual position from exact 1P/3P barrel muzzle onto the true ballistic ray over 13.5m.
 // Writes directly into _visPt (zero allocation!).
@@ -1096,6 +1097,30 @@ export function movingDetails(match, time, extra = false, lite = false, opts = n
           m.ringS(bz.x, cy + .06, bz.z, -cr * .55, .85, sr * .55, rad * 1.72, .022, oSegs, 0, _C_BZ_O4[0], _C_BZ_O4[1], _C_BZ_O4[2], 3);
           m.beamS(bz.x, .20, bz.z, bz.x, cy + halfH + .42, bz.z, .042, .042, 0, _C_BZ_BM[0], _C_BZ_BM[1], _C_BZ_BM[2], 3);
         }
+      }
+    }
+  }
+
+  // Randomly placed 50-round Ammo Crates (tactical olive crate + brass trim + floating amber beacon)
+  if (match.ammoBoxes) {
+    const lCrate = layers.crate ?? 0;
+    const lBmet = layers.blackMetal ?? 0;
+    for (let ai = 0; ai < match.ammoBoxes.length; ai++) {
+      const box = match.ammoBoxes[ai];
+      if (box.cooldown > 0) continue;
+      if (frustum && !sphereInFrustum(frustum, box.x, .55, box.z, 1.5)) continue;
+      const farBox = camPos && ((box.x - camX) * (box.x - camX) + (box.z - camZ) * (box.z - camZ)) > 576;
+      const bob = Math.sin(time * 3.1 + box.id * 1.7) * .045;
+      if (lite) {
+        m.boxS(box.x, .24, box.z, .68, .44, .44, lCrate, _C_AMMO_BODY[0], _C_AMMO_BODY[1], _C_AMMO_BODY[2], 0, 1);
+      } else {
+        // Ground locator ring
+        m.ringS(box.x, .06, box.z, 0, 1, 0, .68, .036, farBox ? 8 : 14, 0, _C_AMMO_BAND[0], _C_AMMO_BAND[1], _C_AMMO_BAND[2], 3, true);
+        // Main ammo crate body + recessed lid + brass latch/band
+        m.boxS(box.x, .24, box.z, .68, .44, .44, lCrate, _C_AMMO_BODY[0], _C_AMMO_BODY[1], _C_AMMO_BODY[2], 0, 1);
+        m.boxS(box.x, .47, box.z, .72, .08, .48, lBmet, _C_AMMO_LID[0], _C_AMMO_LID[1], _C_AMMO_LID[2], 0, 1);
+        m.boxS(box.x, .27, box.z, .71, .07, .46, 0, _C_AMMO_BAND[0], _C_AMMO_BAND[1], _C_AMMO_BAND[2], 0, 3);
+        m.octaS(box.x, .82 + bob, box.z, .15, .18, time * 2.0 + box.id, _C_AMMO_GLOW[0], _C_AMMO_GLOW[1], _C_AMMO_GLOW[2], _C_AMMO_BAND[0], _C_AMMO_BAND[1], _C_AMMO_BAND[2], 3);
       }
     }
   }
@@ -1375,6 +1400,17 @@ export function movingDetails(match, time, extra = false, lite = false, opts = n
 
     if (e.kind === 'heal') {
       m.ringS(ex, .20 + progress * 1.8, ez, 0, 1, 0, .55 + progress * 1.7, .040 * inv, lite ? 10 : 14, 0, _C_HEAL_FX[0], _C_HEAL_FX[1], _C_HEAL_FX[2], 3);
+      continue;
+    }
+
+    if (e.kind === 'ammoPickup') {
+      m.ringS(ex, .22 + progress * 1.5, ez, 0, 1, 0, .55 + progress * 1.6, .040 * inv, lite ? 10 : 14, 0, _C_AMMO_GLOW[0], _C_AMMO_GLOW[1], _C_AMMO_GLOW[2], 3);
+      continue;
+    }
+
+    if (e.kind === 'reinforce') {
+      m.ringS(ex, .20 + progress * 2.1, ez, 0, 1, 0, .65 + progress * 2.0, .044 * inv, lite ? 10 : 14, 0, _C_REINF_FX[0], _C_REINF_FX[1], _C_REINF_FX[2], 3);
+      if (!lite) m.beamS(ex, .10, ez, ex, 2.8 * inv + .3, ez, .045 * inv, .045 * inv, 0, _C_REINF_FX[0], _C_REINF_FX[1], _C_REINF_FX[2], 3);
       continue;
     }
 

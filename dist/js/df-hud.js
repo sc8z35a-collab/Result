@@ -247,7 +247,7 @@ export class PilotEquipment {
           RD20: ['ARV1.1', 'AA 1.1 · 1.76×誘導', 'CLASS', '20発 フルオート'],
           RD30: ['ARV1.1 mini', 'AA 1.1 mini', 'CLASS', '80発 2発同時'],
           RD40: ['ARV1.2', 'AA 1.2 · 1.92× · 1.4×広域', 'D01', '壁裏 4.0s 追従'],
-          'DF40 II': ['ARV1.3 · AA1.3', '2.08× · 4発同時 · 上限500 (2/s)', 'AA1.4', 'X / E 一時強化 (過熱 6s)']
+          'DF40 II': ['ARV1.3 · AA1.3', '2.08× · 2発同時 · 上限1200 (2/s)', 'AA1.4', 'X / E 一時強化 (過熱 6s)']
         }[loadout];
         if ($('rdSpec1Title')) $('rdSpec1Title').textContent = specs[0];
         if ($('rdSpec1Desc')) $('rdSpec1Desc').textContent = specs[1];

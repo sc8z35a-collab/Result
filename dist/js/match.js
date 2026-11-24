@@ -26,6 +26,13 @@ import {muzzleOffset} from './models.js';
 const baseSpeed = 360, baseInterval = .24;
 export const BASE_SHIELD_MAX = 25;
 export const BAIZER_MAX_STACK = 100;
+export const AMMO_BOX_AMOUNT = 50;
+export const AMMO_BOX_COUNT = 8;
+export const AMMO_BOX_RESPAWN = 22;
+export const REINFORCE_MAX_USES = 2;
+export const REINFORCE_COUNT = 7;
+export const REINFORCE_HP = 150;
+export const REINFORCE_SHIELD = 0;
 export const MAX_SKILL_CHARGES = 3;
 export const KILLS_PER_SKILL_CHARGE = 5;
 export const SHAFFER_DURATION = 12.0;
@@ -40,7 +47,7 @@ export const weapons = {
   [RD30]: {capacity: 80, damage: 3, rate: 100, velocity: 100, speed: baseSpeed * 1.0, interval: baseInterval, burst: 1, pellets: 2, reload: 1.75, auto: true},
   [RD]: {capacity: 130, damage: 3, rate: 170, velocity: 140, speed: baseSpeed * 1.4, interval: baseInterval / 1.7, burst: 1, pellets: 2, reload: 1.95, auto: true, playerOnly: true},
   'RD 50': {capacity: 50, damage: 7.2, rate: 110, velocity: 65, speed: baseSpeed * .65, interval: baseInterval / 1.1, burst: 1, pellets: 1, stockCap: 300, stockRegen: 3.2, reload: 1.70, auto: true},
-  [DF40II]: {capacity: 350, damage: 2, rate: 260, velocity: 80, speed: baseSpeed * .8, interval: baseInterval / 2.6, burst: 1, pellets: 4, stockCap: 500, stockRegen: 2, reload: 2.15, auto: true, playerOnly: true}
+  [DF40II]: {capacity: 600, damage: 4, rate: 260, velocity: 112, speed: baseSpeed * 1.12, interval: baseInterval / 2.6, burst: 1, pellets: 2, stockCap: 1200, stockRegen: 2, reload: 2.15, auto: true, playerOnly: true}
 };
 export const modes = {'1v1': [1, 1], '3v3': [3, 3], '5v5': [5, 5], '1v2': [1, 2], lab: [3, 3]};
 export const DEFAULT_LAB_CONFIG = {
@@ -137,6 +144,48 @@ export function bodyHit(a, b, actor) {
   if (C <= 0 && a[1] >= lo && a[1] <= hi)t = 0;
   return Math.min(t, sphereHit(a, d, [center[0], lo, center[1]], rr), sphereHit(a, d, [center[0], hi, center[1]], rr))
 }
+function randomAmmoBoxPos(rngFn, existing) {
+  const rand = rngFn || Math.random;
+  for (let attempt = 0; attempt < 220; attempt++) {
+    const x = -21 + rand() * 42;
+    const z = -88 + rand() * 176;
+    if (!walkable(x, z, 0.75, 0)) continue;
+    if (floorAt(x, z, 0) > 0.08) continue;
+    let clear = true;
+    for (let i = 0; i < tankers.length; i++) {
+      const dx = x - tankers[i].x, dz = z - tankers[i].z;
+      if (dx * dx + dz * dz < 23.04) { clear = false; break; }
+    }
+    if (!clear) continue;
+    for (let i = 0; i < baizerPickups.length; i++) {
+      const dx = x - baizerPickups[i].x, dz = z - baizerPickups[i].z;
+      if (dx * dx + dz * dz < 12.25) { clear = false; break; }
+    }
+    if (!clear) continue;
+    for (let i = 0; i < existing.length; i++) {
+      const dx = x - existing[i].x, dz = z - existing[i].z;
+      if (dx * dx + dz * dz < 196) { clear = false; break; }
+    }
+    if (clear) return [Math.round(x * 100) / 100, Math.round(z * 100) / 100];
+  }
+  // Relaxed fallback if random tries were crowded
+  for (let attempt = 0; attempt < 120; attempt++) {
+    const x = -21 + rand() * 42;
+    const z = -88 + rand() * 176;
+    if (walkable(x, z, 0.65, 0) && floorAt(x, z, 0) <= 0.08) {
+      return [Math.round(x * 100) / 100, Math.round(z * 100) / 100];
+    }
+  }
+  return [0, 0];
+}
+function generateAmmoBoxes(rngFn, count = AMMO_BOX_COUNT) {
+  const boxes = [];
+  for (let i = 0; i < count; i++) {
+    const [x, z] = randomAmmoBoxPos(rngFn, boxes);
+    boxes.push({id: i, x, z, amount: AMMO_BOX_AMOUNT, cooldown: 0, maxCooldown: AMMO_BOX_RESPAWN, pulse: 0});
+  }
+  return boxes;
+}
 export class Match {
   constructor(config = {}, onEvent = () => {}) {
     const mode = Object.hasOwn(modes, config.mode) ? config.mode : '3v3';
@@ -174,6 +223,16 @@ export class Match {
     this.scorches = [];
     this.tankers = tankers.map(t => ({...t, cooldown: 0, maxCooldown: 25, pulse: 0, lastTeam: -1}));
     this.baizers = baizerPickups.map(b => ({...b, cooldown: 0, maxCooldown: 24, pulse: 0}));
+    if (Number.isFinite(config.ammoSeed)) {
+      let aMix = Math.imul((config.ammoSeed | 0) ^ 0x9e3779b9, 0x85ebca6b) >>> 0;
+      aMix = Math.imul(aMix ^ (aMix >>> 13), 0xc2b2ae35) >>> 0;
+      this.ammoRng = random(aMix ^ (aMix >>> 16));
+    } else {
+      this.ammoRng = null;
+    }
+    this.ammoBoxes = generateAmmoBoxes(this.ammoRng, AMMO_BOX_COUNT);
+    this.reinforceUsesLeft = (!!config.allNpc || this.spectating) ? 0 : REINFORCE_MAX_USES;
+    this.reinforceWave = 0;
     this.rng = random(1939);
     if (Number.isFinite(config.skillSeed)) {
       let sMix = Math.imul((config.skillSeed | 0) ^ 0x9e3779b9, 0x85ebca6b) >>> 0;
@@ -298,8 +357,8 @@ export class Match {
   }
   spawn(a, initial = false) {
     const list = teams[a.team];
-    let p = list[a.slot];
-    if (!initial) {
+    let p = a._spawnPos || list[a.slot % list.length];
+    if (!initial && !a._spawnPos) {
       let best = -Infinity;
       for (const point of list) {
         if (!walkable(...point))continue;
@@ -316,7 +375,8 @@ export class Match {
       }
     }
     const w = this.weapon(a);
-    const startBz = clamp(this.startBaizer || 0, 0, BAIZER_MAX_STACK);
+    const maxShield = a.maxShield !== undefined ? a.maxShield : BASE_SHIELD_MAX;
+    const startBz = maxShield === 0 ? 0 : clamp(this.startBaizer || 0, 0, BAIZER_MAX_STACK);
     const allowSc = isScherpAllowed(this);
     const useOverride = this.isLab || (a.human && this.autoAimMode === '1.5');
     const aaLvl = useOverride && a.aaOverride && a.aaOverride !== 'off' ? normalizeAALevel(a.aaOverride, false, allowSc) : null;
@@ -327,7 +387,7 @@ export class Match {
       yaw: a.team ? Math.PI : 0,
       pitch: 0,
       hp: a.maxHp || this.hpMax || 100,
-      shield: BASE_SHIELD_MAX,
+      shield: maxShield,
       shieldClock: 0,
       baizerShield: startBz,
       baizerMax: startBz > 0 ? BAIZER_MAX_STACK : 0,
@@ -444,6 +504,91 @@ export class Match {
       return true;
     }
     return false;
+  }
+  _pickReinforceSpots(anchor, count) {
+    const spots = [];
+    const teamList = teams[anchor.team] || teams[0];
+    const isFree = (x, z) => {
+      if (!walkable(x, z, 0.45, 0) || floorAt(x, z, 0) > 0.12) return false;
+      for (let i = 0; i < spots.length; i++) {
+        const dx = x - spots[i][0], dz = z - spots[i][1];
+        if (dx * dx + dz * dz < 1.35 * 1.35) return false;
+      }
+      const pdx = x - anchor.x, pdz = z - anchor.z;
+      if (pdx * pdx + pdz * pdz < 1.45 * 1.45) return false;
+      return true;
+    };
+    const radii = [2.6, 4.2, 5.8, 7.6];
+    for (let rIdx = 0; rIdx < radii.length && spots.length < count; rIdx++) {
+      const r = radii[rIdx];
+      const steps = 12 + rIdx * 4;
+      for (let s = 0; s < steps && spots.length < count; s++) {
+        const ang = anchor.yaw + (s / steps) * Math.PI * 2 + rIdx * 0.35;
+        const cx = anchor.x + Math.sin(ang) * r;
+        const cz = anchor.z - Math.cos(ang) * r;
+        if (isFree(cx, cz)) spots.push([cx, cz]);
+      }
+    }
+    for (let i = 0; i < teamList.length && spots.length < count; i++) {
+      const pt = teamList[i];
+      if (walkable(pt[0], pt[1], 0.45, 0)) spots.push([pt[0], pt[1]]);
+    }
+    while (spots.length < count) {
+      const pt = teamList[spots.length % teamList.length];
+      spots.push([pt[0], pt[1]]);
+    }
+    return spots;
+  }
+  callReinforcements(a = this.player) {
+    if (!a?.human || !a.alive || this.ended || this.spectating) return null;
+    if ((this.reinforceUsesLeft || 0) <= 0) return null;
+    this.reinforceUsesLeft--;
+    this.reinforceWave++;
+    const wave = this.reinforceWave;
+    const spots = this._pickReinforceSpots(a, REINFORCE_COUNT);
+    const spawned = [];
+    for (let i = 0; i < REINFORCE_COUNT; i++) {
+      const unitNum = (wave - 1) * REINFORCE_COUNT + i + 1;
+      const gun = npcWeapons[(unitNum + i) % npcWeapons.length];
+      const npc = {
+        id: this.actors.length,
+        team: a.team,
+        slot: this.actors.length,
+        human: false,
+        name: `NV-${unitNum}`,
+        gun,
+        aiVersion: 'NV2.6',
+        isSpy: false,
+        aaOverride: null,
+        assignedSkill: null,
+        maxHp: REINFORCE_HP,
+        maxShield: REINFORCE_SHIELD,
+        isReinforcement: true,
+        noRespawn: true,
+        vanished: false,
+        forceNv26: true,
+        _spawnPos: spots[i],
+        kills: 0,
+        deaths: 0,
+        earned: 0
+      };
+      this.actors.push(npc);
+      this.spawn(npc, true);
+      npc.yaw = a.yaw;
+      spawned.push(npc);
+      this.effects.push({
+        kind: 'reinforce',
+        p: [npc.x, .85, npc.z],
+        dir: [0, 1, 0],
+        actor: npc.id,
+        team: npc.team,
+        life: .95,
+        max: .95,
+        seed: ++this.seq
+      });
+    }
+    this.event('reinforce', {actor: a, units: spawned, count: spawned.length, usesLeft: this.reinforceUsesLeft, wave});
+    return {ok: true, units: spawned, count: spawned.length, usesLeft: this.reinforceUsesLeft, wave};
   }
   setAutoAimMode(mode) {
     const clean = mode === '1.5' ? '1.5' : mode === 'off' ? 'off' : 'standard';
@@ -785,7 +930,8 @@ export class Match {
     this.thermoFlux.depositHeat(v.x, v.z, 1.15, 2);
     this.resonance.exciteBlast([v.x, v.y + 1.0, v.z], 1.15);
     v.alive = false;
-    v.respawn = this.respawnDuration;
+    v.respawn = v.noRespawn ? Infinity : this.respawnDuration;
+    if (v.noRespawn) v.vanished = true;
     v.reload = 0;
     v.autoReloading = false;
     v.burstLeft = 0;
@@ -916,7 +1062,7 @@ export class Match {
       const bx = bz.x, bzZ = bz.z;
       for (let ai = 0; ai < actors.length; ai++) {
         const a = actors[ai];
-        if (!a.alive || a.y > 1.2) continue;
+        if (!a.alive || a.y > 1.2 || a.maxShield === 0) continue;
         if ((a.baizerShield || 0) >= BAIZER_MAX_STACK) continue;
         const dx = a.x - bx, dz = a.z - bzZ;
         const d2 = dx * dx + dz * dz;
@@ -946,6 +1092,68 @@ export class Match {
           seed: ++this.seq
         });
         this.event('baizer', {actor: recipient, pickup: bz, kind: bz.kind, amount: bz.amount, gained, total: after});
+      }
+    }
+  }
+  updateAmmoBoxes(dt) {
+    const boxes = this.ammoBoxes;
+    if (!boxes || !boxes.length) return;
+    const actors = this.actors;
+    for (let bi = 0; bi < boxes.length; bi++) {
+      const box = boxes[bi];
+      if (box.cooldown > 0) {
+        box.cooldown = box.cooldown <= dt + 1e-8 ? 0 : box.cooldown - dt;
+        if (box.cooldown === 0) {
+          const others = boxes.filter(o => o !== box);
+          const [nx, nz] = randomAmmoBoxPos(this.ammoRng, others);
+          box.x = nx;
+          box.z = nz;
+        }
+      }
+      if (box.pulse > 0) box.pulse = Math.max(0, box.pulse - dt * 1.5);
+      if (box.cooldown > 0) continue;
+      let recipient = null, best2 = 1.95 * 1.95;
+      const bx = box.x, bz = box.z;
+      for (let ai = 0; ai < actors.length; ai++) {
+        const a = actors[ai];
+        if (!a.alive || a.y > 1.2) continue;
+        const w = this.weapon(a);
+        const stockCap = w.stockCap || 100;
+        if (a.stock >= stockCap && a.mag >= w.capacity) continue;
+        const dx = a.x - bx, dz = a.z - bz;
+        const d2 = dx * dx + dz * dz;
+        if (d2 <= best2 && (!recipient || d2 < best2)) {
+          recipient = a;
+          best2 = d2;
+        }
+      }
+      if (recipient) {
+        const w = this.weapon(recipient);
+        const stockCap = w.stockCap || 100;
+        const room = Math.max(0, stockCap - recipient.stock);
+        const toStock = Math.min(box.amount, room);
+        recipient.stock += toStock;
+        let gained = toStock;
+        const rem = box.amount - toStock;
+        if (rem > 0 && recipient.mag < w.capacity) {
+          const toMag = Math.min(rem, w.capacity - recipient.mag);
+          recipient.mag += toMag;
+          gained += toMag;
+        }
+        box.cooldown = box.maxCooldown;
+        box.pulse = 1;
+        this.effects.push({
+          kind: 'ammoPickup',
+          p: [box.x, .65, box.z],
+          dir: [0, 1, 0],
+          actor: recipient.id,
+          team: recipient.team,
+          amount: box.amount,
+          life: .85,
+          max: .85,
+          seed: ++this.seq
+        });
+        this.event('ammoBox', {actor: recipient, box, amount: box.amount, gained, stock: recipient.stock, mag: recipient.mag});
       }
     }
   }
@@ -983,6 +1191,7 @@ export class Match {
   }
   systems(a, dt) {
     if (!a.alive) {
+      if (a.noRespawn) return;
       a.respawn -= dt;
       if (a.respawn <= 1e-7)this.spawn(a);
       return
@@ -1020,13 +1229,14 @@ export class Match {
     }
     const w = this.weapon(a);
     const wReload = w.reload;
-    if (a.shield < BASE_SHIELD_MAX) {
+    const maxShield = a.maxShield !== undefined ? a.maxShield : BASE_SHIELD_MAX;
+    if (a.shield < maxShield) {
       a.shieldClock += dt;
-      while (a.shieldClock + 1e-8 >= 5 && a.shield < BASE_SHIELD_MAX) {
-        a.shield = Math.min(BASE_SHIELD_MAX, a.shield + 1);
+      while (a.shieldClock + 1e-8 >= 5 && a.shield < maxShield) {
+        a.shield = Math.min(maxShield, a.shield + 1);
         a.shieldClock = Math.max(0, a.shieldClock - 5);
       }
-      if (a.shield >= BASE_SHIELD_MAX) a.shieldClock = 0;
+      if (a.shield >= maxShield) a.shieldClock = 0;
     } else a.shieldClock = 0;
     const stockCap = w.stockCap || 100;
     const stockRegen = w.stockRegen || 1;
@@ -1521,6 +1731,7 @@ export class Match {
     }
     this.updateTankers(dt);
     this.updateBaizers(dt);
+    this.updateAmmoBoxes(dt);
     this.aeroVortex.tick(dt);
     this.thermoFlux.tick(dt, this.tankers);
     this.spectraField.tick(dt, this);

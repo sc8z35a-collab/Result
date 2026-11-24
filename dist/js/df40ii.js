@@ -7,7 +7,7 @@ export const DF40II = 'DF40 II';
 export const ARV13_VERSION = '1.3';
 export const AA13_VERSION = '1.3';
 export const AA14_VERSION = '1.4';
-export const DF40II_BULLET_SPEED = 360 * 0.8; // 288 m/s (velocity ratio 80)
+export const DF40II_BULLET_SPEED = 360 * 1.12; // 403.2 m/s (velocity ratio 112)
 
 // DF40 II — Player-Only Tri-Barrel Full-Auto Smart Carbine
 //   Base System: ARV1.3 + Auto-Aim 1.3 (evolved from RD40's Auto-Aim 1.2 / ARV1.2)
@@ -313,13 +313,13 @@ export function toggleAA14(match, a) {
   return {ok: true, active: true, state: 'on', heat: d.aa14Heat};
 }
 
-export function onFireDF40II(match, a, salvo = 4) {
+export function onFireDF40II(match, a, salvo = 2) {
   const d = a?.df40;
   if (!d) return;
   d.firePulse = 1;
-  d.barrelPhase = ((d.barrelPhase || 0) + 1) % 4;
+  d.barrelPhase = ((d.barrelPhase || 0) + 1) % 2;
   if (d.aa14Active && !d.aa14Overheated) {
-    d.aa14Heat = Math.min(100, d.aa14Heat + AA14_HEAT_PER_SALVO * (salvo / 4));
+    d.aa14Heat = Math.min(100, d.aa14Heat + AA14_HEAT_PER_SALVO * (salvo / 2));
     if (d.aa14Heat >= 100 - 1e-6) {
       triggerAA14Overheat(match, a);
     }

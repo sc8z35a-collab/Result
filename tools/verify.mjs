@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {createRequire} from 'node:module';
-import {Match,modes,weapons,npcWeapons,BASE_SHIELD_MAX,BAIZER_MAX_STACK,MAX_SKILL_CHARGES,KILLS_PER_SKILL_CHARGE,SHAFFER_DURATION,SKILL_POOL} from '../dist/js/match.js';
+import {Match,modes,weapons,npcWeapons,BASE_SHIELD_MAX,BAIZER_MAX_STACK,AMMO_BOX_AMOUNT,AMMO_BOX_COUNT,REINFORCE_MAX_USES,REINFORCE_COUNT,REINFORCE_HP,REINFORCE_SHIELD,MAX_SKILL_CHARGES,KILLS_PER_SKILL_CHARGE,SHAFFER_DURATION,SKILL_POOL} from '../dist/js/match.js';
 import {ARV1_VERSION,ARV1_ASSIST_STRENGTH,ARV1_LAUNCH_GAIN,ARV1_LAUNCH_STEP,ARV1_LOCK_ACQUIRE,ARV1_LOCK_HOLD} from '../dist/js/df1.js';
 import {RD40_AA_VERSION,RD40_ASSIST_STRENGTH,RD40_LOCK_ACQUIRE,RD40_LOCK_HOLD,RD40_D01_DURATION,RD30_MINI_STRENGTH,RD20_AA_STRENGTH,RD_SPECS} from '../dist/js/rd40.js';
 import {
@@ -72,7 +72,7 @@ function duel(loadout='DF1 OUT',limit='unlimited',multiplier=2,events=[]) {
 function forward(m,actor,frames) {for(let i=0;i<frames;i++){m.time+=h;m.systems(actor,h)}}
 function arrange(m,x,z1,z2){const a=m.player,b=m.actors[1];Object.assign(a,{x,y:0,z:z1,yaw:.025,pitch:Math.atan2(-.38,z1-z2)});Object.assign(b,{x,y:0,z:z2,vx:0,vy:0,vz:0});return [a,b]}
 function burst(m) {const a=m.player;assert(m.trigger(a));while(a.burstLeft||a.cooldown>1e-7)forward(m,a,1)}
-for(const [id,cap,damage,rate,velocity,burstSize,shotsPerTrigger] of [['SW T',10,9,100,100,1,1],['SRA',30,6,120,80,1,1],['D1',40,5,100,60,2,2],['MS10',24,9,130,180,1,1],['DF1 OUT',95,2.8,300,65,3,3],['RD20',20,6,110,70,1,1],['RD30',80,3,100,100,1,2],['RD40',130,3,170,140,1,2],['DF40 II',350,2,260,80,1,4]]) {
+for(const [id,cap,damage,rate,velocity,burstSize,shotsPerTrigger] of [['SW T',10,9,100,100,1,1],['SRA',30,6,120,80,1,1],['D1',40,5,100,60,2,2],['MS10',24,9,130,180,1,1],['DF1 OUT',95,2.8,300,65,3,3],['RD20',20,6,110,70,1,1],['RD30',80,3,100,100,1,2],['RD40',130,3,170,140,1,2],['DF40 II',600,4,260,112,1,2]]) {
  const w=weapons[id];assert.deepEqual([w.capacity,w.damage,w.rate,w.velocity,w.burst],[cap,damage,rate,velocity,burstSize]);const m=duel(id);burst(m);assert.equal(m.shots.length,shotsPerTrigger);assert.equal(m.player.mag,cap-shotsPerTrigger);
 }
 {
@@ -226,12 +226,12 @@ for(const [id,cap,damage,rate,velocity,burstSize,shotsPerTrigger] of [['SW T',10
  }
 }
 {
- // DF40 II: Player-only quad-barrel full-auto (350 mag, 4 simultaneous subtle scatter, 2 dmg, rate 260, vel 80 = 288 m/s, stockCap 500, stockRegen 2/s)
+ // DF40 II: Player-only twin-salvo full-auto (600 mag, 2 simultaneous shots, 4 dmg, rate 260, vel 112 = 403.2 m/s, stockCap 1200, stockRegen 2/s)
  // + ARV1.3 & Auto-Aim 1.3 (evolved beyond Auto-Aim 1.2) + temporary Auto-Aim 1.4 Overdrive with overheat & cooldown purge!
  const w40=weapons[DF40II];
  assert(w40.playerOnly===true&&!npcWeapons.includes(DF40II),'DF40 II must be strictly player-only');
- assert(w40.capacity===350&&w40.damage===2&&w40.pellets===4&&w40.burst===1&&w40.auto===true&&w40.rate===260&&w40.velocity===80&&w40.stockCap===500&&w40.stockRegen===2);
- assert(Math.abs(w40.speed-288)<1e-6&&Math.abs(w40.speed/weapons['SW T'].speed-0.8)<1e-6,'DF40 II velocity must be 80 ratio (288 m/s)');
+ assert(w40.capacity===600&&w40.damage===4&&w40.pellets===2&&w40.burst===1&&w40.auto===true&&w40.rate===260&&w40.velocity===112&&w40.stockCap===1200&&w40.stockRegen===2);
+ assert(Math.abs(w40.speed-403.2)<1e-6&&Math.abs(w40.speed/weapons['SW T'].speed-1.12)<1e-6,'DF40 II velocity must be 112 ratio (403.2 m/s = 1.4x 288 m/s)');
  assert(Math.abs((1/w40.interval)/(1/weapons['SW T'].interval)-2.60)<1e-6,'DF40 II fire rate must be 260 ratio (+35 over 225)');
  assert.equal(ARV13_VERSION,'1.3');
  assert.equal(AA13_VERSION,'1.3');
@@ -240,30 +240,30 @@ for(const [id,cap,damage,rate,velocity,burstSize,shotsPerTrigger] of [['SW T',10
  assert(AA13_LOCK_ACQUIRE>RD40_LOCK_ACQUIRE&&AA13_LOCK_HOLD>RD40_LOCK_HOLD&&AA13_FOCUS_TIME<0.26,'ARV1.3/AA1.3 cones & lock speed must surpass RD40 AA1.2');
  assert(AA14_ASSIST_STRENGTH>AA13_ASSIST_STRENGTH&&AA14_LOCK_ACQUIRE>AA13_LOCK_ACQUIRE&&AA14_LOCK_HOLD>AA13_LOCK_HOLD&&AA14_FOCUS_TIME<AA13_FOCUS_TIME&&AA14_HOMING_BUDGET>AA13_HOMING_BUDGET,'Auto-Aim 1.4 must strictly strengthen Auto-Aim 1.3');
 
- // 1. Full-auto 4-round simultaneous subtle scatter firing + remainder mag (350 % 4 = 2, auto-reload triggers on empty!) + 500 stock cap & 2/s regen
+ // 1. Full-auto 2-round simultaneous firing + remainder mag (auto-reload triggers on empty!) + 1200 stock cap & 2/s regen
  const mFire=duel(DF40II),pF=mFire.player;
- assert.equal(pF.stock,500,'DF40 II must spawn with 500 stock cap');
+ assert.equal(pF.stock,1200,'DF40 II must spawn with 1200 stock cap');
  assert(mFire.trigger(pF));
- assert.equal(mFire.shots.length,4,'Single DF40 II trigger must emit 4 simultaneous rounds');
- assert.equal(pF.mag,346,'Single quad-barrel salvo must consume 4 rounds from 350-round mag');
- assert(mFire.shots.every(s=>s.damage===2&&Math.abs(s.speed-288)<1e-6&&s.arvOrder===2&&s.aaTier==='1.3'));
- const hipSpread=Math.hypot(mFire.shots[0].dir[0]-mFire.shots[3].dir[0],mFire.shots[0].dir[1]-mFire.shots[3].dir[1],mFire.shots[0].dir[2]-mFire.shots[3].dir[2]);
- assert(hipSpread>0.008&&hipSpread<0.065,`DF40 II 4-round salvo must have subtle shotgun-like spread (got ${hipSpread.toFixed(4)} rad)`);
+ assert.equal(mFire.shots.length,2,'Single DF40 II trigger must emit 2 simultaneous rounds');
+ assert.equal(pF.mag,598,'Single twin salvo must consume 2 rounds from 600-round mag');
+ assert(mFire.shots.every(s=>s.damage===4&&Math.abs(s.speed-403.2)<1e-6&&s.arvOrder===2&&s.aaTier==='1.3'));
+ const hipSpread=Math.hypot(mFire.shots[0].dir[0]-mFire.shots[1].dir[0],mFire.shots[0].dir[1]-mFire.shots[1].dir[1],mFire.shots[0].dir[2]-mFire.shots[1].dir[2]);
+ assert(hipSpread>0.008&&hipSpread<0.065,`DF40 II 2-round salvo must have subtle twin spread (got ${hipSpread.toFixed(4)} rad)`);
  for(let i=0;i<360;i++){mFire.trigger(pF);mFire.time+=h;mFire.systems(pF,h)}
- assert(mFire.shots.length>=40&&pF.mag<=310,`Holding full-auto DF40 II at rate 260 for 1s must chain >=40 rounds (got ${mFire.shots.length})`);
+ assert(mFire.shots.length>=20&&pF.mag<=580,`Holding full-auto DF40 II at rate 260 for 1s must chain >=20 rounds (got ${mFire.shots.length})`);
  pF.mag=2;pF.cooldown=0;pF.reload=0;const before2=mFire.shots.length;
  assert(mFire.trigger(pF));assert.equal(mFire.shots.length,before2+2);assert.equal(pF.mag,0);
  assert(pF.reload>0&&pF.autoReloading,'Emptying DF40 II mag must automatically trigger reload motion');
  pF.reload=0;pF.autoReloading=false;pF.mag=1;pF.cooldown=0;const before1=mFire.shots.length;
  assert(mFire.trigger(pF));assert.equal(mFire.shots.length,before1+1);assert.equal(pF.mag,0);
  assert(pF.reload>0,'Emptying final 1 round must also auto-reload');
- // Verify DF40 II 2 rounds/sec regen & 500 stock cap (3 rounds/sec with tanker 1.5x boost)
- pF.reload=0;pF.mag=100;pF.stock=495;pF.ammoClock=0;pF.ammoRate=1;
- forward(mFire,pF,180);assert.equal(pF.stock,496,'DF40 II must recover 1 round in 0.5s (2 rounds/sec)');
- forward(mFire,pF,180);assert.equal(pF.stock,497,'DF40 II must recover 2 rounds in 1.0s');
- forward(mFire,pF,3600);assert.equal(pF.stock,500,'DF40 II stock regen must cap at 500');
- pF.stock=490;pF.ammoClock=0;pF.ammoRate=1.5;
- forward(mFire,pF,360);assert.equal(pF.stock,493,'DF40 II with tanker 1.5x boost must recover 3 rounds/sec');
+ // Verify DF40 II 2 rounds/sec regen & 1200 stock cap (3 rounds/sec with tanker 1.5x boost)
+ pF.reload=0;pF.mag=100;pF.stock=1195;pF.ammoClock=0;pF.ammoRate=1;
+ forward(mFire,pF,180);assert.equal(pF.stock,1196,'DF40 II must recover 1 round in 0.5s (2 rounds/sec)');
+ forward(mFire,pF,180);assert.equal(pF.stock,1197,'DF40 II must recover 2 rounds in 1.0s');
+ forward(mFire,pF,3600);assert.equal(pF.stock,1200,'DF40 II stock regen must cap at 1200');
+ pF.stock=1190;pF.ammoClock=0;pF.ammoRate=1.5;
+ forward(mFire,pF,360);assert.equal(pF.stock,1193,'DF40 II with tanker 1.5x boost must recover 3 rounds/sec');
 
  // 2. Auto-Aim 1.3 wider acquire cone than RD40 Auto-Aim 1.2 (0.155 rad: RD40 misses, DF40 II locks!)
  const mRdMiss=duel('RD40'),[pRdM]=arrange(mRdMiss,2,85,73);
@@ -273,14 +273,14 @@ for(const [id,cap,damage,rate,velocity,burstSize,shotsPerTrigger] of [['SW T',10
  p13.yaw=0.155;forward(m13,p13,90);
  assert(p13.df40.locked&&p13.df40.focusId===t13.id,'DF40 II Auto-Aim 1.3 MUST lock cleanly at 0.155 rad (evolved beyond AA1.2)');
  assert(ev13.some(e=>e.type==='rdlock'&&e.gun===DF40II));
- // Expanded hold cone (0.27 rad > RD40 0.253 rad) + smooth magnetic tracking + 4 simultaneous ARV1.3 guided shots
+ // Expanded hold cone (0.27 rad > RD40 0.253 rad) + smooth magnetic tracking + 2 simultaneous ARV1.3 guided shots
  p13.yaw=0.27;forward(m13,p13,12);
  assert(p13.df40.locked&&p13.yaw<0.266,'Auto-Aim 1.3 must sustain lock at 0.27 rad and smoothly pull aim toward target');
  m13.shots.length=0;p13.cooldown=0;
  assert(m13.trigger(p13));
- assert.equal(m13.shots.length,4);
- assert(m13.shots.every(s=>s.guided&&s.homingTargetId===t13.id&&s.aaTier==='1.3'&&s.arvOrder===2),'All 4 DF40 II rounds must carry ARV1.3/AA1.3 guidance');
- const aa13Spread=Math.hypot(m13.shots[0].dir[0]-m13.shots[3].dir[0],m13.shots[0].dir[1]-m13.shots[3].dir[1],m13.shots[0].dir[2]-m13.shots[3].dir[2]);
+ assert.equal(m13.shots.length,2);
+ assert(m13.shots.every(s=>s.guided&&s.homingTargetId===t13.id&&s.aaTier==='1.3'&&s.arvOrder===2),'All 2 DF40 II rounds must carry ARV1.3/AA1.3 guidance');
+ const aa13Spread=Math.hypot(m13.shots[0].dir[0]-m13.shots[1].dir[0],m13.shots[0].dir[1]-m13.shots[1].dir[1],m13.shots[0].dir[2]-m13.shots[1].dir[2]);
  const s13=m13.shots[0];
  for(let i=0;i<14&&m13.shots.includes(s13);i++){m13.time+=h;m13.projectile(s13,h)}
  assert(s13.homingTurned>0,'ARV1.3 guided bullet must curve smoothly in flight at 360Hz');
@@ -296,9 +296,9 @@ for(const [id,cap,damage,rate,velocity,burstSize,shotsPerTrigger] of [['SW T',10
  assert(pA2.df40.locked&&pA2.df40.targetAccel[0]>5.0,'ARV1.3 must estimate positive lateral target acceleration');
  pA2.yaw=pA1.yaw;pA2.pitch=pA1.pitch;
  assert(mAcc2.trigger(pA2));const accelDirX=mAcc2.shots.reduce((sum,s)=>sum+s.dir[0],0)/mAcc2.shots.length;
- assert(accelDirX>constVelDirX+0.0005,`ARV1.3 2nd-order lead must bias further ahead for accelerating target (${accelDirX.toFixed(4)} vs ${constVelDirX.toFixed(4)})`);
+ assert(accelDirX>constVelDirX+0.0003,`ARV1.3 2nd-order lead must bias further ahead for accelerating target (${accelDirX.toFixed(4)} vs ${constVelDirX.toFixed(4)})`);
 
- // 4. Auto-Aim 1.4 Overdrive: locks at 0.205 rad (outside AA1.3 0.1707 rad), snap-locks in <=0.08s, ultra-tight 4-round cluster convergence,
+ // 4. Auto-Aim 1.4 Overdrive: locks at 0.205 rad (outside AA1.3 0.1707 rad), snap-locks in <=0.08s, ultra-tight 2-round convergence,
  //    early manual deactivation cools without lockout, AND sustained use hits 100% OVERHEAT with 6.0s lockout -> ready recovery!
  const ev14=[],m14=duel(DF40II,'unlimited',2,ev14),[p14,t14]=arrange(m14,2,85,73);
  p14.yaw=0.205;forward(m14,p14,90);
@@ -309,13 +309,13 @@ for(const [id,cap,damage,rate,velocity,burstSize,shotsPerTrigger] of [['SW T',10
  forward(m14,p14,32); // ~0.089s -> AA1.4 snap-locks in 0.06s even at 0.205 rad!
  assert(p14.df40.locked&&p14.df40.focusId===t14.id,'Auto-Aim 1.4 MUST rapidly snap-lock at 0.205 rad');
  assert(p14.df40.aa14Heat>0&&p14.df40.aa14Heat<30,'Running AA1.4 must accumulate thermal heat');
- // Fire in AA1.4 -> tighter cluster across all 4 simultaneous shots than AA1.3!
+ // Fire in AA1.4 -> tighter cluster across both simultaneous shots than AA1.3!
  m14.shots.length=0;p14.cooldown=0;
  assert(m14.trigger(p14));
- assert.equal(m14.shots.length,4);
- assert(m14.shots.every(s=>s.guided&&s.aaTier==='1.4'),'All 4 AA1.4 shots must be tagged tier 1.4');
- const aa14Spread=Math.hypot(m14.shots[0].dir[0]-m14.shots[3].dir[0],m14.shots[0].dir[1]-m14.shots[3].dir[1],m14.shots[0].dir[2]-m14.shots[3].dir[2]);
- assert(aa14Spread<aa13Spread*0.65,`AA1.4 must tighten 4-round scatter strictly tighter than AA1.3 (${aa14Spread.toFixed(4)} vs ${aa13Spread.toFixed(4)})`);
+ assert.equal(m14.shots.length,2);
+ assert(m14.shots.every(s=>s.guided&&s.aaTier==='1.4'),'All 2 AA1.4 shots must be tagged tier 1.4');
+ const aa14Spread=Math.hypot(m14.shots[0].dir[0]-m14.shots[1].dir[0],m14.shots[0].dir[1]-m14.shots[1].dir[1],m14.shots[0].dir[2]-m14.shots[1].dir[2]);
+ assert(aa14Spread<aa13Spread*0.65,`AA1.4 must tighten 2-round spread strictly tighter than AA1.3 (${aa14Spread.toFixed(4)} vs ${aa13Spread.toFixed(4)})`);
  // Early manual toggle OFF -> cools cleanly back to 0 without overheat lockout!
  const heatPeak=p14.df40.aa14Heat;
  const offRes=m14.toggleAA14(p14);
@@ -334,7 +334,7 @@ for(const [id,cap,damage,rate,velocity,burstSize,shotsPerTrigger] of [['SW T',10
  assert(!blocked.ok&&blocked.reason==='overheated','Cannot re-enable AA1.4 while overheated');
  // Gun still fires normally in AA1.3 while AA1.4 is overheated!
  m14.shots.length=0;p14.cooldown=0;p14.reload=0;p14.mag=30;
- assert(m14.trigger(p14)&&m14.shots.length===4&&m14.shots.every(s=>s.aaTier==='1.3'),'DF40 II must continue firing in AA1.3 while AA1.4 cools from overheat');
+ assert(m14.trigger(p14)&&m14.shots.length===2&&m14.shots.every(s=>s.aaTier==='1.3'),'DF40 II must continue firing in AA1.3 while AA1.4 cools from overheat');
  // Complete the 6.0s overheat purge -> emits ready and allows re-enabling AA1.4!
  forward(m14,p14,Math.ceil((AA14_OVERHEAT_COOLDOWN+0.1)*360));
  assert(!p14.df40.aa14Overheated&&p14.df40.aa14Heat===0&&p14.df40.aa14Cooldown===0,'Thermal purge must finish cleanly after 6.0s');
@@ -355,7 +355,7 @@ for(const [id,cap,damage,rate,velocity,burstSize,shotsPerTrigger] of [['SW T',10
  const fx40=movingDetails(m14,1.2,true,false);
  assert(vm40.count>500&&mf40.count>mf40Lite.count&&mf40Lite.count>0&&fx40.count>0);
  for(const mesh of [vm40,mf40,mf40Lite,fx40]) for(let i=0;i<mesh.data.length;i+=STRIDE) assert(Number.isFinite(mesh.data[i])&&Number.isFinite(mesh.data[i+1])&&Number.isFinite(mesh.data[i+2]));
- console.log('DF40 II (ARV1.3 / AA1.3 / AA1.4 Overheat, 350-mag 4-pellet scatter, 500 stock, 2/s regen) OK:',{mag:w40.capacity,pellets:w40.pellets,damage:w40.damage,rate:w40.rate,velocity:w40.velocity,stockCap:w40.stockCap,stockRegen:w40.stockRegen,hipSpread:+hipSpread.toFixed(4),aa14Spread:+aa14Spread.toFixed(4),vmVerts:vm40.count});
+ console.log('DF40 II (ARV1.3 / AA1.3 / AA1.4 Overheat, 600-mag 2-shot dmg-4 vel-112, 1200 stock, 2/s regen) OK:',{mag:w40.capacity,pellets:w40.pellets,damage:w40.damage,rate:w40.rate,velocity:w40.velocity,speed:w40.speed,stockCap:w40.stockCap,stockRegen:w40.stockRegen,hipSpread:+hipSpread.toFixed(4),aa14Spread:+aa14Spread.toFixed(4),vmVerts:vm40.count});
 }
 {
  // Auto-Aim ON/OFF toggle: preference persistence + complete disable across DF1 OUT / RD-series / DF40 II + live toggle mid-match
@@ -1585,7 +1585,7 @@ for (const [mode,counts] of Object.entries(modes)) {
   assert(!m.useSkill(p,'shaffer'),'Cannot stack Shaffer while already active');
   m.shots.length=0;p.cooldown=0;p.mag=100;
   assert(m.trigger(p),'Cloaked player can still fire normally');
-  assert(m.shots.length===4&&m.shots.every(s=>s.shafferCloaked===true),'All shots fired during Shaffer must be marked shafferCloaked');
+  assert(m.shots.length===2&&m.shots.every(s=>s.shafferCloaked===true),'All shots fired during Shaffer must be marked shafferCloaked');
   const friendlyFx=movingDetails(m,m.time,false,false);
   const origPlayer=m.player;
   m.player=e;
@@ -1612,8 +1612,75 @@ for (const [mode,counts] of Object.entries(modes)) {
   assert(bE.contacts.get(p.id)?.seen,'Enemy AI must be able to perceive player again once Shaffer expires');
   console.log('Auto-Reload, Shield 25, BAIZER 100 Stack & Random Single Skill (Shaffer 12s / Recharge Heal) OK:',{baseShield:BASE_SHIELD_MAX,baizerMax:BAIZER_MAX_STACK,baizerPickups:baizerPickups.length,maxCharges:MAX_SKILL_CHARGES,shafferSec:SHAFFER_DURATION});
  }
+ {
+  // 13. Randomly placed 50-round Ammo Crates + Player-only NV2.6 +7 Allied Reinforcements (2 uses/match, HP 150, No Shield, Disappear on Death)
+  assert.equal(AMMO_BOX_AMOUNT,50);
+  assert.equal(REINFORCE_MAX_USES,2);
+  assert.equal(REINFORCE_COUNT,7);
+  assert.equal(REINFORCE_HP,150);
+  assert.equal(REINFORCE_SHIELD,0);
+  const evA=[],mA=new Match({mode:'1v1',limit:'unlimited',loadout:DF40II,ammoSeed:101},x=>evA.push(x));
+  const mB=new Match({mode:'1v1',limit:'unlimited',loadout:DF40II,ammoSeed:202});
+  assert.equal(mA.ammoBoxes.length,AMMO_BOX_COUNT,'Match must spawn configured number of ammo boxes');
+  assert(mA.ammoBoxes.every(b=>b.amount===50&&walkable(b.x,b.z,0.5,0)),'Every ammo box must hold 50 rounds on walkable ground');
+  assert(mA.ammoBoxes.some((b,i)=>Math.hypot(b.x-mB.ammoBoxes[i].x,b.z-mB.ammoBoxes[i].z)>1),'Ammo boxes must be randomly placed across matches');
+  const pA=mA.player,eA=mA.actors[1];
+  const box0=mA.ammoBoxes[0];
+  pA.stock=1000;pA.x=box0.x;pA.z=box0.z;pA.y=0;
+  mA.updateAmmoBoxes(h);
+  assert.equal(pA.stock,1050,'Picking up an ammo box must grant +50 rounds');
+  assert(box0.cooldown>20,'Picked up ammo box must enter respawn cooldown');
+  assert(evA.some(x=>x.type==='ammoBox'&&x.actor===pA&&x.gained===50),'Ammo box pickup must emit ammoBox event');
+  // 3D ammo box rendering adds finite geometry
+  const fxWithBoxes=movingDetails(mB,1.0,true,false);
+  for(const b of mB.ammoBoxes) b.cooldown=20;
+  const fxNoBoxes=movingDetails(mB,1.0,true,false);
+  assert(fxWithBoxes.count>fxNoBoxes.count,'Active 3D ammo boxes must render in movingDetails');
+
+  // Player-only NV2.6 +7 allied reinforcements (max 2 uses/match, 150 HP, 0 shield, disappear permanently on death)
+  assert.equal(mA.reinforceUsesLeft,2,'Player must start with 2 reinforcement calls per match');
+  assert.equal(mA.callReinforcements(eA),null,'NPCs must NEVER be able to call player reinforcements');
+  const w1=mA.callReinforcements(pA);
+  assert(w1&&w1.ok&&w1.count===7&&w1.usesLeft===1,'First reinforcement call must spawn 7 allied NPCs and leave 1 use');
+  assert.equal(mA.actors.length,2+7,'Actors list must grow by +7');
+  for(const u of w1.units){
+   assert.equal(u.team,pA.team,'Reinforcements must be on player team');
+   assert.equal(u.human,false);
+   assert.equal(u.hp,150,'Reinforcements must have 150 HP');
+   assert.equal(u.maxHp,150);
+   assert.equal(u.shield,0,'Reinforcements must have 0 shield');
+   assert.equal(u.maxShield,0);
+   assert.equal(u.aiVersion,'NV2.6','Reinforcements must run NV2.6 engine');
+   assert.equal(u.noRespawn,true);
+   const br=mA.nv.brains.get(u.id);
+   assert(br&&br.forceMode===true,'Reinforcement brain must be attached to NV2.6 Force engine');
+  }
+  // Verify reinforcements NEVER regenerate shield and NEVER pick up BAIZER shield
+  const u0=w1.units[0];
+  const bz0=mA.baizers[0];
+  u0.x=bz0.x;u0.z=bz0.z;u0.y=0;
+  mA.updateBaizers(h);
+  assert.equal(u0.baizerShield,0,'No-shield reinforcements must not pick up BAIZER shields');
+  forward(mA,u0,360*6);
+  assert.equal(u0.shield,0,'No-shield reinforcements must NEVER regenerate shield');
+  // Verify reinforcements disappear permanently on death (no respawn)
+  mA.damage(u0,eA,150);
+  assert.equal(u0.alive,false,'150 damage must kill 150-HP no-shield reinforcement');
+  assert.equal(u0.vanished,true,'Killed reinforcement must be marked vanished');
+  forward(mA,u0,360*10);
+  assert.equal(u0.alive,false,'Killed reinforcement must NEVER respawn');
+  // Second call works (+7 more), third call is blocked (strictly 2 uses per match)
+  const w2=mA.callReinforcements(pA);
+  assert(w2&&w2.ok&&w2.count===7&&w2.usesLeft===0,'Second reinforcement call must spawn 7 more allies and exhaust uses');
+  assert.equal(mA.callReinforcements(pA),null,'Third reinforcement call must be rejected (max 2 uses/match)');
+  // Even in Lab mode with legacy NV1 AI, reinforcements STILL run NV2.6 Force!
+  const mLegacy=new Match({mode:'lab',limit:'unlimited',teamAiModels:['nv1','nv1'],lab:{teamACount:1,teamBCount:1,teamAAi:'nv1',teamBAi:'nv1'}});
+  const wLab=mLegacy.callReinforcements(mLegacy.player);
+  assert(wLab&&wLab.count===7&&wLab.units.every(u=>mLegacy.nv.brains.get(u.id)?.forceMode===true),'Reinforcements must run NV2.6 Force even in legacy-AI Lab matches');
+  console.log('Random 50-Round Ammo Boxes & Player-Only NV2.6 +7 Reinforcements (2 uses, 150 HP, 0 Shield, No Respawn) OK:',{ammoBoxes:mA.ammoBoxes.length,ammoAmount:AMMO_BOX_AMOUNT,reinforceUses:REINFORCE_MAX_USES,reinforceCount:REINFORCE_COUNT,reinforceHp:REINFORCE_HP,reinforceShield:REINFORCE_SHIELD});
+ }
 }
-console.log('360Hz sim, weapon specs (DF1 OUT 95-mag 2x rate, MS10, RD20/30/40, DF40 II 350-mag 4-scatter rate-260 stock-500 2/s ARV1.3/AA1.3/AA1.4), Auto-Aim 1.5 Scherp (Lab-exclusive), Lab Mode 10-Gen AI Arena, MagnusAero 1.0, KineticFlow 1.0, QuantumTick 1.0, Auto-Reload, Shield 25, BAIZER 100 Stack, Random Single Skill, FluxGI 1.0, SchlierenOptics 1.0, BallisticCore-X, EchoPulse 1.0, NV-Synapse 1.0, AeroVortex 1.0, ThermoFlux 1.0, SpectraField 1.0, ResonanceCore 1.0, ChronoTrace 1.0, FermatCore 1.0, Lightweight Mode LOD, 16-joint sculpted rig, KHDR, Shadow Flame 1.0 Flash/Pro, Sound Engin 2.0, NV2.6 Force, NV2.1 Spy, and all matches passed.');
+console.log('360Hz sim, weapon specs (DF1 OUT 95-mag 2x rate, MS10, RD20/30/40, DF40 II 600-mag 2-shot dmg-4 vel-112 rate-260 stock-1200 2/s ARV1.3/AA1.3/AA1.4), Random 50-Round Ammo Boxes, NV2.6 +7 Reinforcements (2 uses, 150 HP, 0 Shield, No Respawn), Auto-Aim 1.5 Scherp (Lab-exclusive), Lab Mode 10-Gen AI Arena, MagnusAero 1.0, KineticFlow 1.0, QuantumTick 1.0, Auto-Reload, Shield 25, BAIZER 100 Stack, Random Single Skill, FluxGI 1.0, SchlierenOptics 1.0, BallisticCore-X, EchoPulse 1.0, NV-Synapse 1.0, AeroVortex 1.0, ThermoFlux 1.0, SpectraField 1.0, ResonanceCore 1.0, ChronoTrace 1.0, FermatCore 1.0, Lightweight Mode LOD, 16-joint sculpted rig, KHDR, Shadow Flame 1.0 Flash/Pro, Sound Engin 2.0, NV2.6 Force, NV2.1 Spy, and all matches passed.');
 
 
 

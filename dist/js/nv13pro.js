@@ -24,7 +24,7 @@ export const WEAPON_BAND = {
   RD20: {min: 11, ideal: 21, max: 38, burstMax: 4, cap: 20},
   RD40: {min: 14, ideal: 26, max: 48, burstMax: 6, cap: 65},
   'RD 50': {min: 9, ideal: 22, max: 44, burstMax: 7, cap: 50},
-  'DF40 II': {min: 12, ideal: 25, max: 48, burstMax: 6, cap: 88}
+  'DF40 II': {min: 12, ideal: 25, max: 48, burstMax: 6, cap: 300}
 };
 
 const NEG_OBS_COS = [Math.cos(-.42), Math.cos(-.16), Math.cos(.16), Math.cos(.42)];
