@@ -4045,5 +4045,364 @@ body.light-mode #bottomDock #skillBar {
   box-shadow: none !important;
 }
 
+/* ==========================================================================
+   Redesigned Ultra-Clear Match Setup (#lobby) Step-Card UX
+   ========================================================================== */
+.lobby-panel {
+  width: min(100%, 720px);
+}
+.lobby-lead {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: #a9bdb7;
+  line-height: 1.4;
+}
+.lobby-body {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+  padding: 14px 20px 16px;
+}
+.setup-card {
+  margin: 0 !important;
+  padding: 12px 14px 13px !important;
+  border-radius: 9px;
+  background: linear-gradient(155deg, #132528e0, #0d1b1ee8);
+  border: 1px solid #8eb3a930 !important;
+  box-shadow: inset 0 1px 0 #ffffff0d;
+}
+.setup-card > legend {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  width: 100%;
+  margin: 0 0 9px;
+  padding: 0;
+  font-size: 13.5px;
+  color: #eef5ec;
+}
+.setup-card > legend b {
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: .03em;
+}
+.setup-card > legend em {
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 500;
+  color: #93aba5;
+  margin-left: auto;
+}
+.step-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font: 800 10px/1.3 var(--mono);
+  letter-spacing: .08em;
+  color: #162624;
+  background: linear-gradient(90deg, #edc166, #ffe094);
+  flex-shrink: 0;
+}
+.step-pill.is-lab {
+  color: #062118;
+  background: linear-gradient(90deg, #38ffbe, #8effdc);
+}
 
+/* STEP 1: 2-Mode Hero Cards (3V3 / 実験場) */
+#modes.mode-grid-2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+#modes.mode-grid-2 button {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  min-height: 68px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  text-align: left;
+  background: #102023;
+  border: 1.5px solid #89a89f38;
+}
+#modes.mode-grid-2 button:hover {
+  border-color: #e6c67888;
+  background: #162b2f;
+}
+#modes.mode-grid-2 button[aria-pressed="true"] {
+  border-color: #f0c870;
+  background: linear-gradient(145deg, #e8be6624, #142b2d);
+  box-shadow: inset 0 -3px #f0c870, 0 0 18px #edc16622;
+}
+#modes.mode-grid-2 button.is-lab[aria-pressed="true"] {
+  border-color: var(--scherp);
+  background: linear-gradient(145deg, #38ffbe22, #0d2724);
+  box-shadow: inset 0 -3px var(--scherp), 0 0 18px #38ffbe28;
+}
+.mode-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+#modes.mode-grid-2 b {
+  font-size: 21px;
+  font-weight: 800;
+  letter-spacing: .04em;
+  color: #f6f8f0;
+}
+.mode-badge {
+  font-style: normal;
+  font: 800 10px/1.2 var(--mono);
+  padding: 2px 7px;
+  border-radius: 999px;
+  color: #f5d88b;
+  background: #edc1661f;
+  border: 1px solid #edc16655;
+}
+.mode-badge.is-lab {
+  color: #9effe0;
+  background: #38ffbe1a;
+  border-color: #38ffbe55;
+}
+#modes.mode-grid-2 span {
+  display: block;
+  margin-top: 5px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: #b7c8c2;
+  line-height: 1.35;
+}
 
+/* STEP 2: Auto-Aim Clear Descriptive Cards */
+#autoAimMode.aa-mode-grid button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-height: 52px;
+  padding: 8px 10px;
+  border-radius: 7px;
+}
+#autoAimMode.aa-mode-grid button b {
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: .03em;
+}
+#autoAimMode.aa-mode-grid button small {
+  font-size: 10.5px;
+  font-weight: 500;
+  color: #9db4ad;
+  line-height: 1.2;
+}
+#autoAimMode.aa-mode-grid button[aria-pressed="true"] small {
+  color: #e8e0c4;
+}
+#autoAimMode.aa-mode-grid button.is-scherp[aria-pressed="true"] small {
+  color: #a8ffe2;
+}
+
+/* STEP 2 (Lab): 3-Group Organized Lab Customizer */
+.lab-config.setup-card {
+  border-color: #38ffbe40 !important;
+  background: linear-gradient(155deg, #0c2122ea, #0a181af0);
+}
+.lab-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.lab-section {
+  padding: 8px 10px 9px;
+  border-radius: 7px;
+  background: #0d1d1fb8;
+  border: 1px solid #59a89a28;
+}
+.lab-sec-title {
+  font: 800 10.5px/1.2 var(--mono);
+  letter-spacing: .1em;
+  color: #7eead4;
+  margin-bottom: 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid #59a89a22;
+}
+.lab-row-wide {
+  grid-column: 1 / -1;
+}
+
+/* STEP 3: Goals + Multiplier Stepper + Live Pill */
+.mult-stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.step-btn {
+  width: 34px;
+  height: 36px;
+  min-height: 36px;
+  padding: 0;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font: 800 17px/1 var(--mono);
+  background: #172b2e;
+  border: 1px solid #9ab2a955;
+  color: #eff6ec;
+}
+.step-btn:hover {
+  background: #233e42;
+  border-color: #edc166aa;
+  color: #ffe298;
+}
+.lobby-panel .mult input {
+  width: 56px;
+  min-height: 36px;
+  font-weight: 800;
+}
+.targets-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px !important;
+  padding: 5px 11px;
+  border-radius: 6px;
+  background: #112427;
+  border: 1px solid #edc16638;
+  color: #f3dba0 !important;
+  font-size: 12px !important;
+  font-weight: 700;
+}
+
+/* STEP 4: 2-Line Weapon Cards & Visual Spec Bar */
+#loadout.guns button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-height: 46px;
+  padding: 6px 4px;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+#loadout.guns button b {
+  font-size: 12.5px;
+  font-weight: 800;
+  letter-spacing: .02em;
+  line-height: 1.1;
+}
+#loadout.guns button small {
+  font-size: 9.5px;
+  font-weight: 600;
+  color: #93aca5;
+  line-height: 1.1;
+}
+#loadout.guns button[aria-pressed="true"] small {
+  color: #eadfb8;
+}
+.weapon-stats {
+  display: flex !important;
+  flex-direction: column;
+  gap: 8px !important;
+  margin-top: 10px !important;
+  padding: 9px 11px;
+  border-radius: 7px;
+  background: #0d1c1f;
+  border: 1px solid #8eb0a629;
+}
+.ws-bars {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+.ws-meter {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ws-meter-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font: 700 10px/1 var(--mono);
+  color: #a9bfb8;
+}
+.ws-meter-head b {
+  color: #f2f4e8;
+  font-size: 11px;
+}
+.ws-track {
+  height: 5px;
+  border-radius: 999px;
+  background: #ffffff1c;
+  overflow: hidden;
+}
+.ws-track i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #5fd8ca, #edc166);
+}
+.ws-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.ws-chips span {
+  padding: 2px 8px;
+  border-radius: 4px;
+  font: 700 10.5px/1.35 var(--mono);
+  background: #162b2e;
+  border: 1px solid #8eb0a630;
+  color: #d6e4de;
+}
+.ws-chips span.is-accent {
+  background: #123b32;
+  border-color: #38ffbe66;
+  color: #a4ffe2;
+}
+
+/* Sticky Match Setup Footer with 1-Glance Summary */
+.lobby-foot {
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.lobby-foot-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  min-width: 0;
+  flex: 1;
+}
+.lobby-summary {
+  font: 700 11px/1.3 var(--mono);
+  color: #d4e6df;
+  padding: 4px 9px;
+  border-radius: 5px;
+  background: #102427;
+  border: 1px solid #7fa69d38;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+@media (max-width: 600px) {
+  .lobby-body { padding: 10px 12px 12px; gap: 8px; }
+  .setup-card { padding: 10px 10px 11px !important; }
+  .setup-card > legend em { margin-left: 0; width: 100%; font-size: 10.5px; }
+  #modes.mode-grid-2 { gap: 7px; }
+  #modes.mode-grid-2 button { min-height: 58px; padding: 9px 10px; }
+  #modes.mode-grid-2 b { font-size: 17px; }
+  .ws-bars { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .lobby-foot { flex-wrap: wrap; }
+  .lobby-foot #start { width: 100%; }
+}

@@ -11,7 +11,7 @@ const defaultSettings = {
   autoAim: true, autoAimMode: 'standard',
   audioMode: 'ultra300', audioV2: true, sensitivity: 1, volume: 55, sound: false
 };
-const uiModes = {'1v1': 1, '3v3': 1, '5v5': 1, lab: 1};
+const uiModes = {'3v3': 1, lab: 1};
 const gameRules = {mode: '3v3', limit: 'points', multiplier: 5, loadout: 'SW T', allyNv21: 0, aiModel: 'human', lab: {...DEFAULT_LAB_CONFIG}};
 const record = value => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 const choice = (table, value, fallback) => typeof value === 'string' && Object.hasOwn(table, value) ? value : fallback;

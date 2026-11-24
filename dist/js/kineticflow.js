@@ -32,25 +32,41 @@ function flowCellToWorld(ix, iz) {
   ];
 }
 
-// Precompute static open-cell mask once (zero runtime allocation)
+// Precompute static open-cell mask & compact index lists once (zero runtime allocation)
 const FLOW_OPEN = new Uint8Array(FLOW_W * FLOW_H);
 const FLOW_POS_X = new Float32Array(FLOW_W * FLOW_H);
 const FLOW_POS_Z = new Float32Array(FLOW_W * FLOW_H);
+const FLOW_OPEN_IDS = new Int16Array(FLOW_W * FLOW_H);
+const FLOW_INNER_IDS = new Int16Array(FLOW_W * FLOW_H);
+let FLOW_OPEN_COUNT = 0;
+let FLOW_INNER_COUNT = 0;
 for (let iz = 0; iz < FLOW_H; iz++) {
   for (let ix = 0; ix < FLOW_W; ix++) {
     const idx = iz * FLOW_W + ix;
     const [wx, wz] = flowCellToWorld(ix, iz);
     FLOW_POS_X[idx] = wx;
     FLOW_POS_Z[idx] = wz;
-    FLOW_OPEN[idx] = walkable(wx, wz, 0.46) ? 1 : 0;
+    const ok = walkable(wx, wz, 0.46) ? 1 : 0;
+    FLOW_OPEN[idx] = ok;
+    if (ok) {
+      FLOW_OPEN_IDS[FLOW_OPEN_COUNT++] = idx;
+      if (iz > 0 && iz < FLOW_H - 1 && ix > 0 && ix < FLOW_W - 1) FLOW_INNER_IDS[FLOW_INNER_COUNT++] = idx;
+    }
   }
 }
+
+const INV_X_SPAN = FLOW_W / X_SPAN;
+const INV_Z_SPAN = FLOW_H / Z_SPAN;
 
 export class KineticFlowField {
   constructor() {
     this.exposure = [new Float32Array(FLOW_W * FLOW_H), new Float32Array(FLOW_W * FLOW_H)];
     this.crossfire = [new Float32Array(FLOW_W * FLOW_H), new Float32Array(FLOW_W * FLOW_H)];
     this.lastStepAt = -1;
+    this._thX = new Float32Array(6);
+    this._thZ = new Float32Array(6);
+    this._thW = new Float32Array(6);
+    this._allies = [];
     this.stats = {
       solves: 0,
       baizerRoutes: 0,
@@ -59,10 +75,6 @@ export class KineticFlowField {
     };
   }
 
-  /**
-   * 5Hz Fast-Sweeping Threat-Exposure & Crossfire-Orthogonality update per team.
-   * Strictly consumes team-known SpectraField peaks + active hostile shots in LOS.
-   */
   tick(match, dt) {
     if (!match) return;
     const t = match.time || 0;
@@ -71,95 +83,120 @@ export class KineticFlowField {
     this.stats.solves++;
 
     const aero = match.aeroVortex;
+    const hasSmoke = !!(aero && aero.stats.totalSmoke > 1.2);
     let peakCross = 0;
     let smokeRelief = 0;
+    const thX = this._thX, thZ = this._thZ, thW = this._thW;
+    const allies = this._allies;
 
     for (let team = 0; team < 2; team++) {
       const exp = this.exposure[team];
       const cf = this.crossfire[team];
-      // Exponential decay of previous threat field
-      for (let i = 0; i < exp.length; i++) {
+      for (let oi = 0; oi < FLOW_OPEN_COUNT; oi++) {
+        const i = FLOW_OPEN_IDS[oi];
         exp[i] *= 0.62;
         cf[i] *= 0.50;
       }
 
-      // 1. Fair-play threat sources from SpectraField Bayesian peak + visible enemy contacts for `team`
-      const threats = [];
+      let thCnt = 0;
       const peak = match.spectraField?.getPeakThreat?.(team);
       const uniformP = 1 / Math.max(1, match.spectraField?.passableCount || 500);
       if (peak && (peak.certainty > 0.08 || peak.prob > uniformP * 2.6)) {
-        const w = clamp(Math.max(peak.certainty * 1.6, (peak.prob / uniformP - 1.5) * 0.12), 0.25, 1.25);
-        threats.push({x: peak.x, z: peak.z, w});
+        thX[0] = peak.x; thZ[0] = peak.z;
+        thW[0] = clamp(Math.max(peak.certainty * 1.6, (peak.prob / uniformP - 1.5) * 0.12), 0.25, 1.25);
+        thCnt = 1;
       }
-      // Also incorporate directly observed hostile shots (fair-play visible tracers!)
-      for (const s of match.shots || []) {
-        if (s.team === team || s.shafferCloaked) continue;
-        threats.push({x: s.origin[0], z: s.origin[2], w: 0.72});
-        if (threats.length >= 4) break;
-      }
-
-      // Collect alive teammates to compute crossfire orthogonality tensor
-      const allies = [];
-      for (const a of match.actors || []) {
-        if (a.alive && a.team === team) allies.push(a);
+      const shots = match.shots;
+      if (shots) {
+        for (let si = 0; si < shots.length && thCnt < 4; si++) {
+          const s = shots[si];
+          if (s.team === team || s.shafferCloaked) continue;
+          thX[thCnt] = s.origin[0]; thZ[thCnt] = s.origin[2]; thW[thCnt] = 0.72;
+          thCnt++;
+        }
       }
 
-      if (!threats.length) continue;
+      allies.length = 0;
+      const actors = match.actors;
+      if (actors) {
+        for (let ai = 0; ai < actors.length; ai++) {
+          const a = actors[ai];
+          if (a.alive && a.team === team) allies.push(a);
+        }
+      }
+      if (thCnt === 0) continue;
 
-      // 2. Deposit distance-attenuated Threat Exposure & Crossfire Orthogonality (75°-105° ideal)
-      for (let i = 0; i < exp.length; i++) {
-        if (!FLOW_OPEN[i]) continue;
+      const allyLen = allies.length;
+      // Precompute ally-to-threat unit vectors ONCE before 750-cell grid sweep (saves ~6000 sqrt/tick!)
+      const aUx = this._aUx || (this._aUx = new Float32Array(64));
+      const aUz = this._aUz || (this._aUz = new Float32Array(64));
+      const aOff = this._aOff || (this._aOff = new Int16Array(5));
+      let aTot = 0;
+      for (let k = 0; k < thCnt; k++) {
+        aOff[k] = aTot;
+        const tx = thX[k], tz = thZ[k];
+        for (let j = 0; j < allyLen && aTot < 64; j++) {
+          const al = allies[j];
+          const adx = al.x - tx, adz = al.z - tz;
+          const ad2 = adx * adx + adz * adz;
+          if (ad2 < 16) continue;
+          const invAd = 1 / Math.sqrt(ad2);
+          aUx[aTot] = adx * invAd;
+          aUz[aTot] = adz * invAd;
+          aTot++;
+        }
+      }
+      aOff[thCnt] = aTot;
+
+      for (let oi = 0; oi < FLOW_OPEN_COUNT; oi++) {
+        const i = FLOW_OPEN_IDS[oi];
         const wx = FLOW_POS_X[i], wz = FLOW_POS_Z[i];
-        let eSum = 0;
-        let cBest = 0;
-        for (let k = 0; k < threats.length; k++) {
-          const th = threats[k];
-          const dx = wx - th.x, dz = wz - th.z;
+        let eSum = 0, cBest = 0;
+        let smVal = -1;
+        for (let k = 0; k < thCnt; k++) {
+          const dx = wx - thX[k], dz = wz - thZ[k];
           const d2 = dx * dx + dz * dz;
-          if (d2 > 3600) continue; // > 60m negligible local gradient
+          if (d2 > 3600) continue;
           const d = Math.sqrt(d2) + 2.5;
-          let pressure = (th.w * 14.0) / d;
+          let pressure = (thW[k] * 14.0) / d;
 
-          // AeroVortex smoke provides real optical shelter relief!
-          if (aero && aero.stats.totalSmoke > 1.2) {
-            const sm = aero.sample(wx, wz);
-            if (sm && sm.smoke > 0.25) {
-              pressure *= clamp(1 - sm.smoke * 0.55, 0.35, 1.0);
+          if (hasSmoke) {
+            if (smVal < 0) smVal = aero.sampleSmoke(wx, wz);
+            if (smVal > 0.25) {
+              pressure *= clamp(1 - smVal * 0.55, 0.35, 1.0);
               smokeRelief++;
             }
           }
           eSum += pressure;
 
-          // Crossfire orthogonality: maximize sin(angle(cell-threat, ally-threat)) around ideal 16-34m band!
-          if (d > 8 && d < 42 && allies.length >= 1) {
-            const ux = dx / d, uz = dz / d;
-            for (let j = 0; j < allies.length; j++) {
-              const al = allies[j];
-              const adx = al.x - th.x, adz = al.z - th.z;
-              const ad = Math.hypot(adx, adz);
-              if (ad < 4) continue;
-              const cosAng = clamp((ux * adx + uz * adz) / ad, -1, 1);
-              // Peak at cosAng ~ 0 (90° orthogonal crossfire!)
-              const ortho = 1.0 - Math.abs(cosAng);
-              const rangeFit = 1.0 - Math.abs(d - 22) / 24;
-              const score = ortho * Math.max(0.15, rangeFit) * th.w;
-              if (score > cBest) cBest = score;
+          if (d > 8 && d < 42) {
+            const j0 = aOff[k], j1 = aOff[k + 1];
+            if (j1 > j0) {
+              const invD = 1 / d;
+              const ux = dx * invD, uz = dz * invD;
+              const rangeFit = Math.max(0.15, 1.0 - Math.abs(d - 22) * (1 / 24));
+              const rtw = rangeFit * thW[k];
+              for (let j = j0; j < j1; j++) {
+                let cosAng = ux * aUx[j] + uz * aUz[j];
+                if (cosAng < 0) cosAng = -cosAng;
+                if (cosAng > 1) cosAng = 1;
+                const score = (1.0 - cosAng) * rtw;
+                if (score > cBest) cBest = score;
+              }
             }
           }
         }
-        exp[i] = clamp(exp[i] + eSum * 0.52, 0, 2.5);
-        cf[i] = clamp(cf[i] + cBest * 0.65, 0, 1.5);
+        const ne = exp[i] + eSum * 0.52;
+        const nc = cf[i] + cBest * 0.65;
+        exp[i] = ne > 2.5 ? 2.5 : ne;
+        cf[i] = nc > 1.5 ? 1.5 : nc;
         if (cf[i] > peakCross) peakCross = cf[i];
       }
 
-      // 3. Single-pass Fast-Sweeping Eikonal spatial diffusion (smooth tactical gradient)
-      for (let iz = 1; iz < FLOW_H - 1; iz++) {
-        for (let ix = 1; ix < FLOW_W - 1; ix++) {
-          const idx = iz * FLOW_W + ix;
-          if (!FLOW_OPEN[idx]) continue;
-          const avg = (exp[idx - 1] + exp[idx + 1] + exp[idx - FLOW_W] + exp[idx + FLOW_W]) * 0.25;
-          exp[idx] = exp[idx] * 0.72 + avg * 0.28;
-        }
+      for (let ii = 0; ii < FLOW_INNER_COUNT; ii++) {
+        const idx = FLOW_INNER_IDS[ii];
+        const avg = (exp[idx - 1] + exp[idx + 1] + exp[idx - FLOW_W] + exp[idx + FLOW_W]) * 0.25;
+        exp[idx] = exp[idx] * 0.72 + avg * 0.28;
       }
     }
 
@@ -167,9 +204,9 @@ export class KineticFlowField {
     this.stats.smokeReliefCells = smokeRelief;
   }
 
-  /** Query exposure & crossfire orthogonality potential at world (x, z) for team. */
   sample(team, x, z) {
-    const [ix, iz] = worldToFlowCell(x, z);
+    const ix = clamp(Math.floor((x - X_MIN) * INV_X_SPAN), 0, FLOW_W - 1);
+    const iz = clamp(Math.floor((z - Z_MIN) * INV_Z_SPAN), 0, FLOW_H - 1);
     const idx = iz * FLOW_W + ix;
     return {
       exposure: this.exposure[team]?.[idx] || 0,
@@ -177,23 +214,26 @@ export class KineticFlowField {
     };
   }
 
-  /**
-   * Fair-play opportunistic BAIZER pickup evaluator for NPCs:
-   * Returns nearest safe ready BAIZER pickup when actor's purple shield < 100 and threat exposure is tolerable.
-   */
   bestBaizerPickup(actor, match, maxDist = 26) {
     if (!actor?.alive || !match?.baizers?.length) return null;
     const curBz = actor.baizerShield || 0;
     if (curBz >= 100) return null;
-    const need = (100 - curBz) / 100;
+    const need = (100 - curBz) * 0.01;
+    const maxD2 = maxDist * maxDist;
+    const invMax = 1 / (maxDist * 1.15);
+    const exp = this.exposure[actor.team];
     let best = null, bestScore = 0;
-    for (const bz of match.baizers) {
+    for (let bi = 0; bi < match.baizers.length; bi++) {
+      const bz = match.baizers[bi];
       if (bz.cooldown > 0) continue;
-      const d = Math.hypot(bz.x - actor.x, bz.z - actor.z);
-      if (d > maxDist) continue;
-      const cell = this.sample(actor.team, bz.x, bz.z);
-      // Prefer BAIZER 400 and nearby low-exposure pickups
-      const value = (bz.amount / 40) * need * (1.25 - d / (maxDist * 1.15)) - cell.exposure * 0.34;
+      const dx = bz.x - actor.x, dz = bz.z - actor.z;
+      const d2 = dx * dx + dz * dz;
+      if (d2 > maxD2) continue;
+      const d = Math.sqrt(d2);
+      const ix = clamp(Math.floor((bz.x - X_MIN) * INV_X_SPAN), 0, FLOW_W - 1);
+      const iz = clamp(Math.floor((bz.z - Z_MIN) * INV_Z_SPAN), 0, FLOW_H - 1);
+      const expVal = exp ? exp[iz * FLOW_W + ix] : 0;
+      const value = (bz.amount * 0.025) * need * (1.25 - d * invMax) - expVal * 0.34;
       if (value > bestScore) {
         bestScore = value;
         best = bz;
@@ -203,19 +243,19 @@ export class KineticFlowField {
     return best;
   }
 
-  /**
-   * Find best high-orthogonality crossfire flanking waypoint near actor for coordinated pinch plays.
-   */
   bestCrossfirePoint(team, x, z, radius = 24) {
     const cf = this.crossfire[team];
     const exp = this.exposure[team];
     if (!cf || !exp) return null;
+    const r2Max = radius * radius;
     let bestIdx = -1, bestVal = 0.22;
-    for (let i = 0; i < cf.length; i++) {
-      if (!FLOW_OPEN[i] || cf[i] < 0.22) continue;
-      const d = Math.hypot(FLOW_POS_X[i] - x, FLOW_POS_Z[i] - z);
-      if (d < 4 || d > radius) continue;
-      const val = cf[i] - exp[i] * 0.28 - d * 0.008;
+    for (let oi = 0; oi < FLOW_OPEN_COUNT; oi++) {
+      const i = FLOW_OPEN_IDS[oi];
+      if (cf[i] < 0.22) continue;
+      const dx = FLOW_POS_X[i] - x, dz = FLOW_POS_Z[i] - z;
+      const d2 = dx * dx + dz * dz;
+      if (d2 < 16 || d2 > r2Max) continue;
+      const val = cf[i] - exp[i] * 0.28 - Math.sqrt(d2) * 0.008;
       if (val > bestVal) {
         bestVal = val;
         bestIdx = i;
@@ -225,19 +265,18 @@ export class KineticFlowField {
     return [FLOW_POS_X[bestIdx], FLOW_POS_Z[bestIdx], bestVal];
   }
 
-  /** Optional zero-GPU 2D overlay onto SpectraField canvas for Lab / Spectator tactical visualization. */
   renderFlowOverlay(ctx, w, h, team = 0) {
     const cf = this.crossfire[team];
     if (!ctx || !cf) return;
     const cw = w / FLOW_W, ch = h / FLOW_H;
-    for (let iz = 0; iz < FLOW_H; iz++) {
-      for (let ix = 0; ix < FLOW_W; ix++) {
-        const val = cf[iz * FLOW_W + ix];
-        if (val < 0.28) continue;
-        const a = clamp((val - 0.24) * 0.45, 0, 0.42);
-        ctx.fillStyle = `rgba(68, 255, 198, ${a.toFixed(2)})`;
-        ctx.fillRect(ix * cw, iz * ch, cw + 0.5, ch + 0.5);
-      }
+    for (let oi = 0; oi < FLOW_OPEN_COUNT; oi++) {
+      const i = FLOW_OPEN_IDS[oi];
+      const val = cf[i];
+      if (val < 0.28) continue;
+      const ix = i % FLOW_W, iz = (i - ix) / FLOW_W;
+      const a = clamp((val - 0.24) * 0.45, 0, 0.42);
+      ctx.fillStyle = `rgba(68, 255, 198, ${a.toFixed(2)})`;
+      ctx.fillRect(ix * cw, iz * ch, cw + 0.5, ch + 0.5);
     }
   }
 }

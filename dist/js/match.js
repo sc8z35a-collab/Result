@@ -1,5 +1,5 @@
 import {clamp, forward, dot, sub, add, scale, random, cross, unit} from './geometry.js';
-import {teams, tankers, baizerPickups, walkable, moveActor, floorAt, obstruction, raycastMaterial, waterCrossing} from './yard.js';
+import {teams, tankers, baizerPickups, walkable, moveActor, floorAt, obstruction, raycastMaterialOut, WATER_HEIGHT} from './yard.js';
 import {eyeOf, torso, bodyCenter, postureStep, vertical} from './posture.js';
 import {DF, initialDF, scheduleDF, bulletGuidanceDF, steerGuidedShot, spendP1, updateDF} from './df1.js';
 import {RD, RD20, RD30, isRDWeapon, initialRD, updateRD, bulletGuidanceRD} from './rd40.js';
@@ -195,6 +195,14 @@ export class Match {
     this.telemetry = new LabTelemetry();
     this.smokeCooldown = 0;
     this.techStats = {ricochets: 0, ricochetHits: 0, penetrations: 0, wallbangHits: 0};
+    // QuantumStep-ZeroGC reusable scratch & dt-cached exponential constants
+    this._prevStrides = new Float32Array(24);
+    this._windScratch = {vx: 0, vz: 0, speed: 0};
+    this._lastExpDt = -1;
+    this._kSmooth16 = 0;
+    this._kAir18 = 0;
+    this._kLand95 = 1;
+    this._kSprint12 = 0;
     const counts = this.lab ? [this.lab.teamACount, this.lab.teamBCount] : modes[mode];
     const multiplier = Number(config.multiplier ?? 5);
     this.goals = counts.map(n => config.limit === 'unlimited' ? Infinity : n * clamp(Number.isFinite(multiplier) ? Math.round(multiplier) : 5, 1, 99));
@@ -850,17 +858,22 @@ export class Match {
   }
 
   updateTankers(dt) {
-    for (const tk of this.tankers) {
+    const actors = this.actors;
+    for (let ti = 0; ti < this.tankers.length; ti++) {
+      const tk = this.tankers[ti];
       if (tk.cooldown > 0) tk.cooldown = tk.cooldown <= dt + 1e-8 ? 0 : tk.cooldown - dt;
       if (tk.pulse > 0) tk.pulse = Math.max(0, tk.pulse - dt * 1.4);
       if (tk.cooldown > 0) continue;
-      let recipient = null, best = tk.radius;
-      for (const a of this.actors) {
+      let recipient = null, best2 = tk.radius * tk.radius;
+      const tx = tk.x, tz = tk.z;
+      for (let ai = 0; ai < actors.length; ai++) {
+        const a = actors[ai];
         if (!a.alive || a.y > 1.2) continue;
-        const distance = Math.hypot(a.x - tk.x, a.z - tk.z);
-        if (distance <= best && (!recipient || distance < best)) {
+        const dx = a.x - tx, dz = a.z - tz;
+        const d2 = dx * dx + dz * dz;
+        if (d2 <= best2 && (!recipient || d2 < best2)) {
           recipient = a;
-          best = distance;
+          best2 = d2;
         }
       }
       if (recipient) {
@@ -893,18 +906,23 @@ export class Match {
     }
   }
   updateBaizers(dt) {
-    for (const bz of this.baizers) {
+    const actors = this.actors;
+    for (let bi = 0; bi < this.baizers.length; bi++) {
+      const bz = this.baizers[bi];
       if (bz.cooldown > 0) bz.cooldown = bz.cooldown <= dt + 1e-8 ? 0 : bz.cooldown - dt;
       if (bz.pulse > 0) bz.pulse = Math.max(0, bz.pulse - dt * 1.5);
       if (bz.cooldown > 0) continue;
-      let recipient = null, best = 1.95;
-      for (const a of this.actors) {
+      let recipient = null, best2 = 1.95 * 1.95;
+      const bx = bz.x, bzZ = bz.z;
+      for (let ai = 0; ai < actors.length; ai++) {
+        const a = actors[ai];
         if (!a.alive || a.y > 1.2) continue;
         if ((a.baizerShield || 0) >= BAIZER_MAX_STACK) continue;
-        const distance = Math.hypot(a.x - bz.x, a.z - bz.z);
-        if (distance <= best && (!recipient || distance < best)) {
+        const dx = a.x - bx, dz = a.z - bzZ;
+        const d2 = dx * dx + dz * dz;
+        if (d2 <= best2 && (!recipient || d2 < best2)) {
           recipient = a;
-          best = distance;
+          best2 = d2;
         }
       }
       if (recipient) {
@@ -950,9 +968,18 @@ export class Match {
     a.stride += Math.hypot(a.x - x, a.z - z);
     if (u.jump && a.onGround) {
       a.vy = 5.35;
-      a.onGround = false
+      a.onGround = false;
     }
     vertical(a, dt, floorAt, this.gravityScale || 1);
+  }
+  _syncExpCache(dt) {
+    if (this._lastExpDt !== dt) {
+      this._lastExpDt = dt;
+      this._kSmooth16 = 1 - Math.exp(-16 * dt);
+      this._kAir18 = 1 - Math.exp(-18 * dt);
+      this._kLand95 = Math.exp(-9.5 * dt);
+      this._kSprint12 = 1 - Math.exp(-12 * dt);
+    }
   }
   systems(a, dt) {
     if (!a.alive) {
@@ -960,31 +987,37 @@ export class Match {
       if (a.respawn <= 1e-7)this.spawn(a);
       return
     }
-    a.flash = Math.max(0, a.flash - dt);
-    a.recoil = Math.max(0, (a.recoil || 0) - dt * 6.5);
-    a.hitRecoil = Math.max(0, (a.hitRecoil || 0) - dt * 4.2);
-    a.seismicRattle = Math.max(0, (a.seismicRattle || 0) - dt * 1.4);
-    a.hitFlash = Math.max(0, (a.hitFlash || 0) - dt * 5.2);
-    a.shieldFlash = Math.max(0, (a.shieldFlash || 0) - dt * 4.2);
-    a.baizerFlash = Math.max(0, (a.baizerFlash || 0) - dt * 3.8);
+    if (a.flash > 0) a.flash = a.flash > dt ? a.flash - dt : 0;
+    if (a.recoil > 0) a.recoil = Math.max(0, a.recoil - dt * 6.5);
+    if (a.hitRecoil > 0) a.hitRecoil = Math.max(0, a.hitRecoil - dt * 4.2);
+    if (a.seismicRattle > 0) a.seismicRattle = Math.max(0, a.seismicRattle - dt * 1.4);
+    if (a.hitFlash > 0) a.hitFlash = Math.max(0, a.hitFlash - dt * 5.2);
+    if (a.shieldFlash > 0) a.shieldFlash = Math.max(0, a.shieldFlash - dt * 4.2);
+    if (a.baizerFlash > 0) a.baizerFlash = Math.max(0, a.baizerFlash - dt * 3.8);
     if ((a.shafferTimer || 0) > 0) {
       a.shafferTimer = a.shafferTimer <= dt + 1e-8 ? 0 : a.shafferTimer - dt;
     }
-    a.cooldown = Math.max(0, a.cooldown - dt);
-    if (a.smokeCooldown > 0) a.smokeCooldown = Math.max(0, a.smokeCooldown - dt);
-    // Smooth body-frame velocity & posture signals for the 16-joint articulated humanoid rig
-    const sy = Math.sin(a.yaw), cy = Math.cos(a.yaw);
-    const localFwd = a.vx * sy - a.vz * cy;
-    const localSide = a.vx * cy + a.vz * sy;
-    const hSpd = Math.hypot(a.vx, a.vz);
-    const kSmooth = 1 - Math.exp(-16 * dt);
-    a.fwdVel = (a.fwdVel || 0) + (clamp(localFwd / 4.6, -1.2, 1.55) - (a.fwdVel || 0)) * kSmooth;
-    a.sideVel = (a.sideVel || 0) + (clamp(localSide / 4.6, -1.2, 1.2) - (a.sideVel || 0)) * kSmooth;
-    const airTarget = a.onGround ? 0 : 1;
-    a.airBlend = (a.airBlend || 0) + (airTarget - (a.airBlend || 0)) * (1 - Math.exp(-18 * dt));
-    a.landCompress = Math.max(0, (a.landCompress || 0) * Math.exp(-9.5 * dt) - dt * 0.35);
-    const sprintTarget = a.onGround && a.crouch < 0.25 && hSpd > 4.65 && localFwd > 2.2 ? clamp((hSpd - 4.4) / 1.4, 0, 1) : 0;
-    a.sprintAmt = (a.sprintAmt || 0) + (sprintTarget - (a.sprintAmt || 0)) * (1 - Math.exp(-12 * dt));
+    if (a.cooldown > 0) a.cooldown = a.cooldown > dt ? a.cooldown - dt : 0;
+    if (a.smokeCooldown > 0) a.smokeCooldown = a.smokeCooldown > dt ? a.smokeCooldown - dt : 0;
+    // 60Hz exact-dt coalesced body-frame visual rig smoothing (0 Math.sin/cos/sqrt on 5/6 substeps; exact gameplay parity!)
+    a._visAccum = (a._visAccum || 0) + dt;
+    if (a._visAccum >= (1 / 60 - 1e-6) || dt >= (1 / 60 - 1e-6)) {
+      const vdt = a._visAccum;
+      a._visAccum = 0;
+      this._syncExpCache(vdt);
+      const sy = Math.sin(a.yaw), cy = Math.cos(a.yaw);
+      const localFwd = a.vx * sy - a.vz * cy;
+      const localSide = a.vx * cy + a.vz * sy;
+      const hSpd = Math.sqrt(a.vx * a.vx + a.vz * a.vz);
+      const kSmooth = this._kSmooth16;
+      a.fwdVel = (a.fwdVel || 0) + (clamp(localFwd * (1 / 4.6), -1.2, 1.55) - (a.fwdVel || 0)) * kSmooth;
+      a.sideVel = (a.sideVel || 0) + (clamp(localSide * (1 / 4.6), -1.2, 1.2) - (a.sideVel || 0)) * kSmooth;
+      const airTarget = a.onGround ? 0 : 1;
+      a.airBlend = (a.airBlend || 0) + (airTarget - (a.airBlend || 0)) * this._kAir18;
+      if (a.landCompress > 0) a.landCompress = Math.max(0, a.landCompress * this._kLand95 - vdt * 0.35);
+      const sprintTarget = a.onGround && a.crouch < 0.25 && hSpd > 4.65 && localFwd > 2.2 ? clamp((hSpd - 4.4) * (1 / 1.4), 0, 1) : 0;
+      a.sprintAmt = (a.sprintAmt || 0) + (sprintTarget - (a.sprintAmt || 0)) * this._kSprint12;
+    }
     const w = this.weapon(a);
     const wReload = w.reload;
     if (a.shield < BASE_SHIELD_MAX) {
@@ -1011,7 +1044,6 @@ export class Match {
     } else a.ammoClock = 0;
     if (a.aa) {
       updateUniversalAA(this, a, dt);
-      // Keep DF1 P1 thermal/regen ticking even when Lab AA override is active
       if (a.df) {
         const d = a.df;
         if (d.p1 < 20) {
@@ -1135,104 +1167,140 @@ export class Match {
     if (s.scherpApn) steerScherpShot(this, s, dt);
     else if (s.guided) steerGuidedShot(this, s, dt);
     const a = s.p;
-    // MagnusAero 1.0: transonic Mach drag polar, post-ricochet spin Magnus curve, and AeroVortex crosswind
-    const wind = (a[1] > 0.1 && a[1] < 5.5) ? this.aeroVortex.sample(a[0], a[2]) : null;
+    const ax = a[0], ay = a[1], az = a[2];
+    const wind = (ay > 0.1 && ay < 5.5) ? this.aeroVortex.sampleWindOut(ax, az, this._windScratch) : null;
     stepMagnusAero(s, wind, dt);
-    const travel = Math.min(dt, s.life);
-    const b = add(a, scale(s.dir, s.speed * travel));
-    const hitInfo = raycastMaterial(a, b);
-    const wet = waterCrossing(a, b);
-    let at = Math.min(hitInfo?.t ?? Infinity, wet ?? Infinity), target = null;
-    for (const v of this.actors) {
+    const travel = dt < s.life ? dt : s.life;
+    const stepLen = s.speed * travel;
+    const sd = s.dir;
+    const bx = ax + sd[0] * stepLen, by = ay + sd[1] * stepLen, bz = az + sd[2] * stepLen;
+    // Double-buffered next position avoids 2 array allocations per shot per 360Hz substep!
+    let b = s._pNext;
+    if (!b || b === a) b = (s._pNext = [0, 0, 0]);
+    b[0] = bx; b[1] = by; b[2] = bz;
+    const rOut = this._rayScratch || (this._rayScratch = {
+      t: 0, tExit: 0, point: [0, 0, 0], normal: [0, 1, 0],
+      exitPoint: null, exitNormal: null, _exitPt: [0, 0, 0], _exitNrm: [0, 1, 0],
+      thickness: Infinity, mat: 'steel', box: null
+    });
+    const hasHit = raycastMaterialOut(ax, ay, az, bx, by, bz, rOut);
+    const wet = (ay > WATER_HEIGHT && by <= WATER_HEIGHT) ? (ay - WATER_HEIGHT) / (ay - by) : null;
+    let at = hasHit ? rOut.t : Infinity;
+    if (wet !== null && wet < at) at = wet;
+    let target = null;
+    const actors = this.actors;
+    // Conservative swept-segment AABB broadphase skips 90%+ of distant actors before sweptMovingBodyHit!
+    const pad = travel * 12 + 1.35;
+    const sx0 = (ax < bx ? ax : bx) - pad, sx1 = (ax > bx ? ax : bx) + pad;
+    const sz0 = (az < bz ? az : bz) - pad, sz1 = (az > bz ? az : bz) + pad;
+    for (let vi = 0; vi < actors.length; vi++) {
+      const v = actors[vi];
       if (!v.alive || v.team === s.team) continue;
-      // QuantumTick 1.0: analytical relative-velocity swept-capsule CCD
+      if (v.x < sx0 || v.x > sx1 || v.z < sz0 || v.z > sz1) continue;
       const t = sweptMovingBodyHit(a, b, v, travel);
       if (t < at) {
-        if (Math.hypot(v.vx || 0, v.vz || 0) > 1.5 && bodyHit(a, b, v) > 1) {
+        if ((v.vx * v.vx + v.vz * v.vz) > 2.25 && bodyHit(a, b, v) > 1) {
           this.telemetry.ccdCorrections++;
         }
         at = t;
         target = v;
       }
     }
-    const point = at <= 1 ? add(a, scale(sub(b, a), at)) : b;
-    const impactTime = Math.max(s.trace?.startTime ?? 0, this.time - dt + Math.min(1, at) * travel);
-    this.aeroVortex.injectProjectileWake(a, point, s.speed, s.gun);
+    const abx = bx - ax, aby = by - ay, abz = bz - az;
+    const hitOcc = at <= 1;
+    const px = hitOcc ? ax + abx * at : bx;
+    const py = hitOcc ? ay + aby * at : by;
+    const pz = hitOcc ? az + abz * at : bz;
+    const point = hitOcc ? [px, py, pz] : b;
+    const impactTime = Math.max(s.trace?.startTime ?? 0, this.time - dt + (hitOcc ? at : 1) * travel);
+    if (ay > 0.05 && ay < 5.5 && ax > -26 && ax < 26 && az > -102 && az < 102 && (hitOcc || (s._wakeParity = !s._wakeParity))) {
+      this.aeroVortex.injectProjectileWake(a, point, s.speed, s.gun);
+    }
+
+    const ab2 = abx * abx + aby * aby + abz * abz;
     // Detect close bullet flyby near the active listener (human player or spectated actor) for spatial whiz/N-wave audio.
     const pl = this.viewActor || this.player;
-    if (pl && pl.alive && s.owner !== pl && !s.whizzed && target !== pl && !(s.shafferCloaked && !this.spectating && s.team !== pl.team)) {
-      const eye = eyeOf(pl);
-      const ab = sub(b, a), ab2 = dot(ab, ab);
-      if (ab2 > 1e-8) {
-        const u = clamp(dot(sub(eye, a), ab) / ab2, 0, 1);
-        const closest = add(a, scale(ab, u));
-        const d = Math.hypot(closest[0] - eye[0], closest[1] - eye[1], closest[2] - eye[2]);
-        if (d < 6.0 && (at > 1 || u <= at)) {
-          s.whizzed = true;
-          const rx = Math.cos(pl.yaw), rz = Math.sin(pl.yaw);
-          const p0 = sub(a, eye), p1 = sub(b, eye);
-          const pan = clamp((p0[0] * rx + p0[2] * rz) / (Math.hypot(p0[0], p0[2]) + .7), -1, 1);
-          const panEnd = clamp((p1[0] * rx + p1[2] * rz) / (Math.hypot(p1[0], p1[2]) + .7), -1, 1);
-          this.event('whiz', {
-            shot: s,
-            actor: s.owner,
-            dist: d,
-            speed: s.speed,
-            mach: s.mach || (s.speed / 343),
-            nWaveDelay: machNWaveDelay(s.speed, d),
-            gun: s.gun,
-            source: s.source,
-            pan,
-            panEnd,
-            point: closest,
-            dir: s.dir,
-            origin: s.origin,
-            p0: a,
-            p1: b,
-            enemy: s.team !== pl.team
-          })
-        }
+    if (ab2 > 1e-8 && pl && pl.alive && s.owner !== pl && !s.whizzed && target !== pl && !(s.shafferCloaked && !this.spectating && s.team !== pl.team)) {
+      const plLean = pl.lean || 0;
+      const ex = pl.x + Math.cos(pl.yaw) * plLean;
+      const ey = pl.y + (pl.human ? 1.61 : 1.5) * (1 - (pl.crouch || 0) * .34);
+      const ez = pl.z + Math.sin(pl.yaw) * plLean;
+      const u = clamp(((ex - ax) * abx + (ey - ay) * aby + (ez - az) * abz) / ab2, 0, 1);
+      const cx = ax + abx * u, cy = ay + aby * u, cz = az + abz * u;
+      const ddx = cx - ex, ddy = cy - ey, ddz = cz - ez;
+      const d2 = ddx * ddx + ddy * ddy + ddz * ddz;
+      if (d2 < 36.0 && (!hitOcc || u <= at)) {
+        const d = Math.sqrt(d2);
+        s.whizzed = true;
+        const rx = Math.cos(pl.yaw), rz = Math.sin(pl.yaw);
+        const p0x = ax - ex, p0z = az - ez, p1x = bx - ex, p1z = bz - ez;
+        const pan = clamp((p0x * rx + p0z * rz) / (Math.sqrt(p0x * p0x + p0z * p0z) + .7), -1, 1);
+        const panEnd = clamp((p1x * rx + p1z * rz) / (Math.sqrt(p1x * p1x + p1z * p1z) + .7), -1, 1);
+        this.event('whiz', {
+          shot: s,
+          actor: s.owner,
+          dist: d,
+          speed: s.speed,
+          mach: s.mach || (s.speed * (1 / 343)),
+          nWaveDelay: machNWaveDelay(s.speed, d),
+          gun: s.gun,
+          source: s.source,
+          pan,
+          panEnd,
+          point: [cx, cy, cz],
+          dir: s.dir,
+          origin: s.origin,
+          p0: [ax, ay, az],
+          p1: [bx, by, bz],
+          enemy: s.team !== pl.team
+        });
       }
     }
-    // Notify NPCs of close enemy bullet flybys (<2.2m) for realistic suppression startle/flinch
-    if (this.nv.onBulletWhiz && !s.shafferCloaked && (s.age || 0) < 0.45) {
-      const ab = sub(b, a), ab2 = dot(ab, ab);
-      if (ab2 > 1e-8) {
-        let mask = s.whizNpcMask || 0;
-        for (const v of this.actors) {
-          if (!v.alive || v.human || v.team === s.team || v === target) continue;
-          const bit = 1 << v.id;
-          if (mask & bit) continue;
-          const eye = eyeOf(v);
-          const u = clamp(dot(sub(eye, a), ab) / ab2, 0, 1);
-          const cx = a[0] + ab[0] * u - eye[0], cy = a[1] + ab[1] * u - eye[1], cz = a[2] + ab[2] * u - eye[2];
-          const d = Math.hypot(cx, cy, cz);
-          if (d < 2.25 && (at > 1 || u <= at)) {
-            mask |= bit;
-            this.nv.onBulletWhiz(v, s, d);
-          }
+    // Notify NPCs of close enemy bullet flybys (<2.25m) for realistic suppression startle/flinch (zero-GC!)
+    if (ab2 > 1e-8 && this.nv.onBulletWhiz && !s.shafferCloaked && (s.age || 0) < 0.45) {
+      let mask = s.whizNpcMask || 0;
+      const invAb2 = 1 / ab2;
+      for (let vi = 0; vi < actors.length; vi++) {
+        const v = actors[vi];
+        if (!v.alive || v.human || v.team === s.team || v === target) continue;
+        const bit = 1 << v.id;
+        if (mask & bit) continue;
+        // Coarse broadphase before eye projection
+        if (Math.abs(v.x - ax) > 12 && Math.abs(v.x - bx) > 12) continue;
+        if (Math.abs(v.z - az) > 12 && Math.abs(v.z - bz) > 12) continue;
+        const vLean = v.lean || 0;
+        const ex = v.x + Math.cos(v.yaw) * vLean;
+        const ey = v.y + 1.5 * (1 - (v.crouch || 0) * .34);
+        const ez = v.z + Math.sin(v.yaw) * vLean;
+        const u = clamp(((ex - ax) * abx + (ey - ay) * aby + (ez - az) * abz) * invAb2, 0, 1);
+        const cx = ax + abx * u - ex, cy = ay + aby * u - ey, cz = az + abz * u - ez;
+        const d2 = cx * cx + cy * cy + cz * cz;
+        if (d2 < 5.0625 && (!hitOcc || u <= at)) {
+          mask |= bit;
+          this.nv.onBulletWhiz(v, s, Math.sqrt(d2));
         }
-        s.whizNpcMask = mask;
       }
+      s.whizNpcMask = mask;
     }
+
+    s._pNext = a;
     s.old = a;
     s.p = point;
-    const flight = travel * Math.min(1, at);
+    const flight = travel * (hitOcc ? at : 1);
     s.life -= flight;
     s.age = (s.age || 0) + flight;
-    // Supersonic Mach shockwave aero-acoustic coupling to nearby hollow steel shipping containers
     if (s.speed >= 340 && s.age >= (s._nextMachAt || 0.008)) {
       s._nextMachAt = s.age + 0.045;
       this.resonance.exciteMach(point, s.speed);
     }
-    if (at > 1) this.chronoTrace.sampleShot(s, impactTime);
+    if (!hitOcc) this.chronoTrace.sampleShot(s, impactTime);
     s.trailClock = (s.trailClock || 0) + dt;
-    if (at > 1 && s.trail && s.trailClock >= .0055) {
+    if (!hitOcc && s.trail && s.trailClock >= .0055) {
       s.trailClock = 0;
-      s.trail.push([b[0], b[1], b[2]]);
-      if (s.trail.length > 8)s.trail.shift()
+      s.trail.push([bx, by, bz]);
+      if (s.trail.length > 8) s.trail.shift();
     }
-    if (at <= 1) {
+    if (hitOcc) {
       const p = point;
       if (target) {
         const res = this.damage(target, s.owner, s.damage, s.dir, {ricochet: s.ricocheted, wallbang: s.penetrated, shot: s, point: p, time: impactTime});
@@ -1258,7 +1326,15 @@ export class Match {
           seed: ++this.seq
         })
       } else {
-        const isWater = at === wet && (!hitInfo || wet < hitInfo.t);
+        const isWater = at === wet && (!hasHit || wet < rOut.t);
+        const hitInfo = (!isWater && hasHit) ? {
+          t: rOut.t, tExit: rOut.tExit,
+          point: [rOut.point[0], rOut.point[1], rOut.point[2]],
+          normal: [rOut.normal[0], rOut.normal[1], rOut.normal[2]],
+          exitPoint: rOut.exitPoint ? [rOut.exitPoint[0], rOut.exitPoint[1], rOut.exitPoint[2]] : null,
+          exitNormal: rOut.exitNormal ? [rOut.exitNormal[0], rOut.exitNormal[1], rOut.exitNormal[2]] : null,
+          thickness: rOut.thickness, mat: rOut.mat, box: rOut.box
+        } : null;
         const mat = isWater ? 'water' : hitInfo.mat;
         const normal = isWater ? [0, 1, 0] : hitInfo.normal;
         const metal = mat === 'steel';
@@ -1367,25 +1443,30 @@ export class Match {
       }
       return false
     }
-    const alive = s.life > 0 && Math.abs(b[0]) < 120 && Math.abs(b[2]) < 200;
-    if (!alive) this.chronoTrace.finishShot(s, b, 'miss', impactTime);
+    const alive = s.life > 0 && Math.abs(bx) < 120 && Math.abs(bz) < 200;
+    if (!alive) this.chronoTrace.finishShot(s, [bx, by, bz], 'miss', impactTime);
     return alive
   }
   step(dt, input) {
     if (this.ended)return;
     this.time += dt;
-    this.smokeCooldown = Math.max(0, this.smokeCooldown - dt);
+    if (this.smokeCooldown > 0) this.smokeCooldown = this.smokeCooldown > dt ? this.smokeCooldown - dt : 0;
     if (this.time > this.tremorAt + 1.2)this.tremorAt = this.time + 65 + this.rng() * 36;
     this.groundMotion = this.time >= this.tremorAt ? Math.sin((this.time - this.tremorAt) / 1.2 * Math.PI) : 0;
-    const prevStrides = this.actors.map(a => a.stride || 0);
-    for (let i = 0; i < this.actors.length; i++) {
-      const a = this.actors[i];
+    const actors = this.actors, nActors = actors.length;
+    if (this._prevStrides.length < nActors) this._prevStrides = new Float32Array(nActors);
+    const prevStrides = this._prevStrides;
+    this._syncExpCache(dt);
+    for (let i = 0; i < nActors; i++) {
+      const a = actors[i];
+      prevStrides[i] = a.stride || 0;
       this.systems(a, dt);
     }
     this.updatePlayer(dt, input);
     const arrivedEchoes = this.echoPulse.step(this);
-    for (const rep of arrivedEchoes) {
-      const listener = this.actors[rep.listenerId];
+    for (let ri = 0; ri < arrivedEchoes.length; ri++) {
+      const rep = arrivedEchoes[ri];
+      const listener = actors[rep.listenerId];
       const src = rep.sourceActor;
       if (src && (src.shafferTimer || 0) > 0 && listener && listener.team !== src.team && rep.kind !== 'ricochet' && rep.kind !== 'penetrate') continue;
       this.nv.onEchoArrival?.(rep);
@@ -1397,12 +1478,14 @@ export class Match {
         });
       }
     }
-    // Feed newly arrived player acoustic waves into Team 0's fair-play Bayesian wavefunction & FermatCore!
-    if (this.echoPulse.playerWaves.length) {
-      for (const w of this.echoPulse.playerWaves) {
-        if (!w.specFed && this.player?.alive && w.team !== this.player.team && this.time >= w.arriveAt) {
+    const pWaves = this.echoPulse.playerWaves;
+    if (pWaves.length) {
+      const pl = this.player;
+      for (let wi = 0; wi < pWaves.length; wi++) {
+        const w = pWaves[wi];
+        if (!w.specFed && pl?.alive && w.team !== pl.team && this.time >= w.arriveAt) {
           w.specFed = true;
-          const srcActor = w.actorId >= 0 ? this.actors[w.actorId] : null;
+          const srcActor = w.actorId >= 0 ? actors[w.actorId] : null;
           const staleSrc = w.actorId >= 0 && (!srcActor?.alive || srcActor.spawnId !== w.actorSpawnId);
           if (!staleSrc && !((srcActor?.shafferTimer || 0) > 0 && w.kind !== 'ricochet' && w.kind !== 'penetrate')) {
             this.spectraField.observe(0, w.pos[0], w.pos[2], {sigma: w.occluded ? 7.2 : 4.6, weight: 0.58});
@@ -1415,11 +1498,14 @@ export class Match {
     }
     this.nv.tick(dt);
     // Stamp warm ThermoFlux thermal footprints, EchoPulse steps & ResonanceCore hollow container roof drums!
-    for (let i = 0; i < this.actors.length; i++) {
-      const a = this.actors[i];
-      const prevStride = prevStrides[i];
+    const inv115 = 1 / 1.15, inv22 = 1 / 2.2;
+    for (let i = 0; i < nActors; i++) {
+      const a = actors[i];
       if (!a.alive || !a.onGround || (a.shafferTimer || 0) > 0) continue;
-      if (Math.floor((a.stride || 0) / 1.15) > Math.floor(prevStride / 1.15)) {
+      const curStride = a.stride || 0;
+      const prevStride = prevStrides[i];
+      if (curStride === prevStride) continue;
+      if (Math.floor(curStride * inv115) > Math.floor(prevStride * inv115)) {
         const intensity = (a.sprintAmt || 0) > 0.35 ? 0.56 : 0.38;
         this.thermoFlux.stampFootprint(a.x, a.z, a.team, this.time, intensity);
         if (a.y > 1.8) {
@@ -1428,7 +1514,7 @@ export class Match {
         }
       }
       if ((a.sprintAmt || 0) > 0.35 || a.y > 0.5) {
-        if (Math.floor((a.stride || 0) / 2.2) > Math.floor(prevStride / 2.2)) {
+        if (Math.floor(curStride * inv22) > Math.floor(prevStride * inv22)) {
           this.echoPulse.emit(this, {kind: 'step', pos: [a.x, a.y + 0.15, a.z], actor: a, team: a.team, loudness: a.y > 0.5 ? 0.85 : 0.55});
         }
       }
@@ -1441,15 +1527,19 @@ export class Match {
     this.kineticFlow.tick(this, dt);
     this.resonance.step(dt);
     this.chronoTrace.prune(this.time);
+    const shots = this.shots;
     let write = 0;
-    for (const shot of this.shots) {
-      if (!this.ended && this.projectile(shot, dt))this.shots[write++] = shot
+    for (let si = 0; si < shots.length; si++) {
+      const shot = shots[si];
+      if (!this.ended && this.projectile(shot, dt)) shots[write++] = shot;
     }
-    this.shots.length = this.ended ? 0 : write;
+    shots.length = this.ended ? 0 : write;
+    const casings = this.casings;
     let cw = 0;
-    for (const c of this.casings) {
+    for (let ci = 0; ci < casings.length; ci++) {
+      const c = casings[ci];
       c.life -= dt;
-      if (c.life <= 0)continue;
+      if (c.life <= 0) continue;
       c.v[1] -= 13.5 * dt;
       c.p[0] += c.v[0] * dt;
       c.p[1] += c.v[1] * dt;
@@ -1470,13 +1560,26 @@ export class Match {
         }
         c.bounced = true
       }
-      this.casings[cw++] = c
+      casings[cw++] = c;
     }
-    this.casings.length = cw;
-    for (const e of this.effects)e.life -= dt;
-    this.effects = this.effects.filter(e => e.life > 0);
-    if (this.effects.length > 130)this.effects = this.effects.slice(-130);
-    for (const sc of this.scorches)sc.life -= dt;
-    this.scorches = this.scorches.filter(sc => sc.life > 0)
+    casings.length = cw;
+    // In-place compaction for effects & scorches (0 array allocations per 360Hz tick!)
+    const effects = this.effects;
+    let ew = 0;
+    for (let ei = 0; ei < effects.length; ei++) {
+      const e = effects[ei];
+      e.life -= dt;
+      if (e.life > 0) effects[ew++] = e;
+    }
+    effects.length = ew;
+    if (ew > 130) effects.splice(0, ew - 130);
+    const scorches = this.scorches;
+    let sw = 0;
+    for (let si = 0; si < scorches.length; si++) {
+      const sc = scorches[si];
+      sc.life -= dt;
+      if (sc.life > 0) scorches[sw++] = sc;
+    }
+    scorches.length = sw;
   }
 }

@@ -19,7 +19,7 @@
 //      - Works identically in full WebGL2, Lightweight Mode, and SoftwareRenderer with 0 GPU shader cost!
 
 import {clamp, add, sub, scale, dot, unit, forward} from './geometry.js';
-import {cargo, obstruction, raycastMaterial} from './yard.js';
+import {cargo, obstructionCoords, raycastMaterial} from './yard.js';
 import {eyeOf, targetPoint} from './posture.js';
 import {RICOCHET_SIN_STEEL, WEAPON_PENETRATION} from './ballistics.js';
 
@@ -137,10 +137,10 @@ export function solveOneBounce(O, Q, f, speed = 360, targetVel = null) {
   if (grazeSin > FERMAT_GRAZE_LIMIT || grazeSin < 0.035) return null;
 
   // Verify BOTH legs are 100% unobstructed in 3D space (offset slightly off steel face along outward normal)
-  const bOff = [bx + f.nx * 0.08, by, bz + f.nz * 0.08];
-  if (obstruction(O, bOff) <= 0.992) return null;
+  const bOffX = bx + f.nx * 0.08, bOffZ = bz + f.nz * 0.08;
+  if (obstructionCoords(O[0], O[1], O[2], bOffX, by, bOffZ) <= 0.992) return null;
+  if (obstructionCoords(bOffX, by, bOffZ, qx, qy, qz) <= 0.992) return null;
   const Qfinal = [qx, qy, qz];
-  if (obstruction(bOff, Qfinal) <= 0.992) return null;
 
   const angleDeg = Math.round(Math.asin(clamp(grazeSin, 0, 1)) * 180 / Math.PI);
   const leg1 = Math.hypot(bx - O[0], by - O[1], bz - O[2]);
@@ -175,70 +175,65 @@ export function solveTwoBounce(O, Q, f1, f2, speed = 360) {
   const dQ2 = signedDistToFace(Q, f2);
   if (dQ2 <= 0.35 || dQ2 > 22.0) return null;
 
-  // Step 1: First mirror image of Q across second wall f2
-  const Q1 = reflectPointAcrossFace(Q, f2);
-  const dQ1_1 = signedDistToFace(Q1, f1);
+  const q1x = f2.axis === 0 ? 2 * f2.coord - Q[0] : Q[0];
+  const q1y = Q[1];
+  const q1z = f2.axis === 2 ? 2 * f2.coord - Q[2] : Q[2];
+  const dQ1_1 = f1.axis === 0 ? (q1x - f1.coord) * f1.nx : (q1z - f1.coord) * f1.nz;
   if (dQ1_1 <= 0.35) return null;
 
-  // Step 2: Second mirror image of Q1 across first wall f1
-  const Q2 = reflectPointAcrossFace(Q1, f1);
-  const totalLen = Math.hypot(Q2[0] - O[0], Q2[1] - O[1], Q2[2] - O[2]);
-  if (totalLen > MAX_TWO_BOUNCE_DIST || totalLen < 2.2) return null;
+  const q2x = f1.axis === 0 ? 2 * f1.coord - q1x : q1x;
+  const q2z = f1.axis === 2 ? 2 * f1.coord - q1z : q1z;
+  const tdx = q2x - O[0], tdy = q1y - O[1], tdz = q2z - O[2];
+  const totalLen2 = tdx * tdx + tdy * tdy + tdz * tdz;
+  if (totalLen2 > MAX_TWO_BOUNCE_DIST * MAX_TWO_BOUNCE_DIST || totalLen2 < 4.84) return null;
+  const totalLen = Math.sqrt(totalLen2);
 
-  // Step 3: Exact first bounce point B1 on f1
   const t1 = dO1 / (dO1 + dQ1_1);
-  const B1 = [
-    O[0] + (Q2[0] - O[0]) * t1,
-    O[1] + (Q2[1] - O[1]) * t1,
-    O[2] + (Q2[2] - O[2]) * t1
-  ];
-  if (!pointWithinFace(B1, f1)) return null;
+  const b1x = O[0] + tdx * t1, b1y = O[1] + tdy * t1, b1z = O[2] + tdz * t1;
+  if (b1y < f1.yMin || b1y > f1.yMax) return null;
+  const u1 = f1.axis === 0 ? b1z : b1x;
+  if (u1 < f1.uMin || u1 > f1.uMax) return null;
 
-  // Step 4: Exact second bounce point B2 on f2 along segment B1 -> Q1
-  const dB1_2 = signedDistToFace(B1, f2);
+  const dB1_2 = f2.axis === 0 ? (b1x - f2.coord) * f2.nx : (b1z - f2.coord) * f2.nz;
   if (dB1_2 <= 0.35) return null;
   const t2 = dB1_2 / (dB1_2 + dQ2);
-  const B2 = [
-    B1[0] + (Q1[0] - B1[0]) * t2,
-    B1[1] + (Q1[1] - B1[1]) * t2,
-    B1[2] + (Q1[2] - B1[2]) * t2
-  ];
-  if (!pointWithinFace(B2, f2)) return null;
+  const b2x = b1x + (q1x - b1x) * t2, b2y = b1y + (q1y - b1y) * t2, b2z = b1z + (q1z - b1z) * t2;
+  if (b2y < f2.yMin || b2y > f2.yMax) return null;
+  const u2 = f2.axis === 0 ? b2z : b2x;
+  if (u2 < f2.uMin || u2 > f2.uMax) return null;
 
-  // Step 5: Verify BOTH grazing angles satisfy BallisticCore-X steel ricochet law!
-  const d1 = unit(sub(B1, O));
-  const sin1 = Math.abs(d1[0] * f1.nx + d1[2] * f1.nz);
+  const l1x = b1x - O[0], l1y = b1y - O[1], l1z = b1z - O[2];
+  const l1 = Math.sqrt(l1x * l1x + l1y * l1y + l1z * l1z) || 1;
+  const d1x = l1x / l1, d1y = l1y / l1, d1z = l1z / l1;
+  const sin1 = Math.abs(d1x * f1.nx + d1z * f1.nz);
   if (sin1 > FERMAT_GRAZE_LIMIT || sin1 < 0.035) return null;
 
-  const d2 = unit(sub(B2, B1));
-  const sin2 = Math.abs(d2[0] * f2.nx + d2[2] * f2.nz);
+  const l2x = b2x - b1x, l2y = b2y - b1y, l2z = b2z - b1z;
+  const l2 = Math.sqrt(l2x * l2x + l2y * l2y + l2z * l2z) || 1;
+  const sin2 = Math.abs((l2x / l2) * f2.nx + (l2z / l2) * f2.nz);
   if (sin2 > FERMAT_GRAZE_LIMIT || sin2 < 0.035) return null;
 
-  // Step 6: Verify ALL 3 physical legs are 100% unobstructed in 3D space!
-  const b1Off = [B1[0] + f1.nx * 0.08, B1[1], B1[2] + f1.nz * 0.08];
-  const b2Off = [B2[0] + f2.nx * 0.08, B2[1], B2[2] + f2.nz * 0.08];
-  if (obstruction(O, b1Off) <= 0.992) return null;
-  if (obstruction(b1Off, b2Off) <= 0.992) return null;
-  if (obstruction(b2Off, Q) <= 0.992) return null;
+  const b1OffX = b1x + f1.nx * 0.08, b1OffZ = b1z + f1.nz * 0.08;
+  const b2OffX = b2x + f2.nx * 0.08, b2OffZ = b2z + f2.nz * 0.08;
+  if (obstructionCoords(O[0], O[1], O[2], b1OffX, b1y, b1OffZ) <= 0.992) return null;
+  if (obstructionCoords(b1OffX, b1y, b1OffZ, b2OffX, b2y, b2OffZ) <= 0.992) return null;
+  if (obstructionCoords(b2OffX, b2y, b2OffZ, Q[0], Q[1], Q[2]) <= 0.992) return null;
 
   const angleDeg = Math.round(Math.asin(clamp(sin1, 0, 1)) * 180 / Math.PI);
   const angle2Deg = Math.round(Math.asin(clamp(sin2, 0, 1)) * 180 / Math.PI);
-  const l1 = Math.hypot(B1[0] - O[0], B1[1] - O[1], B1[2] - O[2]);
-  const l2 = Math.hypot(B2[0] - B1[0], B2[1] - B1[1], B2[2] - B1[2]);
-  const l3 = Math.hypot(Q[0] - B2[0], Q[1] - B2[1], Q[2] - B2[2]);
+  const l3 = Math.hypot(Q[0] - b2x, Q[1] - b2y, Q[2] - b2z);
   const flightMs = Math.round((l1 / Math.max(120, speed) + l2 / Math.max(100, speed * STEEL_SPEED_RETAIN) + l3 / Math.max(85, speed * STEEL_SPEED_RETAIN * STEEL_SPEED_RETAIN)) * 1000);
-  // Slight preference for 1-bounce when both exist; strong clarity bonus on clean double-bank!
   const score = (MAX_TWO_BOUNCE_DIST - totalLen) * 0.72 + (FERMAT_GRAZE_LIMIT - Math.max(sin1, sin2)) * 22.0;
 
   return {
     bounces: 2,
     origin: [O[0], O[1], O[2]],
-    bounce1: B1,
+    bounce1: [b1x, b1y, b1z],
     normal1: [f1.nx, 0, f1.nz],
-    bounce2: B2,
+    bounce2: [b2x, b2y, b2z],
     normal2: [f2.nx, 0, f2.nz],
     target: [Q[0], Q[1], Q[2]],
-    aimDir: d1,
+    aimDir: [d1x, d1y, d1z],
     grazeSin: sin1,
     grazeSin2: sin2,
     angleDeg,
@@ -368,18 +363,31 @@ export class FermatCore {
   /** Updates fair-play visual sightings for Team 0 (strictly direct unobstructed LOS only!). */
   refreshTeamVisualIntel(match) {
     const t = match.time;
-    const allies = match.actors.filter(a => a.alive && a.team === 0);
-    const enemies = match.actors.filter(a => a.alive && a.team === 1);
-    for (const e of enemies) {
-      // 1. Direct unobstructed visual sight from any live ally (player or ally NPC)
+    const actors = match.actors;
+    const pl = match.player;
+    const av = match.aeroVortex;
+    const checkSmoke = !!(av && av.stats.totalSmoke > 1.8);
+    for (let ei = 0; ei < actors.length; ei++) {
+      const e = actors[ei];
+      if (!e.alive || e.team !== 1) continue;
       let seen = false;
       const tp = targetPoint(e);
-      for (const al of allies) {
-        const d = Math.hypot(e.x - al.x, e.z - al.z);
-        if (d > 48) continue;
-        const eye = eyeOf(al), dir = forward(al.yaw, al.pitch);
-        const inView = d < 4 || dot(unit(sub(tp, eye)), dir) >= .12;
-        if (inView && obstruction(eye, tp) > 1 && !(match.aeroVortex?.stats.totalSmoke > 1.8 && match.aeroVortex.smokeOcclusion(eye, tp) > .86)) {
+      const tpx = tp[0], tpy = tp[1], tpz = tp[2];
+      for (let ai = 0; ai < actors.length; ai++) {
+        const al = actors[ai];
+        if (!al.alive || al.team !== 0) continue;
+        const dx = e.x - al.x, dz = e.z - al.z;
+        const d2 = dx * dx + dz * dz;
+        if (d2 > 2304) continue; // > 48m
+        const eye = eyeOf(al);
+        const dir = forward(al.yaw, al.pitch);
+        let inView = d2 < 16;
+        if (!inView) {
+          const vx = tpx - eye[0], vy = tpy - eye[1], vz = tpz - eye[2];
+          const vl = Math.sqrt(vx * vx + vy * vy + vz * vz) || 1;
+          inView = (vx * dir[0] + vy * dir[1] + vz * dir[2]) / vl >= .12;
+        }
+        if (inView && obstructionCoords(eye[0], eye[1], eye[2], tpx, tpy, tpz) > 1 && !(checkSmoke && av.smokeOcclusion(eye, tp) > .86)) {
           seen = true;
           break;
         }
@@ -388,8 +396,6 @@ export class FermatCore {
         this.recordIntel(0, e, t, 'visual', tp);
         continue;
       }
-      // 2. RD40 D01 SENSOR / DF40 II ARV1.3 active behind-wall lock (fair-play weapon feature)
-      const pl = match.player;
       if (pl?.alive && (
         (pl.rd?.d01Active && pl.rd.focusId === e.id && pl.rd.focusSpawnId === e.spawnId) ||
         (pl.df40?.d01Active && pl.df40.focusId === e.id && pl.df40.focusSpawnId === e.spawnId)
@@ -397,14 +403,12 @@ export class FermatCore {
         this.recordIntel(0, e, t, 'd01', tp);
         continue;
       }
-      // 3. ResonanceCore 1.0 5,100 m/s Container Knock active rattle ping
       if (e.seismicKnockTeam === 0 && (e.seismicRattle || 0) > 0.08) {
         this.recordIntel(0, e, t, 'knock', tp);
       }
     }
-    // Prune stale (> 3.4s) or dead enemy intel
     for (const [eid, rec] of this.intel[0]) {
-      const act = match.actors[eid];
+      const act = actors[eid];
       if (!act?.alive || act.spawnId !== rec.spawnId || t - rec.time > 3.4) this.intel[0].delete(eid);
     }
   }
@@ -420,12 +424,11 @@ export class FermatCore {
 
     this.stats.solves++;
     let best = null;
-    const nearbyFaces = [];
+    const nearbyFaces = this._nearbyFaces || (this._nearbyFaces = []);
+    nearbyFaces.length = 0;
 
-    // 1. Evaluate 1-bounce closed-form Method of Images over nearby steel faces
     for (let i = 0; i < this.faces.length; i++) {
       const f = this.faces[i];
-      // Fast coarse AABB distance rejection before any vector math
       if (Math.abs(f.cx - origin[0]) > 28 && Math.abs(f.cx - targetPos[0]) > 28) continue;
       if (Math.abs(f.cz - origin[2]) > 32 && Math.abs(f.cz - targetPos[2]) > 32) continue;
       if (signedDistToFace(origin, f) > 0.35) nearbyFaces.push(i);
@@ -433,7 +436,6 @@ export class FermatCore {
       if (sol && (!best || sol.score > best.score)) best = sol;
     }
 
-    // 2. If weapon supports double-ricochet (maxRic >= 2) and no easy 1-bounce exists, solve 2-bounce Double Method of Images!
     if (!best && allowDouble && spec.maxRic >= 2) {
       for (let k = 0; k < nearbyFaces.length; k++) {
         const i = nearbyFaces[k];
@@ -458,11 +460,6 @@ export class FermatCore {
     return best;
   }
 
-  /**
-   * Computes the live FermatCore 1.0 Optical Oracle state for the human player:
-   * - `forward`: live forward crosshair grazing-bounce / crate-penetration ray
-   * - `bank`: best fair-play 1-bounce or 2-bounce bank-shot sweet-spot against an occluded known enemy!
-   */
   updatePlayerOracle(match, time, enabled = true) {
     if (!enabled || !match?.player?.alive) {
       this.playerBank = null;
@@ -470,7 +467,6 @@ export class FermatCore {
       this.lastPlayerUpdate = -Infinity;
       return {forward: null, bank: null};
     }
-    // 30 Hz cadence (~0.033s) keeps smartphone CPU usage < 0.0015 ms/ms (virtually zero battery impact!)
     if (time - this.lastPlayerUpdate < 0.032 && time >= this.lastPlayerUpdate) {
       return {forward: this.playerForward, bank: this.playerBank};
     }
@@ -482,18 +478,15 @@ export class FermatCore {
     const aimDir = forward(p.yaw, p.pitch);
     const w = match.weapon(p);
 
-    // 1. Always-legal forward crosshair optical preview
     this.playerForward = traceForwardPreview(eye, aimDir, p.gun, 36.0);
 
-    // 2. Inverse Method-of-Images Fair-Play Bank-Shot Oracle (ONLY for occluded known enemies!)
     let bestBank = null;
     const allowDouble = (WEAPON_PENETRATION[p.gun]?.maxRic || 1) >= 2;
     for (const rec of this.intel[0].values()) {
-      // Only show bank-shot sweet-spot when enemy is ACTUALLY behind cover (never clutter direct LOS duels!)
-      if (obstruction(eye, rec.pos) > 1) continue;
-      // Ignore enemies far behind the player (> 110 deg off-axis)
-      const toE = unit(sub(rec.pos, eye));
-      if (dot(toE, aimDir) < -0.35) continue;
+      if (obstructionCoords(eye[0], eye[1], eye[2], rec.pos[0], rec.pos[1], rec.pos[2]) > 1) continue;
+      const vx = rec.pos[0] - eye[0], vy = rec.pos[1] - eye[1], vz = rec.pos[2] - eye[2];
+      const vl = Math.sqrt(vx * vx + vy * vy + vz * vz) || 1;
+      if ((vx * aimDir[0] + vy * aimDir[1] + vz * aimDir[2]) / vl < -0.35) continue;
       const sol = this.solveBankShot(eye, rec.pos, rec.vel, p.gun, w.speed, allowDouble);
       if (sol && (!bestBank || sol.score > bestBank.score)) {
         sol.enemyId = rec.id;
@@ -515,17 +508,20 @@ export class FermatCore {
     return {forward: this.playerForward, bank: this.playerBank};
   }
 
-  /** Checks if a shot fired by `actor` is aligned with a live Fermat Sweet-Spot (stabilizes corrugation jitter). */
   isShotFermatAligned(actor, dir, match) {
     if (!actor?.human || !this.playerBank) return false;
     const bank = this.playerBank;
     if (bank.enemyId !== undefined && match) {
       const enemy = match.actors[bank.enemyId];
       if (!enemy?.alive || enemy.spawnId !== bank.enemySpawnId || match.time - this.lastPlayerUpdate > .1) return false;
-      if (bank.origin && Math.hypot(...sub(eyeOf(actor), bank.origin)) > .65) return false;
+      if (bank.origin) {
+        const e = eyeOf(actor);
+        const dx = e[0] - bank.origin[0], dy = e[1] - bank.origin[1], dz = e[2] - bank.origin[2];
+        if (dx * dx + dy * dy + dz * dz > .4225) return false;
+      }
     }
     const cosErr = dot(dir, bank.aimDir);
-    if (cosErr >= 0.9988) { // <= ~2.8 deg precision alignment with Fermat sweet-spot!
+    if (cosErr >= 0.9988) {
       this.stats.playerBankLocks++;
       return true;
     }

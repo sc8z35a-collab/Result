@@ -1878,34 +1878,36 @@ export class SoundEngin2 {
   }
 
   // --------------------------------------------------------------------------
-  // 300Hz Sub-Frame Acoustic Integrator + Full Frame Foley & Environment Sync
+  // ClosedForm-300Hz: Exact O(1) Analytical Integrator (0 inner-loop iterations!)
   // --------------------------------------------------------------------------
   step300Hz(dt, match) {
     const step = 1 / SOUND_CONTROL_HZ;
     this.controlAccum = Math.min(this.controlAccum + Math.max(0, dt), 0.05);
-    while (this.controlAccum + 1e-9 >= step) {
-      this.controlAccum -= step;
-      this.controlTicks++;
-      this.stats.controlTicks300Hz++;
+    const nSteps = Math.floor((this.controlAccum + 1e-9) * SOUND_CONTROL_HZ);
+    if (nSteps <= 0) return;
+    const totalDt = nSteps * step;
+    this.controlAccum = Math.max(0, this.controlAccum - totalDt);
+    this.controlTicks += nSteps;
+    this.stats.controlTicks300Hz += nSteps;
 
-      // Smooth 300Hz physiological stapedius ear-reflex recovery
-      if (this.stapediusDip > 0.001) {
-        this.stapediusDip *= Math.exp(-5.4 * step);
-      } else {
-        this.stapediusDip = 0;
-      }
+    // Exact closed-form stapedius ear-reflex recovery: exp(-5.4 * step)^n == exp(-5.4 * n * step)
+    if (this.stapediusDip > 0.001) {
+      this.stapediusDip *= Math.exp(-5.4 * totalDt);
+      if (this.stapediusDip <= 0.001) this.stapediusDip = 0;
+    } else {
+      this.stapediusDip = 0;
+    }
 
-      // Smooth 300Hz barrel heat cooling
-      this.barrelHeat = Math.max(0, this.barrelHeat - step * 0.24);
+    // Exact closed-form barrel heat cooling
+    if (this.barrelHeat > 0) this.barrelHeat = Math.max(0, this.barrelHeat - totalDt * 0.24);
 
-      // Smooth 300Hz sprint exertion accumulation & recovery
-      const pl = match?.player;
-      if (pl?.alive) {
-        const sprinting = (pl.sprintAmt || 0) > 0.45 && Math.hypot(pl.vx || 0, pl.vz || 0) > 4.2;
-        this.exertion = clamp(this.exertion + (sprinting ? 0.22 : -0.18) * step, 0, 1);
-      } else {
-        this.exertion *= Math.exp(-2.0 * step);
-      }
+    // Exact closed-form sprint exertion accumulation & recovery
+    const pl = match?.player;
+    if (pl?.alive) {
+      const sprinting = (pl.sprintAmt || 0) > 0.45 && ((pl.vx || 0) * (pl.vx || 0) + (pl.vz || 0) * (pl.vz || 0)) > 17.64;
+      this.exertion = clamp(this.exertion + (sprinting ? 0.22 : -0.18) * totalDt, 0, 1);
+    } else if (this.exertion > 1e-4) {
+      this.exertion *= Math.exp(-2.0 * totalDt);
     }
   }
 
@@ -1919,43 +1921,55 @@ export class SoundEngin2 {
     const now = this.ctx.currentTime;
     const sr = this.ctx.sampleRate;
 
-    // Apply live Stapedius Acoustic Reflex ear protection curve
+    // Apply live Stapedius Acoustic Reflex ear protection curve (skip redundant AudioParam writes!)
     if (this.reflexFilter) {
       const targetReflexHz = this.stapediusDip > 0.02
         ? clamp(19600 - this.stapediusDip * 14200, 4200, 19600)
         : 19600;
-      this.reflexFilter.frequency.setTargetAtTime(safeFreq(sr, targetReflexHz), now, 0.025);
+      if (Math.abs(targetReflexHz - (this._lastReflexHz || 0)) > 12) {
+        this._lastReflexHz = targetReflexHz;
+        this.reflexFilter.frequency.setTargetAtTime(safeFreq(sr, targetReflexHz), now, 0.025);
+      }
     }
 
-    // 1. Sync 3D AudioListener pose & velocity
+    // 1. Sync 3D AudioListener pose & velocity (dirty-gated AudioParam scheduling!)
     if (cam?.pos && cam?.target) {
       const px = finite(cam.pos[0], 0), py = finite(cam.pos[1], 1.65), pz = finite(cam.pos[2], 78);
-      if (dt > 0.001 && this.listenerPrevPos) {
+      const prev = this.listenerPrevPos;
+      if (dt > 0.001 && prev) {
         const inv = 1 / dt;
-        this.listenerVel = [
-          clamp((px - this.listenerPrevPos[0]) * inv, -18, 18),
-          clamp((py - this.listenerPrevPos[1]) * inv, -18, 18),
-          clamp((pz - this.listenerPrevPos[2]) * inv, -18, 18)
-        ];
-      } else this.listenerVel = [0, 0, 0];
-      this.listenerPrevPos = [px, py, pz];
+        this.listenerVel[0] = clamp((px - prev[0]) * inv, -18, 18);
+        this.listenerVel[1] = clamp((py - prev[1]) * inv, -18, 18);
+        this.listenerVel[2] = clamp((pz - prev[2]) * inv, -18, 18);
+      } else {
+        this.listenerVel[0] = 0; this.listenerVel[1] = 0; this.listenerVel[2] = 0;
+      }
+      if (!prev) this.listenerPrevPos = [px, py, pz];
+      else { prev[0] = px; prev[1] = py; prev[2] = pz; }
 
       let fx = finite(cam.target[0], px) - px;
       let fy = finite(cam.target[1], py) - py;
       let fz = finite(cam.target[2], pz - 1) - pz;
-      const fl = Math.hypot(fx, fy, fz) || 1;
+      const fl = Math.sqrt(fx * fx + fy * fy + fz * fz) || 1;
       fx /= fl; fy /= fl; fz /= fl;
       let rx = -fz, rz = fx;
-      const rl = Math.hypot(rx, rz) || 1;
+      const rl = Math.sqrt(rx * rx + rz * rz) || 1;
       rx /= rl; rz /= rl;
 
-      this.listenerPos = [px, py, pz];
-      this.listenerFwd = [fx, fy, fz];
-      this.listenerRight = [rx, 0, rz];
-      this.listenerUp = [0, 1, 0];
+      const lPos = this.listenerPos || (this.listenerPos = [0, 0, 0]);
+      const lFwd = this.listenerFwd || (this.listenerFwd = [0, 0, -1]);
+      const lRgt = this.listenerRight || (this.listenerRight = [1, 0, 0]);
+      const poseMoved = !this._listenerInit
+        || Math.abs(px - lPos[0]) + Math.abs(py - lPos[1]) + Math.abs(pz - lPos[2]) > 2e-4
+        || Math.abs(fx - lFwd[0]) + Math.abs(fy - lFwd[1]) + Math.abs(fz - lFwd[2]) > 2e-4;
+      lPos[0] = px; lPos[1] = py; lPos[2] = pz;
+      lFwd[0] = fx; lFwd[1] = fy; lFwd[2] = fz;
+      lRgt[0] = rx; lRgt[1] = 0; lRgt[2] = rz;
+      if (!this.listenerUp) this.listenerUp = [0, 1, 0];
 
       const L = this.ctx.listener;
-      if (L) {
+      if (L && poseMoved) {
+        this._listenerInit = true;
         const tc = this.mode === AUDIO_MODES.ultra300 ? 0.008 : 0.015;
         if (L.positionX) {
           L.positionX.setTargetAtTime(px, now, tc);

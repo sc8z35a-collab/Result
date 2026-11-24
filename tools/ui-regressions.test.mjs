@@ -183,7 +183,7 @@ test('10 | Invalid saved point-limit mode selects the real default', async t => 
 });
 
 test('11 | A failed kill-credit save is visible in results and can be retried', async t => {
-  const ui = await app(t, {prefs:{rules:{mode:'1v1'}}});
+  const ui = await app(t, {prefs:{rules:{mode:'3v3'}}});
   const storage = ui.w.Storage.prototype, set = storage.setItem;
   let blocked = true;
   t.mock.method(storage, 'setItem', function (key, value) {
@@ -192,7 +192,8 @@ test('11 | A failed kill-credit save is visible in results and can be retried', 
   });
   ui.start();
   const m = ui.match();
-  m.damage(m.actors[1], m.player, 200);
+  const enemy = m.actors.find(a => a.team !== m.player.team);
+  m.damage(enemy, m.player, 200);
   ui.click('pauseButton'); ui.click('endMatch');
   await settle();
   assert.match(ui.$('creditResult').textContent, /保存待ち 0\.10/);
@@ -528,11 +529,12 @@ test('C06 | An audio failure on impact cannot interrupt a winning kill or its cr
   t.mock.method(SoundEngin2.prototype, 'event', function (event) {
     if (this.on && event.type === 'hit') throw new Error('audio device lost during hit');
   });
-  const ui = await app(t, {prefs: {settings: {sound: true}, rules: {mode:'1v1', multiplier:1}}});
+  const ui = await app(t, {prefs: {settings: {sound: true}, rules: {mode:'lab', multiplier:1, lab: {teamACount: 1, teamBCount: 1}}}});
   ui.start();
   const m = ui.match();
-  assert(m.damage(m.actors[1], m.player, 200).kill);
-  assert.equal(m.actors[1].alive, false);
+  const enemy = m.actors.find(a => a.team !== m.player.team);
+  assert(m.damage(enemy, m.player, 200).kill);
+  assert.equal(enemy.alive, false);
   assert.deepEqual(m.scores, [1, 0]);
   assert.equal(m.winner, 0);
   assert.equal(ui.d.body.dataset.screen, 'results');
@@ -557,10 +559,11 @@ test('C07 | An audio listener error leaves frame rendering and simulation runnin
 
 test('C08 | A kill survives closing the page before the first asynchronous write', async t => {
   const stalled = t.mock.method(PilotWallet.prototype, 'change', () => new Promise(() => {}));
-  const ui = await app(t, {prefs: {rules: {mode:'1v1'}}});
+  const ui = await app(t, {prefs: {rules: {mode:'3v3'}}});
   ui.start();
   const m = ui.match();
-  m.damage(m.actors[1], m.player, 200);
+  const enemy = m.actors.find(a => a.team !== m.player.team);
+  m.damage(enemy, m.player, 200);
   stalled.mock.restore();
   const reopened = new PilotEquipment(() => null, () => {});
   await settle(() => ui.$('lobbyCredit').textContent === '0.10 CR');

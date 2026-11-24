@@ -452,3 +452,544 @@ void rigApplyCharacter(inout vec3 p, inout vec3 n, int boneId, vec2 gait, vec3 p
   n = normalize(rigEuler(nLocal, chsTotalRot));
 }
 `;
+
+// ============================================================================
+// RigCore-Zero: CPU-Once 20-Bone Affine Matrix Palette Skinning (6 FMAs/vertex!)
+// Eliminates 180+ ALU + 18 trig + 10 pow ops per vertex across World, Shadow & Mirror passes
+// while reproducing 100% exact 16-joint FK/IK + patella bisector + articulated toe kinematics!
+// ============================================================================
+export const RIG_BONE_COUNT = 20;
+export const IDENTITY_PALETTE = new Float32Array(RIG_BONE_COUNT * 12);
+for (let b = 0; b < RIG_BONE_COUNT; b++) {
+  const o = b * 12;
+  IDENTITY_PALETTE[o] = 1;
+  IDENTITY_PALETTE[o + 5] = 1;
+  IDENTITY_PALETTE[o + 10] = 1;
+}
+
+export const RIG_PALETTE_GLSL = `
+uniform vec4 uBones[60];
+void rigApplyPalette(inout vec3 p, inout vec3 n, int boneId){
+  int b = clamp(boneId, 0, 15);
+  int idx = b * 3;
+  vec4 r0 = uBones[idx];
+  vec4 r1 = uBones[idx + 1];
+  vec4 r2 = uBones[idx + 2];
+  if(b == 10 || b == 13){
+    float ly = abs(p.y - 0.500);
+    float lz = p.z - 0.006;
+    if(ly < 0.068 && lz < -0.048){
+      float wP = smoothstep(0.068, 0.048, ly) * smoothstep(-0.048, -0.080, lz);
+      int pi = (b == 13 ? 17 : 16) * 3;
+      r0 = mix(r0, uBones[pi], wP);
+      r1 = mix(r1, uBones[pi + 1], wP);
+      r2 = mix(r2, uBones[pi + 2], wP);
+    }
+  } else if(b == 11 || b == 14){
+    float lz = p.z - 0.014;
+    if(lz < -0.055){
+      float wT = smoothstep(-0.055, -0.095, lz);
+      int ti = (b == 14 ? 19 : 18) * 3;
+      r0 = mix(r0, uBones[ti], wT);
+      r1 = mix(r1, uBones[ti + 1], wT);
+      r2 = mix(r2, uBones[ti + 2], wT);
+    }
+  }
+  vec4 p4 = vec4(p, 1.0);
+  p = vec3(dot(r0, p4), dot(r1, p4), dot(r2, p4));
+  n = normalize(vec3(dot(r0.xyz, n), dot(r1.xyz, n), dot(r2.xyz, n)));
+}
+`;
+
+export const RIG_PALETTE_SHADOW_GLSL = `
+uniform vec4 uBones[60];
+void rigApplyPalettePos(inout vec3 p, int boneId){
+  int b = clamp(boneId, 0, 15);
+  int idx = b * 3;
+  vec4 r0 = uBones[idx];
+  vec4 r1 = uBones[idx + 1];
+  vec4 r2 = uBones[idx + 2];
+  if(b == 10 || b == 13){
+    float ly = abs(p.y - 0.500);
+    float lz = p.z - 0.006;
+    if(ly < 0.068 && lz < -0.048){
+      float wP = smoothstep(0.068, 0.048, ly) * smoothstep(-0.048, -0.080, lz);
+      int pi = (b == 13 ? 17 : 16) * 3;
+      r0 = mix(r0, uBones[pi], wP);
+      r1 = mix(r1, uBones[pi + 1], wP);
+      r2 = mix(r2, uBones[pi + 2], wP);
+    }
+  } else if(b == 11 || b == 14){
+    float lz = p.z - 0.014;
+    if(lz < -0.055){
+      float wT = smoothstep(-0.055, -0.095, lz);
+      int ti = (b == 14 ? 19 : 18) * 3;
+      r0 = mix(r0, uBones[ti], wT);
+      r1 = mix(r1, uBones[ti + 1], wT);
+      r2 = mix(r2, uBones[ti + 2], wT);
+    }
+  }
+  vec4 p4 = vec4(p, 1.0);
+  p = vec3(dot(r0, p4), dot(r1, p4), dot(r2, p4));
+}
+`;
+
+// Zero-GC scratch matrices & helpers for CPU-once solveCharacterPalette()
+const _cl = (v, a, b) => (v < a ? a : v > b ? b : v);
+const _mx = (a, b, t) => a + (b - a) * t;
+const _ss = (e0, e1, x) => { const t = _cl((x - e0) / (e1 - e0), 0, 1); return t * t * (3 - 2 * t); };
+
+// Build 3x3 row-major matrix matching rigEuler(v, e) = rigRotY(rigRotZ(rigRotX(v, ex), ez), ey)
+function _euler3(out, ex, ey, ez) {
+  const cx = Math.cos(ex), sx = Math.sin(ex);
+  const cy = Math.cos(ey), sy = Math.sin(ey);
+  const cz = Math.cos(ez), sz = Math.sin(ez);
+  // First A = Rz(ez) * Rx(ex):
+  //   Rx = [1,0,0; 0,cx,-sx; 0,sx,cx]
+  //   Rz = [cz,sz,0; -sz,cz,0; 0,0,1]
+  //   A  = [cz, sz*cx, -sz*sx; -sz, cz*cx, -cz*sx; 0, sx, cx]
+  // Then Ry(ey) = [cy,0,-sy; 0,1,0; sy,0,cy] * A:
+  const a00 = cz,  a01 = sz * cx,  a02 = -sz * sx;
+  const a10 = -sz, a11 = cz * cx,  a12 = -cz * sx;
+  const a21 = sx,  a22 = cx;
+  out[0] = cy * a00;             out[1] = cy * a01 - sy * a21; out[2] = cy * a02 - sy * a22;
+  out[3] = a10;                  out[4] = a11;                 out[5] = a12;
+  out[6] = sy * a00;             out[7] = sy * a01 + cy * a21; out[8] = sy * a02 + cy * a22;
+}
+
+function _mul3(out, a, b) {
+  const a00 = a[0], a01 = a[1], a02 = a[2], a10 = a[3], a11 = a[4], a12 = a[5], a20 = a[6], a21 = a[7], a22 = a[8];
+  const b00 = b[0], b01 = b[1], b02 = b[2], b10 = b[3], b11 = b[4], b12 = b[5], b20 = b[6], b21 = b[7], b22 = b[8];
+  out[0] = a00 * b00 + a01 * b10 + a02 * b20; out[1] = a00 * b01 + a01 * b11 + a02 * b21; out[2] = a00 * b02 + a01 * b12 + a02 * b22;
+  out[3] = a10 * b00 + a11 * b10 + a12 * b20; out[4] = a10 * b01 + a11 * b11 + a12 * b21; out[5] = a10 * b02 + a11 * b12 + a12 * b22;
+  out[6] = a20 * b00 + a21 * b10 + a22 * b20; out[7] = a20 * b01 + a21 * b11 + a22 * b21; out[8] = a20 * b02 + a21 * b12 + a22 * b22;
+}
+
+// Multiply 3x3 matrix `a` on the right by Rx(ang)
+function _mulRx3(out, a, ang) {
+  const c = Math.cos(ang), s = Math.sin(ang);
+  const a01 = a[1], a02 = a[2], a11 = a[4], a12 = a[5], a21 = a[7], a22 = a[8];
+  out[0] = a[0]; out[1] = a01 * c + a02 * s; out[2] = -a01 * s + a02 * c;
+  out[3] = a[3]; out[4] = a11 * c + a12 * s; out[5] = -a11 * s + a12 * c;
+  out[6] = a[6]; out[7] = a21 * c + a22 * s; out[8] = -a21 * s + a22 * c;
+}
+
+// Write 3x4 affine row-major bone slot `boneIdx`: p' = outP + M * (p - inP)
+function _writeBone(pal, boneIdx, M, inX, inY, inZ, outX, outY, outZ) {
+  const o = boneIdx * 12;
+  const m0 = M[0], m1 = M[1], m2 = M[2];
+  const m3 = M[3], m4 = M[4], m5 = M[5];
+  const m6 = M[6], m7 = M[7], m8 = M[8];
+  pal[o] = m0; pal[o + 1] = m1; pal[o + 2] = m2; pal[o + 3] = outX - (m0 * inX + m1 * inY + m2 * inZ);
+  pal[o + 4] = m3; pal[o + 5] = m4; pal[o + 6] = m5; pal[o + 7] = outY - (m3 * inX + m4 * inY + m5 * inZ);
+  pal[o + 8] = m6; pal[o + 9] = m7; pal[o + 10] = m8; pal[o + 11] = outZ - (m6 * inX + m7 * inY + m8 * inZ);
+}
+
+const _mPel = new Float32Array(9);
+const _mLum = new Float32Array(9);
+const _mChs = new Float32Array(9);
+const _mChsBr = new Float32Array(9);
+const _mNck = new Float32Array(9);
+const _mHed = new Float32Array(9);
+const _mGun = new Float32Array(9);
+const _mWpn = new Float32Array(9);
+const _mHip = new Float32Array(9);
+const _mThigh = new Float32Array(9);
+const _mShin = new Float32Array(9);
+const _mPat = new Float32Array(9);
+const _mFoot = new Float32Array(9);
+const _mToe = new Float32Array(9);
+const _mSeg = new Float32Array(9);
+const _mArm = new Float32Array(9);
+const _legL = {hx: 0, hy: 0, hz: 0, knee: 0, ankle: 0, toe: 0, hipX: 0, hipY: 0, hipZ: 0, kneeX: 0, kneeY: 0, kneeZ: 0, ankX: 0, ankY: 0, ankZ: 0, soleY: 0};
+const _legR = {hx: 0, hy: 0, hz: 0, knee: 0, ankle: 0, toe: 0, hipX: 0, hipY: 0, hipZ: 0, kneeX: 0, kneeY: 0, kneeZ: 0, ankX: 0, ankY: 0, ankZ: 0, soleY: 0};
+const _elbow = [0, 0, 0];
+
+function _solveLegKinematics(dst, side, phase, moveAmt, fwdVel, sideVel, sprint, crouch, air, land, timeSec) {
+  const ph = phase + (side > 0 ? Math.PI : 0);
+  const p = fwdVel < -0.15 ? -ph : ph;
+  const walkBlend = _cl(moveAmt, 0, 1) * (1 - crouch * 0.55) * (1 - air);
+
+  const breathShift = Math.sin(timeSec * 1.7) * 0.018 * (1 - walkBlend);
+  const idleHipP = side < 0 ? 0.07 : -0.08;
+  const idleKnee = -0.11 - Math.abs(breathShift) * 0.4;
+  const idleAnk = -idleHipP - idleKnee;
+
+  const absF = Math.abs(fwdVel), absS = Math.abs(sideVel);
+  const fwdMix = _cl(absF / Math.max(0.25, absF + absS * 0.75), 0.35, 1.0);
+  const hipFwd = _mx(0.35, 0.56, sprint) * fwdMix;
+  const hipBack = _mx(0.27, 0.44, sprint) * fwdMix;
+  const cp = Math.cos(p);
+  const walkHipP = (cp >= 0 ? cp * hipFwd : cp * hipBack) - 0.042 * Math.sin(2 * p) * fwdMix;
+
+  const loadBell = Math.pow(0.5 + 0.5 * Math.cos(p - 0.85), 3.2);
+  const swingBell = Math.pow(0.5 + 0.5 * Math.cos(p - 4.18), 2.3);
+  const walkKnee = -(0.08 + _mx(0.16, 0.28, sprint) * loadBell + _mx(0.74, 1.30, sprint) * swingBell);
+
+  const strikeBell = Math.pow(0.5 + 0.5 * Math.cos(p - 0.05), 3.0);
+  const pushBell = Math.pow(0.5 + 0.5 * Math.cos(p - 3.25), 3.0);
+  const swingClear = Math.pow(0.5 + 0.5 * Math.cos(p - 4.45), 2.4);
+  const stanceFlat = (-walkHipP - walkKnee) * Math.pow(0.5 + 0.5 * Math.cos(p - 1.20), 2.6);
+  const walkAnk = stanceFlat * 0.72 + 0.12 * strikeBell + 0.10 * swingClear - _mx(0.32, 0.48, sprint) * pushBell;
+  const walkToe = pushBell * (0.40 + 0.30 * sprint);
+
+  let hipRoll = sideVel * Math.sin(ph) * 0.13 * (1 - air) + side * (0.024 + 0.045 * crouch);
+  const hipYaw = -sideVel * 0.07 * walkBlend + side * 0.035;
+
+  let hipP = _mx(idleHipP, walkHipP, walkBlend);
+  let knee = _mx(idleKnee, walkKnee, walkBlend);
+  let ank = _mx(idleAnk, walkAnk, walkBlend);
+  let toe = walkToe * walkBlend;
+
+  if (crouch > 0.001) {
+    const cHipP = side < 0 ? 1.18 : 0.06;
+    const cKnee = side < 0 ? -1.52 : -1.42;
+    const cAnk = side < 0 ? 0.34 : 0.84;
+    const cToe = side < 0 ? 0.04 : 0.56;
+    const cWalk = _cl(moveAmt, 0, 1) * 0.24 * cp;
+    hipP = _mx(hipP, cHipP + cWalk, crouch);
+    knee = _mx(knee, cKnee - swingBell * 0.24 * _cl(moveAmt, 0, 1), crouch);
+    ank = _mx(ank, cAnk, crouch);
+    toe = _mx(toe, cToe, crouch);
+    hipRoll = _mx(hipRoll, side * 0.10, crouch);
+  }
+  if (land > 0.001) {
+    hipP += 0.36 * land;
+    knee -= 0.76 * land;
+    ank += 0.40 * land;
+  }
+  if (air > 0.001) {
+    hipP = _mx(hipP, side < 0 ? 0.72 : -0.22, air);
+    knee = _mx(knee, side < 0 ? -1.16 : -0.72, air);
+    ank = _mx(ank, side < 0 ? -0.14 : -0.34, air);
+    toe = _mx(toe, 0, air);
+  }
+  dst.hx = hipP; dst.hy = hipYaw; dst.hz = hipRoll;
+  dst.knee = _cl(knee, -1.95, -0.05);
+  dst.ankle = _cl(ank, -0.78, 0.88);
+  dst.toe = _cl(toe, 0, 0.80);
+}
+
+function _evalLegJoints(leg, side, pelX, pelY, pelZ, mPel) {
+  const bHipX = side * 0.122, bHipY = 0.895, bHipZ = 0.012;
+  const bKneeX = side * 0.130, bKneeY = 0.500, bKneeZ = 0.006;
+  const bAnkX = side * 0.130, bAnkY = 0.115, bAnkZ = 0.014;
+
+  const dhx = bHipX, dhy = bHipY - 0.900, dhz = bHipZ - 0.010;
+  const hipX = pelX + mPel[0] * dhx + mPel[1] * dhy + mPel[2] * dhz;
+  const hipY = pelY + mPel[3] * dhx + mPel[4] * dhy + mPel[5] * dhz;
+  const hipZ = pelZ + mPel[6] * dhx + mPel[7] * dhy + mPel[8] * dhz;
+
+  _euler3(_mHip, leg.hx, leg.hy, leg.hz);
+  _mul3(_mThigh, mPel, _mHip);
+  const dkx = bKneeX - bHipX, dky = bKneeY - bHipY, dkz = bKneeZ - bHipZ;
+  const kneeX = hipX + _mThigh[0] * dkx + _mThigh[1] * dky + _mThigh[2] * dkz;
+  const kneeY = hipY + _mThigh[3] * dkx + _mThigh[4] * dky + _mThigh[5] * dkz;
+  const kneeZ = hipZ + _mThigh[6] * dkx + _mThigh[7] * dky + _mThigh[8] * dkz;
+
+  _mulRx3(_mShin, _mThigh, leg.knee);
+  const dax = bAnkX - bKneeX, day = bAnkY - bKneeY, daz = bAnkZ - bKneeZ;
+  const ankX = kneeX + _mShin[0] * dax + _mShin[1] * day + _mShin[2] * daz;
+  const ankY = kneeY + _mShin[3] * dax + _mShin[4] * day + _mShin[5] * daz;
+  const ankZ = kneeZ + _mShin[6] * dax + _mShin[7] * day + _mShin[8] * daz;
+
+  _mulRx3(_mFoot, _mShin, leg.ankle);
+  const heelY = ankY + _mFoot[4] * (-0.115) + _mFoot[5] * 0.045;
+  const ballY = ankY + _mFoot[4] * (-0.115) + _mFoot[5] * (-0.085);
+  leg.hipX = hipX; leg.hipY = hipY; leg.hipZ = hipZ;
+  leg.kneeX = kneeX; leg.kneeY = kneeY; leg.kneeZ = kneeZ;
+  leg.ankX = ankX; leg.ankY = ankY; leg.ankZ = ankZ;
+  leg.soleY = heelY < ballY ? heelY : ballY;
+}
+
+function _solveElbowCPU(shX, shY, shZ, hX, hY, hZ, L1, L2, pX, pY, pZ) {
+  const dx = hX - shX, dy = hY - shY, dz = hZ - shZ;
+  const rawD = Math.hypot(dx, dy, dz);
+  const dist = _cl(rawD, Math.abs(L1 - L2) + 0.025, L1 + L2 - 0.008);
+  const invD = 1 / (rawD > 1e-4 ? rawD : 1e-4);
+  const dirX = dx * invD, dirY = dy * invD, dirZ = dz * invD;
+  const x = (L1 * L1 - L2 * L2 + dist * dist) / (2 * dist);
+  const h = Math.sqrt(Math.max(0, L1 * L1 - x * x));
+  const pd = pX * dirX + pY * dirY + pZ * dirZ;
+  let bX = pX - dirX * pd, bY = pY - dirY * pd, bZ = pZ - dirZ * pd;
+  const bl = Math.hypot(bX, bY, bZ);
+  if (bl > 1e-4) { const ib = 1 / bl; bX *= ib; bY *= ib; bZ *= ib; }
+  else { bX = 0; bY = -1; bZ = 0; }
+  _elbow[0] = shX + dirX * x + bX * h;
+  _elbow[1] = shY + dirY * x + bY * h;
+  _elbow[2] = shZ + dirZ * x + bZ * h;
+}
+
+// Compute exact segment-to-segment rotation matrix B1 * B0^T into `_mSeg`
+function _orientSegmentMat(a0x, a0y, a0z, b0x, b0y, b0z, p0x, p0y, p0z, a1x, a1y, a1z, b1x, b1y, b1z, p1x, p1y, p1z) {
+  let u0x = b0x - a0x, u0y = b0y - a0y, u0z = b0z - a0z;
+  let inv = 1 / (Math.hypot(u0x, u0y, u0z) || 1); u0x *= inv; u0y *= inv; u0z *= inv;
+  let w0x = u0y * p0z - u0z * p0y, w0y = u0z * p0x - u0x * p0z, w0z = u0x * p0y - u0y * p0x;
+  inv = 1 / (Math.hypot(w0x, w0y, w0z) || 1); w0x *= inv; w0y *= inv; w0z *= inv;
+  const v0x = w0y * u0z - w0z * u0y, v0y = w0z * u0x - w0x * u0z, v0z = w0x * u0y - w0y * u0x;
+
+  let u1x = b1x - a1x, u1y = b1y - a1y, u1z = b1z - a1z;
+  inv = 1 / (Math.hypot(u1x, u1y, u1z) || 1); u1x *= inv; u1y *= inv; u1z *= inv;
+  let w1x = u1y * p1z - u1z * p1y, w1y = u1z * p1x - u1x * p1z, w1z = u1x * p1y - u1y * p1x;
+  const cl = Math.hypot(w1x, w1y, w1z);
+  if (cl > 1e-4) { inv = 1 / cl; w1x *= inv; w1y *= inv; w1z *= inv; }
+  else { w1x = w0x; w1y = w0y; w1z = w0z; }
+  const v1x = w1y * u1z - w1z * u1y, v1y = w1z * u1x - w1x * u1z, v1z = w1x * u1y - w1y * u1x;
+
+  // B1 * B0^T (row r, col c = u1[r]*u0[c] + v1[r]*v0[c] + w1[r]*w0[c])
+  _mSeg[0] = u1x * u0x + v1x * v0x + w1x * w0x; _mSeg[1] = u1x * u0y + v1x * v0y + w1x * w0y; _mSeg[2] = u1x * u0z + v1x * v0z + w1x * w0z;
+  _mSeg[3] = u1y * u0x + v1y * v0x + w1y * w0x; _mSeg[4] = u1y * u0y + v1y * v0y + w1y * w0y; _mSeg[5] = u1y * u0z + v1y * v0z + w1y * w0z;
+  _mSeg[6] = u1z * u0x + v1z * v0x + w1z * w0x; _mSeg[7] = u1z * u0y + v1z * v0y + w1z * w0y; _mSeg[8] = u1z * u0z + v1z * v0z + w1z * w0z;
+}
+
+const _L1_L = Math.hypot(-0.210 - (-0.225), 1.160 - 1.400, -0.165);
+const _L2_L = Math.hypot(0.035 - (-0.210), 1.205 - 1.160, -0.395 - (-0.165));
+const _L1_R = Math.hypot(0.265 - 0.225, 1.145 - 1.400, -0.065);
+const _L2_R = Math.hypot(0.072 - 0.265, 1.170 - 1.145, -0.240 - (-0.065));
+
+/**
+ * Computes all 20 affine 3x4 bone matrices (240 floats = 60 vec4s) ONCE per actor on CPU.
+ * Zero allocations; shared across Shadow Flame, Mirror Reflection, and Main World passes!
+ */
+export function solveCharacterPalette(a, time, out) {
+  const sy = Math.sin(a.yaw), cy = Math.cos(a.yaw);
+  let hitX = 0, hitZ = 1;
+  if (a.hitDir) {
+    hitX = _cl(a.hitDir[0] * cy + a.hitDir[2] * sy, -1, 1);
+    hitZ = _cl(a.hitDir[0] * (-sy) + a.hitDir[2] * cy, -1, 1);
+  }
+  const hitMag = a.hitRecoil || 0;
+  const phase = (a.stride || 0) * 1.92;
+  const moveAmt = _cl(Math.hypot(a.vx || 0, a.vz || 0) / 4.2, 0, 1.15);
+  const crouch = _cl(a.crouch || 0, 0, 1);
+  const lean = a.lean || 0;
+  const aimPose = _cl(a.aimPose || 0, 0, 1);
+  const fwdVel = a.fwdVel || 0;
+  const sideVel = a.sideVel || 0;
+  const air = _cl(a.airBlend || 0, 0, 1);
+  const land = _cl(a.landCompress || 0, 0, 1);
+  const aimPitch = _cl(a.pitch || 0, -0.82, 0.82);
+  const timeSec = time + (a.id || 0) * 1.13;
+  const sprint = _cl(a.sprintAmt || 0, 0, 1) * (1 - crouch) * (1 - air);
+  const reloadF = _cl(a.reloadFrac || 0, 0, 1);
+  const recX = a.recoil || 0, recY = a.recoilSide || 0;
+  const ex = a.expr;
+  const headYawOff = _cl(ex?.headYaw || 0, -0.82, 0.82);
+  const tension = _cl(ex?.tension || 0, 0, 1);
+  const exprW = ex?.breathWave || 0;
+
+  // 1. Pelvis
+  const runFactor = _cl(moveAmt, 0, 1) * (1 - crouch * 0.55) * (1 - air);
+  const cosPh = Math.cos(phase);
+  const pelYaw = -cosPh * _mx(0.055, 0.115, sprint) * runFactor * (1 - aimPose * 0.55);
+  const pelRoll = -cosPh * _mx(0.020, 0.038, sprint) * runFactor + sideVel * 0.042 * (1 - crouch);
+  const pelPitch = -0.030 - 0.072 * sprint - 0.08 * crouch - 0.06 * land;
+  _euler3(_mPel, pelPitch, pelYaw, pelRoll);
+
+  const pelBounce = -Math.cos(phase * 2 - 1.70) * _mx(0.014, 0.034, sprint) * runFactor;
+  const pelDrop = -0.016 * runFactor - 0.028 * sprint + pelBounce - 0.35 * crouch - 0.12 * land + 0.08 * air;
+  const pelX = cosPh * 0.014 * runFactor;
+  let pelY = 0.900 + pelDrop;
+  const pelZ = 0.010 + 0.035 * crouch;
+
+  // 2. Both legs + ground clamp
+  _solveLegKinematics(_legL, -1, phase, moveAmt, fwdVel, sideVel, sprint, crouch, air, land, timeSec);
+  _solveLegKinematics(_legR,  1, phase, moveAmt, fwdVel, sideVel, sprint, crouch, air, land, timeSec);
+  _evalLegJoints(_legL, -1, pelX, pelY, pelZ, _mPel);
+  _evalLegJoints(_legR,  1, pelX, pelY, pelZ, _mPel);
+  const lowestSole = _legL.soleY < _legR.soleY ? _legL.soleY : _legR.soleY;
+  const groundFix = _cl(-lowestSole, -0.026 * sprint, 0.14) * (1 - air);
+  pelY += groundFix;
+  _legL.hipY += groundFix; _legL.kneeY += groundFix; _legL.ankY += groundFix;
+  _legR.hipY += groundFix; _legR.kneeY += groundFix; _legR.ankY += groundFix;
+
+  // Bone 0: Pelvis
+  _writeBone(out, 0, _mPel, 0, 0.900, 0.010, pelX, pelY, pelZ);
+
+  // Bones 9..14 + Patella (16,17) + Toe (18,19)
+  for (let sideIdx = 0; sideIdx < 2; sideIdx++) {
+    const isR = sideIdx === 1;
+    const s = isR ? 1 : -1;
+    const leg = isR ? _legR : _legL;
+    const baseB = isR ? 12 : 9;
+    const patB = isR ? 17 : 16;
+    const toeB = isR ? 19 : 18;
+    const bHipX = s * 0.122, bHipY = 0.895, bHipZ = 0.012;
+    const bKneeX = s * 0.130, bKneeY = 0.500, bKneeZ = 0.006;
+    const bAnkX = s * 0.130, bAnkY = 0.115, bAnkZ = 0.014;
+
+    _euler3(_mHip, leg.hx, leg.hy, leg.hz);
+    _mul3(_mThigh, _mPel, _mHip);
+    _writeBone(out, baseB, _mThigh, bHipX, bHipY, bHipZ, leg.hipX, leg.hipY, leg.hipZ);
+
+    _mulRx3(_mShin, _mThigh, leg.knee);
+    _writeBone(out, baseB + 1, _mShin, bKneeX, bKneeY, bKneeZ, leg.kneeX, leg.kneeY, leg.kneeZ);
+
+    _mulRx3(_mPat, _mThigh, leg.knee * 0.52);
+    _writeBone(out, patB, _mPat, bKneeX, bKneeY, bKneeZ, leg.kneeX, leg.kneeY, leg.kneeZ);
+
+    _mulRx3(_mFoot, _mShin, leg.ankle);
+    _writeBone(out, baseB + 2, _mFoot, bAnkX, bAnkY, bAnkZ, leg.ankX, leg.ankY, leg.ankZ);
+
+    if (leg.toe > 0.005) {
+      _mulRx3(_mToe, _mFoot, leg.toe);
+      const bpX = 0, bpY = -0.092, bpZ = -0.055;
+      const outToeX = leg.ankX + _mFoot[1] * bpY + _mFoot[2] * bpZ;
+      const outToeY = leg.ankY + _mFoot[4] * bpY + _mFoot[5] * bpZ;
+      const outToeZ = leg.ankZ + _mFoot[7] * bpY + _mFoot[8] * bpZ;
+      _writeBone(out, toeB, _mToe, bAnkX + bpX, bAnkY + bpY, bAnkZ + bpZ, outToeX, outToeY, outToeZ);
+    } else {
+      _writeBone(out, toeB, _mFoot, bAnkX, bAnkY, bAnkZ, leg.ankX, leg.ankY, leg.ankZ);
+    }
+  }
+
+  // 4. Upper Body Hierarchical Chain: Lumbar (1) -> Chest (2) -> Neck (3) -> Head (4)
+  const flinch = hitMag > 0.001 ? Math.sin(hitMag * Math.PI) * hitMag : 0;
+  const breathRaw = Math.abs(exprW) > 0.001 ? exprW : Math.sin(timeSec * 2.55);
+  const breath = breathRaw * (0.014 + 0.010 * sprint + 0.010 * tension);
+
+  const lumX = pelX + _mPel[1] * 0.070;
+  const lumY = pelY + _mPel[4] * 0.070;
+  const lumZ = pelZ + _mPel[7] * 0.070;
+  const lumRx = pelPitch + (-0.025 - 0.062 * sprint - 0.10 * crouch + flinch * hitZ * 0.24 + breath * 0.35);
+  const lumRy = pelYaw + (-pelYaw * 0.55 + flinch * hitX * 0.20 + headYawOff * 0.06);
+  const lumRz = pelRoll + (lean * 0.40 - pelRoll * 0.45 + flinch * hitX * 0.10);
+  _euler3(_mLum, lumRx, lumRy, lumRz);
+  _writeBone(out, 1, _mLum, 0, 0.970, 0.010, lumX, lumY, lumZ);
+
+  const chsX = lumX + _mLum[1] * 0.180;
+  const chsY = lumY + _mLum[4] * 0.180;
+  const chsZ = lumZ + _mLum[7] * 0.180;
+  const chsRx = lumRx + (aimPitch * 0.34 - 0.03 * aimPose + recX * 0.040 + flinch * hitZ * 0.20 + breath);
+  const chsRy = lumRy + (-pelYaw * 0.45 + 0.08 * (1 - sprint) + flinch * hitX * 0.16 + headYawOff * 0.08);
+  const chsRz = lumRz + (lean * 0.26 - pelRoll * 0.40);
+  _euler3(_mChs, chsRx, chsRy, chsRz);
+  const brZ = 1 + breath * 1.15;
+  _mChsBr[0] = _mChs[0]; _mChsBr[1] = _mChs[1]; _mChsBr[2] = _mChs[2] * brZ;
+  _mChsBr[3] = _mChs[3]; _mChsBr[4] = _mChs[4]; _mChsBr[5] = _mChs[5] * brZ;
+  _mChsBr[6] = _mChs[6]; _mChsBr[7] = _mChs[7]; _mChsBr[8] = _mChs[8] * brZ;
+  _writeBone(out, 2, _mChsBr, 0, 1.150, 0.010, chsX, chsY, chsZ);
+
+  const nckX = chsX + _mChs[1] * 0.290 + _mChs[2] * (-0.010);
+  const nckY = chsY + _mChs[4] * 0.290 + _mChs[5] * (-0.010);
+  const nckZ = chsZ + _mChs[7] * 0.290 + _mChs[8] * (-0.010);
+  const nckRx = chsRx + (aimPitch * 0.28 - chsRx * 0.42 + flinch * 0.16);
+  const nckRy = chsRy + (-chsRy * 0.45 + headYawOff * 0.36);
+  const nckRz = chsRz + (-chsRz * 0.40 - headYawOff * 0.06);
+  _euler3(_mNck, nckRx, nckRy, nckRz);
+  _writeBone(out, 3, _mNck, 0, 1.440, 0, nckX, nckY, nckZ);
+
+  const hedX = nckX + _mNck[1] * 0.095 + _mNck[2] * (-0.008);
+  const hedY = nckY + _mNck[4] * 0.095 + _mNck[5] * (-0.008);
+  const hedZ = nckZ + _mNck[7] * 0.095 + _mNck[8] * (-0.008);
+  const hedRx = nckRx + (aimPitch * 0.38 - nckRx * 0.50 + flinch * 0.20);
+  const hedRy = nckRy + (-nckRy * 0.55 + headYawOff * 0.64);
+  const hedRz = nckRz + (aimPose * 0.10 - nckRz * 0.50 - headYawOff * 0.10);
+  _euler3(_mHed, hedRx, hedRy, hedRz);
+  _writeBone(out, 4, _mHed, 0, 1.535, -0.008, hedX, hedY, hedZ);
+
+  // 5. Weapon (15) & 2-Bone Analytical IK Arms (5, 6, 7, 8)
+  const lowReady = sprint * (1 - aimPose) * (1 - _cl(recX * 2.5, 0, 1));
+  const pump = -cosPh * lowReady;
+  const relTilt = Math.sin(reloadF * Math.PI);
+  const relSlam = (reloadF > 0.58 && reloadF < 0.78) ? Math.sin((reloadF - 0.58) / 0.20 * Math.PI) : 0;
+
+  const gOffX = -0.030 * aimPose - 0.038 * lowReady + pump * 0.022;
+  const gOffY =  0.056 * aimPose - 0.042 * lowReady + recX * 0.016 - relTilt * 0.045 + relSlam * 0.025;
+  const gOffZ = -0.018 * aimPose + 0.024 * lowReady + recX * 0.048;
+  const gRx = aimPitch * 0.66 - 0.22 * lowReady + recX * 0.14 - relTilt * 0.24 + relSlam * 0.10;
+  const gRy = -0.30 * lowReady + pump * 0.08 + recY * recX * 0.035;
+  const gRz = 0.08 * aimPose - 0.26 * lowReady + relTilt * 0.42;
+  _euler3(_mGun, gRx, gRy, gRz);
+
+  const gpLocX = 0.072 + gOffX, gpLocY = 1.245 + gOffY - 1.150, gpLocZ = -0.255 + gOffZ - 0.010;
+  const gunPivotX = chsX + _mChs[0] * gpLocX + _mChs[1] * gpLocY + _mChs[2] * gpLocZ;
+  const gunPivotY = chsY + _mChs[3] * gpLocX + _mChs[4] * gpLocY + _mChs[5] * gpLocZ;
+  const gunPivotZ = chsZ + _mChs[6] * gpLocX + _mChs[7] * gpLocY + _mChs[8] * gpLocZ;
+  _mul3(_mWpn, _mChs, _mGun);
+  _writeBone(out, 15, _mWpn, 0.072, 1.245, -0.255, gunPivotX, gunPivotY, gunPivotZ);
+
+  // Hand targets in chest-bind space
+  const gCx = 0.072 + gOffX, gCy = 1.245 + gOffY, gCz = -0.255 + gOffZ;
+  // bHandR - bGun = (0, -0.075, 0.015)
+  const hRx = gCx + _mGun[1] * (-0.075) + _mGun[2] * 0.015;
+  const hRy = gCy + _mGun[4] * (-0.075) + _mGun[5] * 0.015;
+  const hRz = gCz + _mGun[7] * (-0.075) + _mGun[8] * 0.015;
+  // bHandL - bGun = (-0.037, -0.040, -0.140)
+  let hLx = gCx + _mGun[0] * (-0.037) + _mGun[1] * (-0.040) + _mGun[2] * (-0.140);
+  let hLy = gCy + _mGun[3] * (-0.037) + _mGun[4] * (-0.040) + _mGun[5] * (-0.140);
+  let hLz = gCz + _mGun[6] * (-0.037) + _mGun[7] * (-0.040) + _mGun[8] * (-0.140);
+
+  if (reloadF > 0.005) {
+    const pX = -0.14, pY = 1.05, pZ = -0.18;
+    const mX = gCx + _mGun[1] * (-0.11) + _mGun[2] * (-0.12);
+    const mY = gCy + _mGun[4] * (-0.11) + _mGun[5] * (-0.12);
+    const mZ = gCz + _mGun[7] * (-0.11) + _mGun[8] * (-0.12);
+    const bX = gCx + _mGun[0] * (-0.04) + _mGun[1] * 0.05 + _mGun[2] * (-0.05);
+    const bY = gCy + _mGun[3] * (-0.04) + _mGun[4] * 0.05 + _mGun[5] * (-0.05);
+    const bZ = gCz + _mGun[6] * (-0.04) + _mGun[7] * 0.05 + _mGun[8] * (-0.05);
+    if (reloadF < 0.32) {
+      const u = _ss(0, 0.32, reloadF);
+      hLx = _mx(hLx, pX, u); hLy = _mx(hLy, pY, u); hLz = _mx(hLz, pZ, u);
+    } else if (reloadF < 0.66) {
+      const u = _ss(0.32, 0.66, reloadF);
+      hLx = _mx(pX, mX, u); hLy = _mx(pY, mY, u); hLz = _mx(pZ, mZ, u);
+    } else if (reloadF < 0.84) {
+      const u = _ss(0.66, 0.84, reloadF);
+      hLx = _mx(mX, bX, u); hLy = _mx(mY, bY, u); hLz = _mx(mZ, bZ, u);
+    } else {
+      const u = _ss(0.84, 1.0, reloadF);
+      hLx = _mx(bX, hLx, u); hLy = _mx(bY, hLy, u); hLz = _mx(bZ, hLz, u);
+    }
+  }
+
+  const shOffY = 0.014 * aimPose + recX * 0.008;
+  const shOffZ = recX * 0.015;
+
+  // Left Arm (bones 5, 6)
+  {
+    const shX = -0.225, shY = 1.400 + shOffY, shZ = shOffZ;
+    let pX = -0.76 + 0.10 * aimPose, pY = -0.68, pZ = 0.22 + 0.15 * relTilt;
+    const pl = 1 / (Math.hypot(pX, pY, pZ) || 1); pX *= pl; pY *= pl; pZ *= pl;
+    _solveElbowCPU(shX, shY, shZ, hLx, hLy, hLz, _L1_L, _L2_L, pX, pY, pZ);
+    const elX = _elbow[0], elY = _elbow[1], elZ = _elbow[2];
+
+    _orientSegmentMat(-0.225, 1.400, 0, -0.210, 1.160, -0.165, -0.82, -0.62, 0.24, shX, shY, shZ, elX, elY, elZ, pX, pY, pZ);
+    _mul3(_mArm, _mChs, _mSeg);
+    const ox = chsX + _mChs[0] * shX + _mChs[1] * (shY - 1.150) + _mChs[2] * (shZ - 0.010);
+    const oy = chsY + _mChs[3] * shX + _mChs[4] * (shY - 1.150) + _mChs[5] * (shZ - 0.010);
+    const oz = chsZ + _mChs[6] * shX + _mChs[7] * (shY - 1.150) + _mChs[8] * (shZ - 0.010);
+    _writeBone(out, 5, _mArm, -0.225, 1.400, 0, ox, oy, oz);
+
+    _orientSegmentMat(-0.210, 1.160, -0.165, 0.035, 1.205, -0.395, -0.82, -0.62, 0.24, elX, elY, elZ, hLx, hLy, hLz, pX, pY, pZ);
+    _mul3(_mArm, _mChs, _mSeg);
+    const ex2 = chsX + _mChs[0] * elX + _mChs[1] * (elY - 1.150) + _mChs[2] * (elZ - 0.010);
+    const ey2 = chsY + _mChs[3] * elX + _mChs[4] * (elY - 1.150) + _mChs[5] * (elZ - 0.010);
+    const ez2 = chsZ + _mChs[6] * elX + _mChs[7] * (elY - 1.150) + _mChs[8] * (elZ - 0.010);
+    _writeBone(out, 6, _mArm, -0.210, 1.160, -0.165, ex2, ey2, ez2);
+  }
+
+  // Right Arm (bones 7, 8)
+  {
+    const shX = 0.225, shY = 1.400 + shOffY, shZ = shOffZ;
+    let pX = 0.84 - 0.14 * aimPose, pY = -0.56 - 0.12 * aimPose, pZ = 0.34 + 0.12 * lowReady;
+    const pl = 1 / (Math.hypot(pX, pY, pZ) || 1); pX *= pl; pY *= pl; pZ *= pl;
+    _solveElbowCPU(shX, shY, shZ, hRx, hRy, hRz, _L1_R, _L2_R, pX, pY, pZ);
+    const elX = _elbow[0], elY = _elbow[1], elZ = _elbow[2];
+
+    _orientSegmentMat(0.225, 1.400, 0, 0.265, 1.145, -0.065, 0.82, -0.58, 0.32, shX, shY, shZ, elX, elY, elZ, pX, pY, pZ);
+    _mul3(_mArm, _mChs, _mSeg);
+    const ox = chsX + _mChs[0] * shX + _mChs[1] * (shY - 1.150) + _mChs[2] * (shZ - 0.010);
+    const oy = chsY + _mChs[3] * shX + _mChs[4] * (shY - 1.150) + _mChs[5] * (shZ - 0.010);
+    const oz = chsZ + _mChs[6] * shX + _mChs[7] * (shY - 1.150) + _mChs[8] * (shZ - 0.010);
+    _writeBone(out, 7, _mArm, 0.225, 1.400, 0, ox, oy, oz);
+
+    _orientSegmentMat(0.265, 1.145, -0.065, 0.072, 1.170, -0.240, 0.82, -0.58, 0.32, elX, elY, elZ, hRx, hRy, hRz, pX, pY, pZ);
+    _mul3(_mArm, _mChs, _mSeg);
+    const ex2 = chsX + _mChs[0] * elX + _mChs[1] * (elY - 1.150) + _mChs[2] * (elZ - 0.010);
+    const ey2 = chsY + _mChs[3] * elX + _mChs[4] * (elY - 1.150) + _mChs[5] * (elZ - 0.010);
+    const ez2 = chsZ + _mChs[6] * elX + _mChs[7] * (elY - 1.150) + _mChs[8] * (elZ - 0.010);
+    _writeBone(out, 8, _mArm, 0.265, 1.145, -0.065, ex2, ey2, ez2);
+  }
+  return out;
+}

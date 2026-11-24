@@ -499,10 +499,10 @@ test('L09 | UI: Lab Mode panel, 1.5 Scherp exclusivity, Spectator controls, Sing
   let ms = 0;
   const frame = (dt = 16.667) => { ms += dt; frames.shift()(ms); };
 
-  // 1. Verify Lobby Modes (1v1, 3v3, 5v5, lab), removed AI/SPY UI, separate AA 1.5, RD 50, & 3-group Settings
+  // 1. Verify Lobby Modes (3v3, lab), removed legacy AI/SPY UI, separate AA 1.5, RD 50, & 3-group Settings
   $('play').click();
   const modeValues = [...$('modes').querySelectorAll('button[data-value]')].map(b => b.dataset.value);
-  assert.deepEqual(modeValues, ['1v1', '3v3', '5v5', 'lab']);
+  assert.deepEqual(modeValues, ['3v3', 'lab']);
   assert.equal($('aiModelWrap'), null, 'AI engine selector must be removed from lobby');
   assert.equal($('allyAiWrap'), null, 'Ally SPY upgrade selector must be removed from lobby');
   assert.equal($('radioComms'), null, 'NPC dialogue radio HUD must be removed');
@@ -520,18 +520,18 @@ test('L09 | UI: Lab Mode panel, 1.5 Scherp exclusivity, Spectator controls, Sing
   assert.notEqual($('bottomDock').querySelector('#skillBar'), null, '#skillBar must live inside centered #bottomDock');
   assert.notEqual($('overheadLayer'), null, '#overheadLayer must exist for enemy/ally tags');
 
-  // Select 5v5 + RD 50 + AA 1.5 Scherp and launch!
-  $('modes').querySelector('[data-value="5v5"]').click();
+  // Select 3v3 + RD 50 + AA 1.5 Scherp and launch!
+  $('modes').querySelector('[data-value="3v3"]').click();
   $('loadout').querySelector('[data-value="RD 50"]').click();
   $('autoAimMode').querySelector('[data-value="1.5"]').click();
   $('start').click();
   frame();
   assert.equal(d.body.dataset.screen, 'game');
-  assert.equal(currentMatch.actors.length, 10, '5v5 must spawn 10 actors');
+  assert.equal(currentMatch.actors.length, 6, '3v3 must spawn 6 actors');
   assert.equal(currentMatch.aiModel, 'human', 'All standard matches must use NV2.6 Force');
   assert.equal(currentMatch.player.gun, 'RD 50');
   assert.equal(currentMatch.player.aa?.level, '1.5', 'Separate 1.5 Scherp selector must activate on player');
-  assert.equal($('specBar').hidden, true, 'Standard 5v5 must hide Lab specBar');
+  assert.equal($('specBar').hidden, true, 'Standard 3v3 must hide Lab specBar');
   const assigned = currentMatch.player.assignedSkill;
   assert(SKILL_POOL.includes(assigned));
   assert.equal($('btnShaffer').hidden, assigned !== 'shaffer', 'Only assigned skill button may be visible');
@@ -561,7 +561,7 @@ test('L09 | UI: Lab Mode panel, 1.5 Scherp exclusivity, Spectator controls, Sing
   assert.equal($('baizerVal').textContent, '50');
   assert.equal($('baizerBar').style.width, '50%');
 
-  // 2. Return to lobby -> Select 実験場 -> configure Spectator + NV1 (1.5 Scherp) vs NV2.6 Force (1.4)
+  // 2. Return to lobby -> Select 実験場 -> configure Spectator + NV2.6 Force (1.5 Scherp vs 1.4)
   $('pauseButton').click();
   $('endMatch').click();
   $('rematch').click();
@@ -572,7 +572,9 @@ test('L09 | UI: Lab Mode panel, 1.5 Scherp exclusivity, Spectator controls, Sing
   $('labRole').querySelector('[data-value="spectate"]').click();
   assert.equal($('loadoutField').hidden, true, 'Spectate mode hides player weapon selector');
 
-  $('labAiA').value = 'nv1';
+  assert.deepEqual([...$('labAiA').options].map(o => o.value), ['human'], 'Lab AI A UI must show only NV2.6 Force');
+  assert.deepEqual([...$('labAiB').options].map(o => o.value), ['human'], 'Lab AI B UI must show only NV2.6 Force');
+  $('labAiA').value = 'human';
   $('labAiA').dispatchEvent(new w.Event('change', {bubbles: true}));
   $('labAiB').value = 'human';
   $('labAiB').dispatchEvent(new w.Event('change', {bubbles: true}));

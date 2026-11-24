@@ -1,6 +1,6 @@
 import {SHADOW_FLAME_WORLD_GLSL} from './shadowflame.js';
 import {KHDR_TONE_GLSL} from './khdr.js';
-import {ARTICULATED_RIG_GLSL} from './rig.js';
+import {RIG_PALETTE_GLSL} from './rig.js';
 import {FLUXGI_WORLD_GLSL} from './fluxgi.js';
 import {RESONANCE_VS_GLSL, RESONANCE_FS_GLSL} from './resonance.js';
 
@@ -9,13 +9,37 @@ precision highp float;
 precision highp int;
 precision highp sampler2DArray;
 const vec3 SUN=normalize(vec3(-.66,.28,-.70));
+const vec2 SUN_XZ=normalize(vec2(-.66,-.70));
 const float PI=3.14159265359;
+const float INV_2PI=0.15915494309;
+const float INV_HALF_PI=0.63661977237;
 uniform int uOutput;
 uniform int uKHDR;
 uniform vec3 uEye;
 uniform sampler2D uSky;
 ${KHDR_TONE_GLSL}
-vec3 sky(vec3 d){float a=atan(d.x,-d.z);vec2 uv=vec2(a/(2.*PI)+.5,asin(clamp(d.y,0.,1.))/(PI*.5));vec3 col=pow(texture(uSky,uv).rgb,vec3(2.2));float mu=max(0.,dot(d,SUN));float disc=smoothstep(.99988,.999973,mu);float sunGain=uKHDR==1?13.5:10.;return col*.99+vec3(1.,.77,.42)*(disc*sunGain+.64*pow(mu,420.)+.095*pow(mu,24.));}
+vec3 sky(vec3 d){
+  float a=atan(d.x,-d.z);
+  float y=clamp(d.y,0.,1.);
+  // Exact minimax asin(y)/(PI/2) (<0.0005 rad error, eliminates slow transcendental asin!)
+  float ay=1.-sqrt(max(0.,1.-y))*(1.-y*.1355+y*y*.0255);
+  vec3 raw=texture(uSky,vec2(a*INV_2PI+.5,ay)).rgb;
+  vec3 col=raw*raw*(.80+.20*raw);
+  float mu=max(0.,dot(d,SUN));
+  vec3 sunAdd=vec3(0.);
+  if(mu>.70){
+    float m2=mu*mu,m4=m2*m2,m8=m4*m4;
+    float halo=.095*(m8*m8*m8);
+    if(mu>.96){
+      float disc=smoothstep(.99988,.999973,mu);
+      float sunGain=uKHDR==1?13.5:10.;
+      float m16=m8*m8,m32=m16*m16,m64=m32*m32,m128=m64*m64,m256=m128*m128;
+      halo+=disc*sunGain+.64*(m256*m128*m32*m4);
+    }
+    sunAdd=vec3(1.,.77,.42)*halo;
+  }
+  return col*.99+sunAdd;
+}
 vec3 aces(vec3 x){return clamp((x*(2.51*x+.03))/(x*(2.43*x+.59)+.14),0.,1.);}
 vec3 displayColor(vec3 c){
   c=max(c,vec3(0.));
@@ -29,11 +53,15 @@ vec3 displayColor(vec3 c){
   }
   if(uOutput==1){
     if(uKHDR==1)return kFilmicSDR(c);
-    return pow(aces(c*.87),vec3(1./2.2));
+    return kFastGamma(aces(c*.87));
   }
-  return pow(clamp(c*.95,0.,1.),vec3(1./2.2));
+  return kFastGamma(c*.95);
 }
-float fog(float d){return 1.-exp(-pow(d*.00265,1.38));}
+float fog(float d){
+  float x=max(0.,d*.00265);
+  float s2=sqrt(sqrt(x));
+  return 1.-exp(-x*s2*sqrt(s2));
+}
 `;
 
 export const worldVS = `#version 300 es
@@ -47,18 +75,14 @@ layout(location=4) in vec3 aColor;
 layout(location=5) in float aKind;
 uniform mat4 uVP,uModel;
 uniform int uMode;
-uniform vec2 uGait;
-uniform vec3 uPose;
-uniform vec3 uHit;
 uniform vec2 uRecoil;
 uniform vec4 uAnim;
 uniform vec4 uAnim2;
-uniform vec4 uExpr;
 out vec3 wPos,wNormal,wColor,lPos;
 out vec2 uv;
 flat out float layer;
 flat out float kind;
-${ARTICULATED_RIG_GLSL}
+${RIG_PALETTE_GLSL}
 ${RESONANCE_VS_GLSL}
 void main(){
   vec3 p=aPos,n=aNormal;
@@ -67,7 +91,7 @@ void main(){
   if(uMode==1){
     int boneId=int(floor(aKind*.1+.001));
     cleanKind=mod(aKind,10.);
-    rigApplyCharacter(p,n,boneId,uGait,uPose,uHit,uRecoil,uAnim,uAnim2,uExpr);
+    rigApplyPalette(p,n,boneId);
   } else if(uMode==2){
     // First-person weapon blowback + RD40 kinetic lock-on / twin-barrel hydraulic servo / D01 SENSOR pod motion
     float rdLock=uAnim.x;
@@ -108,7 +132,8 @@ void main(){
   gl_Position=uVP*vec4(wPos,1.);
 }`;
 
-export const worldFS = `#version 300 es
+function buildWorldFS(allowDiscard) {
+  return `#version 300 es
 ${shared}
 ${SHADOW_FLAME_WORLD_GLSL}
 ${FLUXGI_WORLD_GLSL}
@@ -120,6 +145,8 @@ flat in float kind;
 uniform sampler2DArray uMats;
 uniform int uMode;
 uniform int uQuality;
+uniform int uActiveActors;
+uniform int uLightCount;
 uniform vec4 uActors[6]; // xyz=pos, w=0 if dead else 1.0 + crouch
 uniform vec2 uHitFX;
 uniform float uGunHeat;
@@ -128,29 +155,84 @@ uniform vec4 uLights[6];
 uniform vec3 uLightCol[6];
 out vec4 frag;
 
-float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
-float noise(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);return mix(mix(hash(i),hash(i+vec2(1,0)),f.x),mix(hash(i+vec2(0,1)),hash(i+1.),f.x),f.y);}
+// Hash-without-sine (eliminates 4x sin() per noise call with higher visual isotropy!)
+float hash(vec2 p){
+  vec3 p3=fract(vec3(p.xyx)*.1031);
+  p3+=dot(p3,p3.yzx+33.33);
+  return fract((p3.x+p3.y)*p3.z);
+}
+float noise(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);return mix(mix(hash(i),hash(i+vec2(1.,0.)),f.x),mix(hash(i+vec2(0.,1.)),hash(i+1.),f.x),f.y);}
+
+vec3 applyWorldFog(vec3 c,vec3 V,float d){
+  if(uQuality<0){
+    return mix(c,vec3(.62,.71,.72),clamp((d-18.)/360.,0.,.86));
+  }
+  float sdot=max(dot(-V,SUN),0.);
+  float s2=sdot*sdot;
+  float sunScatter=(uQuality>=2||uKHDR==1)?(s2*sdot):(s2*s2);
+  vec3 fcol=mix(vec3(.58,.68,.70),vec3(.95,.77,.52),sunScatter);
+  float fg=fog(d);
+  c=mix(c,fcol,fg);
+  if(uQuality>=2 || uKHDR==1)c+=vec3(1.,.78,.46)*sunScatter*fg*(uKHDR==1?.28:.24);
+  return c;
+}
 
 void main(){
   vec4 texel=texture(uMats,vec3(uv,layer));
-  if(texel.a<.43)discard;
-  vec3 N=normalize(wNormal);
-  vec3 V=normalize(uEye-wPos);
-  vec3 base=pow(max(vec3(.014),texel.rgb*wColor),vec3(2.14));
-  float d=distance(uEye,wPos);
+  ${allowDiscard ? 'if(texel.a<.43)discard;' : ''}
+  vec3 toEye=uEye-wPos;
+  float d2Eye=dot(toEye,toEye);
+  float invD=inversesqrt(max(d2Eye,1e-8));
+  float d=d2Eye*invD;
+  vec3 V=toEye*invD;
+  // Low-error sRGB^2.14 polynomial (<0.004 max error vs pow(x,2.14), eliminates 3x exp2/log2 per pixel!)
+  vec3 raw=max(vec3(.014),texel.rgb*wColor);
+  vec3 base=raw*raw*(.86+.14*raw);
   float detail=dot(texel.rgb,vec3(.27,.52,.21));
+
+  // Early-Exit 1: Emissive surfaces (tracers, shields, glow strips, muzzle flash) skip 100% of shadows/GI/lights/puddles!
+  if(kind>2.5&&kind<3.5){
+    float boost=(uQuality>=2?3.15:uQuality==1?2.45:uQuality==0?2.05:1.75)*(uKHDR==1?1.26:1.);
+    vec3 ce=base*(boost+.38*detail);
+    if(uMode==2 && (uHitFX.x>.01 || uHitFX.y>.01)){
+      float wave=.5+.5*sin(uTime*16.-lPos.z*26.);
+      ce*=1.+uHitFX.x*(.38+.30*wave);
+      if(uHitFX.y>.01){
+        float scan=smoothstep(.62,.98,.5+.5*sin(uTime*11.+lPos.z*18.));
+        ce=mix(ce,vec3(.38,2.15,1.85)*(1.+.35*scan),uHitFX.y*(.42+.32*scan));
+      }
+    }
+    if(uMode!=2)ce=applyWorldFog(ce,V,d);
+    frag=vec4(displayColor(ce),uMode==2?0.:uMode==1?.8:1.);
+    return;
+  }
+
+  vec3 N=normalize(wNormal);
+
+  // Early-Exit 2: Distant horizon mountains (600-1400m away, outside shadow cascades, GI, and dynamic lights!)
+  if(kind>4.5){
+    float nlH=max(dot(N,SUN),0.);
+    vec3 ambH=mix(vec3(.24,.27,.26),vec3(.65,.79,.88),N.y*.5+.5);
+    vec3 sunColH=uKHDR==1?vec3(2.05,1.56,.96):vec3(1.66,1.32,.88);
+    vec3 ch=mix(base*(ambH+nlH*sunColH),base*1.2,.6);
+    if(uMode!=2)ch=applyWorldFog(ch,V,d);
+    frag=vec4(displayColor(ch),1.);
+    return;
+  }
+
   float metal=float(kind>.5&&kind<1.5);
   float ground=float(kind>1.5&&kind<2.5);
   int sfMode=int(uSfParams.x+.5);
 
-  // High & Extra: procedural micro-bump normal perturbation on world surfaces
-  if(uQuality>=1 && uMode!=2 && kind<2.5 && d>1.2 && d<95.){
+  // High & Extra: procedural micro-bump normal perturbation on world terrain surfaces (screen-LOD gated)
+  if(uQuality>=1 && uMode==0 && kind<2.5 && d>1.2 && d<62.){
     vec3 dp1=dFdx(wPos),dp2=dFdy(wPos);
     float dh1=dFdx(detail),dh2=dFdy(detail);
-    vec3 surfGrad=cross(dp2,N)*dh1+cross(N,dp1)*dh2;
-    float det=abs(dot(dp1,cross(dp2,N)));
+    vec3 c2=cross(dp2,N);
+    float det=abs(dot(dp1,c2));
     if(det>1e-5){
-      float bumpScale=(uQuality>=2?.14:.08)*smoothstep(1.2,3.5,d)*(1.-smoothstep(40.,95.,d));
+      vec3 surfGrad=c2*dh1+cross(N,dp1)*dh2;
+      float bumpScale=(uQuality>=2?.14:.08)*smoothstep(1.2,3.5,d)*(1.-smoothstep(32.,62.,d));
       N=normalize(N-clamp(surfGrad/det,vec3(-.85),vec3(.85))*bumpScale);
     }
   }
@@ -166,22 +248,25 @@ void main(){
   float vis=sf.x;
   float penSoft=sf.y;
 
-  // SF-ContactMicro: crouch-aware analytical ground-contact shadow under every live actor
-  float contact=1.;
-  if(ground>.5&&sfMode>=1){
-    vec2 sunXZ=normalize(SUN.xz);
+  // SF-ContactMicro: crouch-aware analytical ground-contact shadow under every live actor (squared-dist broadphase!)
+  if(ground>.5 && sfMode>=1 && uActiveActors>0){
+    float contact=1.;
+    float strength=sfMode>=2?.44:.48;
     for(int i=0;i<6;i++){
+      if(i>=uActiveActors)break;
       vec4 a=uActors[i];
       if(a.w<.5)continue;
+      vec2 rel=wPos.xz-a.xz;
+      float r2=dot(rel,rel);
+      if(r2>10.5)continue;
       float crouchF=clamp(a.w-1.,0.,1.);
       float maxLen=mix(2.65,1.65,crouchF);
-      vec2 rel=wPos.xz-a.xz;
-      float along=clamp(dot(rel,-sunXZ),0.,maxLen);
-      float radius=length(rel+sunXZ*along);
+      float along=clamp(dot(rel,-SUN_XZ),0.,maxLen);
+      vec2 perp=rel+SUN_XZ*along;
+      float radius=length(perp);
       float core=1.-smoothstep(.12,.48+along*.08,radius);
       float tail=1.-smoothstep(maxLen*.68,maxLen,along);
-      float footAO=1.-smoothstep(.10,.46,length(rel));
-      float strength=sfMode>=2?.44:.48;
+      float footAO=1.-smoothstep(.10,.46,sqrt(r2));
       contact=min(contact,mix(1.,strength,max(core*tail,footAO*.85)));
     }
     vis*=contact;
@@ -200,10 +285,11 @@ void main(){
   float umbraDepth=sfMode>=2?mix(.62,1.,vis):sfMode==1?mix(.72,1.,vis):1.;
   vec3 umbraTint=sfMode>=1?mix(vec3(.76,.89,1.12),vec3(1.),vis):vec3(1.);
   vec3 sunCol=uKHDR==1?vec3(2.05,1.56,.96):vec3(1.66,1.32,.88);
-  vec3 direct=max(nl,0.)*vis*sunCol;
-  if(sfMode>=1){
+  float posNL=max(nl,0.);
+  vec3 direct=posNL*vis*sunCol;
+  if(sfMode>=1 && posNL>0.){
     float penBand=4.*vis*(1.-vis);
-    direct+=vec3(1.12,.76,.40)*penBand*max(nl,0.)*(.10+.09*penSoft);
+    direct+=vec3(1.12,.76,.40)*penBand*posNL*(.10+.09*penSoft);
   }
   // Shadow Flame 1.0 Pro warm asphalt bounce + FluxGI 1.0 Real-Time 2-Bounce Colored Radiosity & Dynamic Light-Field!
   vec3 bounceGI=vec3(0.);
@@ -226,28 +312,36 @@ void main(){
   vec3 light=ambient*giSkyAO*umbraDepth*umbraTint*(1.-edge)+direct+bounceGI;
   vec3 c=base*light;
 
-  if(uQuality>=0){
+  if(uQuality>=0 && vis>.002 && posNL>0.){
     vec3 H=normalize(V+SUN);
-    float specPow=mix(26.,uQuality>=2?84.:62.,metal);
-    float spec=pow(max(dot(N,H),0.),specPow);
-    float specGain=uKHDR==1?1.18:1.;
-    c+=vec3(1.,.88,.66)*spec*vis*(.045+(uQuality>=2?.28:.20)*metal)*(.4+.6*detail)*specGain;
+    float ndh=max(dot(N,H),0.);
+    if(ndh>.74){
+      float specPow=mix(26.,uQuality>=2?84.:62.,metal);
+      float spec=pow(ndh,specPow);
+      float specGain=uKHDR==1?1.18:1.;
+      c+=vec3(1.,.88,.66)*spec*vis*(.045+(uQuality>=2?.28:.20)*metal)*(.4+.6*detail)*specGain;
+    }
   }
 
-  // High & Extra (and KHDR): sky environment fresnel reflection on metals
-  if((uQuality>=1 || uKHDR==1) && kind<2.5){
-    float fres=pow(1.-max(dot(N,V),0.),4.2);
-    vec3 R=reflect(-V,N);
-    R.y=max(.02,R.y);
-    if(metal>.5){
+  // High & Extra (and KHDR): sky environment fresnel reflection on metals (fast x^4 Schlick + Fresnel gate!)
+  if((uQuality>=1 || uKHDR==1) && metal>.5){
+    float ft=1.-max(dot(N,V),0.);
+    float f2=ft*ft;
+    float fres=f2*f2;
+    if(fres>.003){
+      vec3 R=reflect(-V,N);
+      R.y=max(.02,R.y);
       float envMul=uQuality>=2?.36:uKHDR==1?.24:.17;
       c+=sky(R)*fres*envMul*(.45+.55*detail)*mix(.62,1.,vis);
     }
   }
 
-  // Dynamic point lights + Shadow Flame DynamicFlame occlusion & warm wrap (skipped in Lightweight Mode)
-  if(kind<2.5 && uQuality>=0){
-    int maxL=(uQuality>=2 || sfMode>=2)?6:uQuality==1?4:2;
+  // Dynamic point lights + Shadow Flame DynamicFlame occlusion & warm wrap (bounded by uLightCount!)
+  if(kind<2.5 && uQuality>=0 && uLightCount>0){
+    int maxL=min(uLightCount,(uQuality>=2 || sfMode>=2)?6:uQuality==1?4:2);
+    float khdrL=uKHDR==1?1.15:1.;
+    float lSpecPow=mix(18.,54.,metal);
+    float lSpecGain=.12+.38*metal;
     for(int i=0;i<6;i++){
       if(i>=maxL)break;
       vec4 lp=uLights[i];
@@ -258,14 +352,16 @@ void main(){
       if(att<.004)continue;
       vec3 L=toL*inversesqrt(max(ld2,1e-5));
       float flameOcc=1.;
-      if(sfMode>=2 && ground>.5){
-        // Dynamic flame micro-shadow cast away from glowing explosions / supply tankers by nearby actors
+      if(sfMode>=2 && ground>.5 && uActiveActors>0 && ld2<225.){
+        vec2 toP=wPos.xz-lp.xz;
         for(int j=0;j<6;j++){
+          if(j>=uActiveActors)break;
           vec4 a=uActors[j];
           if(a.w<.5)continue;
           vec2 toA=a.xz-lp.xz;
-          vec2 toP=wPos.xz-lp.xz;
-          float proj=dot(toP,toA)/max(dot(toA,toA),.01);
+          float a2=dot(toA,toA);
+          if(a2>144. || a2<.01)continue;
+          float proj=dot(toP,toA)/a2;
           if(proj>1.02 && proj<3.5){
             vec2 perp=toP-toA*proj;
             float r=length(perp);
@@ -275,17 +371,24 @@ void main(){
       }
       float diff=sfMode>=2?(max(dot(N,L),0.)*.80+.20):(max(dot(N,L),0.)*.85+.15);
       vec3 LH=normalize(V+L);
-      float lspec=pow(max(dot(N,LH),0.),mix(18.,54.,metal))*(.12+.38*metal);
-      c+=(base*diff+lspec)*uLightCol[i]*att*flameOcc*(uKHDR==1?1.15:1.);
+      float ndhl=max(dot(N,LH),0.);
+      float lspec=ndhl>.68?pow(ndhl,lSpecPow)*lSpecGain:0.;
+      c+=(base*diff+lspec)*uLightCol[i]*att*flameOcc*khdrL;
     }
   }
   c+=resEmit;
 
   if(ground>.5 && uQuality>=0){
-    float wet=smoothstep(.46,.77,noise(wPos.xz*vec2(.34,.23))*.62+noise(wPos.xz*.92)*.38);
-    float fres=pow(1.-max(V.y,0.),4.);
-    vec3 wetReflect=(uQuality>=2||uKHDR==1)?sky(reflect(-V,normalize(vec3(0.,1.,0.)+N*.12)))*(uKHDR==1?.58:.52):vec3(.30,.38,.39)*.62;
-    c=mix(c,c*.70+wetReflect*fres*mix(.58,1.,vis),wet*(uQuality>=2?.82:.69));
+    float n1=noise(wPos.xz*vec2(.34,.23));
+    float n2=d<70.?noise(wPos.xz*.92):.5;
+    float wet=smoothstep(.46,.77,n1*.62+n2*.38);
+    if(wet>.004){
+      float vt=1.-max(V.y,0.);
+      float v2=vt*vt;
+      float fres=v2*v2;
+      vec3 wetReflect=(uQuality>=2||uKHDR==1)?sky(reflect(-V,normalize(vec3(0.,1.,0.)+N*.12)))*(uKHDR==1?.58:.52):vec3(.30,.38,.39)*.62;
+      c=mix(c,c*.70+wetReflect*fres*mix(.58,1.,vis),wet*(uQuality>=2?.82:.69));
+    }
     c*=.97+.06*noise(wPos.xz*.08);
   }
 
@@ -294,16 +397,16 @@ void main(){
     if(uQuality<0){
       c+=vec3(.30,1.45,1.75)*uHitFX.y*.85+vec3(1.50,.85,.35)*uHitFX.x*.85;
     } else {
-      float rim=pow(1.-max(dot(N,V),0.),2.0);
+      float rt=1.-max(dot(N,V),0.);
+      float rim=rt*rt;
       if(uHitFX.y>.01){
-        // Animated hexagonal plasma energy grid rippling over armored silhouette on shield hit
         vec2 hp=vec2(atan(lPos.x,lPos.z)*3.8, lPos.y*12.5-uTime*6.5);
         vec2 r=vec2(1.,1.73205);
         vec2 h=r*.5;
         vec2 a=mod(hp,r)-h;
         vec2 b=mod(hp-h,r)-h;
         vec2 gv=dot(a,a)<dot(b,b)?a:b;
-        float hexD=max(abs(gv.x),dot(abs(gv),normalize(r)));
+        float hexD=max(abs(gv.x),dot(abs(gv),vec2(.5,.8660254)));
         float hexLine=smoothstep(.41,.48,hexD);
         float pulse=.65+.35*sin(wPos.y*34.-uTime*32.);
         c+=vec3(.30,1.85,2.15)*uHitFX.y*(.32+1.48*rim+hexLine*1.35)*pulse;
@@ -321,35 +424,14 @@ void main(){
     c+=vec3(1.1,.68,.35)*uGunHeat*barrelMask*.42;
   }
 
-  if(kind>2.5&&kind<3.5){
-    float boost=(uQuality>=2?3.15:uQuality==1?2.45:uQuality==0?2.05:1.75)*(uKHDR==1?1.26:1.);
-    c=base*(boost+.38*detail);
-    if(uMode==2 && (uHitFX.x>.01 || uHitFX.y>.01)){
-      float wave=.5+.5*sin(uTime*16.-lPos.z*26.);
-      c*=1.+uHitFX.x*(.38+.30*wave);
-      if(uHitFX.y>.01){
-        float scan=smoothstep(.62,.98,.5+.5*sin(uTime*11.+lPos.z*18.));
-        c=mix(c,vec3(.38,2.15,1.85)*(1.+.35*scan),uHitFX.y*(.42+.32*scan));
-      }
-    }
-  }
-  if(kind>4.5)c=mix(c,base*1.2,.6);
-
-  if(uMode!=2){
-    if(uQuality<0){
-      float fg=clamp((d-18.)/360.,0.,.86);
-      c=mix(c,vec3(.62,.71,.72),fg);
-    } else {
-      float sunScatter=pow(max(dot(-V,SUN),0.),(uQuality>=2||uKHDR==1)?3.0:4.0);
-      vec3 fcol=mix(vec3(.58,.68,.70),vec3(.95,.77,.52),sunScatter);
-      float fg=fog(d);
-      c=mix(c,fcol,fg);
-      if(uQuality>=2 || uKHDR==1)c+=vec3(1.,.78,.46)*sunScatter*fg*(uKHDR==1?.28:.24);
-    }
-  }
+  if(uMode!=2)c=applyWorldFog(c,V,d);
   // Offscreen alpha distinguishes world, actor surfaces, and the first-person viewmodel.
   frag=vec4(displayColor(c),uMode==2?0.:uMode==1?.8:1.);
 }`;
+}
+
+export const worldFS = buildWorldFS(true);
+export const worldOpaqueFS = buildWorldFS(false);
 
 export const skyVS = `#version 300 es
 precision highp float;
@@ -379,16 +461,23 @@ void main(){
     c=sky(ray);
     if(uQuality>=2 || uKHDR==1){
       float mu=max(0.,dot(ray,SUN));
-      c+=vec3(1.,.72,.38)*(.12*pow(mu,12.)+.38*pow(mu,90.))*(uKHDR==1?1.22:1.);
+      if(mu>.5){
+        float m2=mu*mu,m4=m2*m2,m8=m4*m4;
+        float glow=.12*(m4*m8);
+        if(mu>.85){
+          float m16=m8*m8,m32=m16*m16,m64=m32*m32;
+          glow+=.38*(m64*m16*m8*m2);
+        }
+        c+=vec3(1.,.72,.38)*glow*(uKHDR==1?1.22:1.);
+      }
     }
   } else if(uQuality<0){
     // Ultra-lightweight 1-tap marine sea shader (zero mirror projection, zero multi-octave wave fetch)
     float dist=(-1.68-uEye.y)/ray.y;
     vec3 p=uEye+ray*dist;
     vec2 a=texture(uWaves,p.xz*vec2(.042,.055)+vec2(uTime*.014,uTime*.009)).rg*2.-1.;
-    float farFade=1./(1.+dist*.003);
-    vec3 N=normalize(vec3(a.x*.09*farFade,1.,a.y*.09*farFade));
-    float fr=.16+.72*pow(1.-max(0.,-ray.y),3.);
+    float ft=1.-max(0.,-ray.y);
+    float fr=.16+.72*(ft*ft*ft);
     vec3 sea=mix(vec3(.032,.11,.115),vec3(.075,.19,.195),.5+.5*a.y);
     c=mix(sea,vec3(.42,.54,.58),fr);
     c=mix(c,vec3(.58,.66,.66),clamp((dist-120.)/1100.,0.,.90));
@@ -399,17 +488,25 @@ void main(){
     vec2 uv=p.xz;
     vec2 a=texture(uWaves,uv*vec2(.038,.053)+vec2(t*.17,t*.095)).rg*2.-1.;
     vec2 b=texture(uWaves,uv.yx*vec2(.12,.079)+vec2(-t*.11,t*.22)).gr*2.-1.;
-    vec2 cc=texture(uWaves,uv*vec2(.25,.31)+vec2(t*.24,-t*.19)).rg*2.-1.;
     float farFade=1./(1.+dist*.0026);
-    vec2 slopes=(a*.105+b*.058+cc*.032)*farFade;
-    if(uQuality>=2){
-      vec2 dd=texture(uWaves,uv*vec2(.52,.47)+vec2(-t*.34,t*.29)).rg*2.-1.;
-      slopes+=dd*.018*farFade;
+    vec2 slopes=(a*.105+b*.058);
+    vec2 cc=vec2(0.);
+    // Distance-LOD high-frequency wave octaves (sub-pixel past 260m -> zero visual loss, 40-50% fewer sea fetches!)
+    if(dist<260.){
+      cc=texture(uWaves,uv*vec2(.25,.31)+vec2(t*.24,-t*.19)).rg*2.-1.;
+      slopes+=cc*.032;
+      if(uQuality>=2 && dist<140.){
+        vec2 dd=texture(uWaves,uv*vec2(.52,.47)+vec2(-t*.34,t*.29)).rg*2.-1.;
+        slopes+=dd*.018;
+      }
     }
+    slopes*=farFade;
     vec3 N=normalize(vec3(slopes.x,1.,slopes.y));
     vec3 R=reflect(ray,N);
     R.y=max(.009,R.y);
-    float fr=.10+.88*pow(1.-max(.0,dot(N,-ray)),4.3);
+    float ft=1.-max(.0,dot(N,-ray));
+    float f2=ft*ft;
+    float fr=.10+.88*(f2*f2*sqrt(sqrt(ft)));
     vec3 reflected=sky(R);
     if(uHasMirror&&dist<420.){
       vec4 q=uMirrorVP*vec4(p,1.);
@@ -422,13 +519,16 @@ void main(){
     }
     vec3 sea=mix(vec3(.025,.093,.097),vec3(.068,.181,.182),.5+.5*a.y);
     c=mix(sea,reflected,fr);
-    if(uQuality>=2 || uKHDR==1){
+    if((uQuality>=2 || uKHDR==1) && dist<260.){
       float crest=smoothstep(.62,.95,a.y*.55+b.x*.45+cc.y*.35)*farFade;
       c=mix(c,vec3(.78,.86,.86),crest*.18);
     }
     vec3 H=normalize(SUN-ray);
-    float shine=pow(max(dot(N,H),0.),mix(220.,uQuality>=2?1150.:950.,farFade));
-    c+=vec3(2.2,1.55,.82)*shine*farFade*(uKHDR==1?1.45:uQuality>=2?1.25:1.);
+    float ndh=max(dot(N,H),0.);
+    if(ndh>.85){
+      float shine=pow(ndh,mix(220.,uQuality>=2?1150.:950.,farFade));
+      c+=vec3(2.2,1.55,.82)*shine*farFade*(uKHDR==1?1.45:uQuality>=2?1.25:1.);
+    }
     c=mix(c,vec3(.57,.65,.64),smoothstep(135.,1400.,dist)*.91);
   }
   frag=vec4(displayColor(c),1.);

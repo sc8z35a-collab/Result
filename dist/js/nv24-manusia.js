@@ -487,6 +487,7 @@ export class ManusiaTheoryOfMindV24 {
    * side (emitting a loud EchoPulse bait footstep!), then instantly switch to Silent Walk opposite!
    */
   evaluateAcousticFeint(actor, b, t, metrics = null) {
+    const out = this._feintOut || (this._feintOut = {phase: 'noise', side: 1});
     if (this.feintPhase !== 'none') {
       if (t >= this.feintEndAt || b.seen || actor.hp < 46) {
         this.feintPhase = 'none';
@@ -495,20 +496,20 @@ export class ManusiaTheoryOfMindV24 {
       if (this.feintPhase === 'noise' && t >= this.feintSwitchAt) {
         this.feintPhase = 'silent_wrap';
       }
-      return {
-        phase: this.feintPhase,
-        side: this.feintPhase === 'noise' ? this.feintSide : -this.feintSide
-      };
+      out.phase = this.feintPhase;
+      out.side = this.feintPhase === 'noise' ? this.feintSide : -this.feintSide;
+      return out;
     }
 
     if (b.seen || !b.cover || actor.hp < 54 || t < this.feintCooldownUntil) return null;
     if ((this.persona.utilityIQ || 0.75) < 0.70) return null;
-    const preAimRisk = this.getEnemyPreAimRisk(actor, t);
-    if (preAimRisk < 0.52) return null;
     const refPos = b.lastPos;
     if (!refPos) return null;
-    const dThreat = Math.hypot(refPos[0] - actor.x, refPos[1] - actor.z);
-    if (dThreat < 7.5 || dThreat > 28) return null;
+    const dx = refPos[0] - actor.x, dz = refPos[1] - actor.z;
+    const d2 = dx * dx + dz * dz;
+    if (d2 < 56.25 || d2 > 784) return null;
+    const preAimRisk = this.getEnemyPreAimRisk(actor, t);
+    if (preAimRisk < 0.52) return null;
 
     if (this.rng() < 0.34 + (this.persona.utilityIQ - 0.70) * 0.9) {
       this.feintSide = b.peekEdgeSign || (this.rng() < 0.5 ? -1 : 1);
@@ -518,7 +519,9 @@ export class ManusiaTheoryOfMindV24 {
       this.feintEndAt = t + 1.55;
       this.feintCooldownUntil = t + 11.5 + this.rng() * 4.5;
       if (metrics) metrics.manusiaAcousticFeints++;
-      return {phase: 'noise', side: this.feintSide};
+      out.phase = 'noise';
+      out.side = this.feintSide;
+      return out;
     }
     this.feintCooldownUntil = t + 2.8;
     return null;
@@ -773,12 +776,10 @@ export class ManusiaNeuromotorAimV24 extends HumanOFC_AimV23 {
     const postShakeMul = mind?.postFightShake > 0.15 ? (1 + mind.postFightShake * 0.22) : 1.0;
     const cadenceOk = t >= this.triggerCadenceUntil;
 
-    return {
-      ...res,
-      readyToFire: res.readyToFire && cadenceOk && this.motorPhase !== 'SUBMOVE',
-      microSpread: res.microSpread * breathMul * postShakeMul,
-      breathHeld
-    };
+    res.readyToFire = res.readyToFire && cadenceOk && this.motorPhase !== 'SUBMOVE';
+    res.microSpread = res.microSpread * breathMul * postShakeMul;
+    res.breathHeld = breathHeld;
+    return res;
   }
 }
 
@@ -978,14 +979,17 @@ export class ManusiaTacticsV24 extends HumanTacticsV23 {
    * "Sprint the Gap, Walk the Corner" + Acoustic Feint + Match-Point Stealth Pacing!
    */
   computeMovementPace(actor, b, t, mind, isSpy = false) {
+    const out = this._paceOut || (this._paceOut = {sprinting: false, silentWalk: false, paceFactor: 1});
     // 1. Active Acoustic Footstep Feint override!
     if (b.tom && b.tom.feintPhase === 'noise' && t < b.tom.feintSwitchAt) {
       this.silentWalking = false;
-      return {sprinting: true, silentWalk: false, paceFactor: 1.24};
+      out.sprinting = true; out.silentWalk = false; out.paceFactor = 1.24;
+      return out;
     }
     if (b.tom && b.tom.feintPhase === 'silent_wrap' && t < b.tom.feintEndAt) {
       this.silentWalking = true;
-      return {sprinting: false, silentWalk: true, paceFactor: 0.80};
+      out.sprinting = false; out.silentWalk = true; out.paceFactor = 0.80;
+      return out;
     }
 
     const base = super.computeMovementPace(actor, b, t, mind, isSpy);
@@ -994,11 +998,16 @@ export class ManusiaTacticsV24 extends HumanTacticsV23 {
     // 2. Cautious Corner Pie-Walk when approaching a Trauma Danger Angle or tight threat corner!
     if (!b.seen && b.state !== '戦術退避' && b.state !== '一斉突入' && b.state !== 'トレード突入') {
       const trauma = mind?.nearestTraumaAngle(actor.x, actor.z, 14);
-      const nearCornerEdge = b.gaze?.lastEdgeDetected && b.lastPos && Math.hypot(b.lastPos[0] - actor.x, b.lastPos[1] - actor.z) < 16;
+      let nearCornerEdge = false;
+      if (b.gaze?.lastEdgeDetected && b.lastPos) {
+        const dx = b.lastPos[0] - actor.x, dz = b.lastPos[1] - actor.z;
+        nearCornerEdge = (dx * dx + dz * dz) < 256;
+      }
       const highStakes = (mind?.matchPointIntensity || 0) > 0.60;
       if (trauma || (nearCornerEdge && highStakes)) {
         this.silentWalking = true;
-        return {sprinting: false, silentWalk: true, paceFactor: 0.82};
+        base.sprinting = false; base.silentWalk = true; base.paceFactor = 0.82;
+        return base;
       }
     }
     return base;
