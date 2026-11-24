@@ -783,8 +783,8 @@ test('A31 | Death immediately clears active ADS/lock/D01/AA1.4 state and app.js 
   assert(appSrc.includes('fireTouch = fireTouchLast = mousePointer = null;'), 'Player respawn must clear touch/mouse fire pointers');
 });
 
-test('A32 | DF40 II AI weapon tables use 87 salvo capacity and dedicated recoil/ARV profile', () => {
-  assert.equal(WEAPON_BAND['DF40 II'].cap, 87);
+test('A32 | DF40 II AI weapon tables use 300 salvo capacity and dedicated recoil/ARV profile', () => {
+  assert.equal(WEAPON_BAND['DF40 II'].cap, 300);
   assert(WEAPON_RECOIL_PROFILE['DF40 II'], 'DF40 II must have a dedicated WEAPON_RECOIL_PROFILE entry');
   assert.equal(WEAPON_RECOIL_PROFILE['DF40 II'].arvWait, true);
 });

@@ -763,6 +763,19 @@ export class Renderer {
         pushL(bz.x, 1.05, bz.z, (is400 ? 2.6 : 1.85) * pulse, is400 ? 1.35 : 1.05, is400 ? .42 : .36, is400 ? 2.15 : 1.85, (is400 ? 40 : 34) - d * .6);
       }
     }
+    if (match.ammoBoxes) {
+      const boxes = match.ammoBoxes;
+      for (let i = 0; i < boxes.length; i++) {
+        const box = boxes[i];
+        if (box.cooldown > 0) continue;
+        const dx = box.x - ex, dz = box.z - ez;
+        const d2 = dx * dx + dz * dz;
+        if (d2 > 1156) continue; // 34^2
+        const d = Math.sqrt(d2);
+        const pulse = .9 + Math.sin(time * 3.8 + box.id * 1.4) * .2;
+        pushL(box.x, .75, box.z, 1.65 * pulse, 1.45, 1.08, .32, 30 - d * .6);
+      }
+    }
 
     // Partial selection of top 6 lights (O(6 * n) zero-alloc!)
     const take = Math.min(6, n);

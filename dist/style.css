@@ -3034,6 +3034,12 @@ body.touch #baizerHint { font-size: 6.5px; margin-top: 0; }
   color: #dffff0;
   box-shadow: 0 0 12px #44eba448;
 }
+.skill-btn.is-reinforce.is-ready {
+  border-color: #5ee6ffba;
+  background: linear-gradient(135deg, #124864d6, #0e2e44d6);
+  color: #dff9ff;
+  box-shadow: 0 0 12px #46dcff48;
+}
 .skill-btn:not(:disabled):active {
   transform: scale(.95);
 }

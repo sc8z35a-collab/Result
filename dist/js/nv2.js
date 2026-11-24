@@ -943,6 +943,7 @@ export class NV2 extends NV13Pro {
   }
 
   getActorAiTier(actor) {
+    if (actor?.forceNv26) return 'force';
     return actor ? this.teamAiTier[actor.team] : 'force';
   }
 
