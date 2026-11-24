@@ -19,13 +19,15 @@
 //        AeroVortex Navier-Stokes smoke (zero wallhack: containers still occlude depth!).
 
 import {clamp, unit} from './geometry.js';
-import {obstruction} from './yard.js';
+import {obstructionCoords} from './yard.js';
 
 export const THERMOFLUX_VERSION = 'ThermoFlux 1.0';
 export const THERMO_W = 32;
 export const THERMO_H = 96;
 const WORLD_X0 = -25, WORLD_W = 50;
 const WORLD_Z0 = -100, WORLD_L = 200;
+const INV_W = THERMO_W / WORLD_W;
+const INV_L = THERMO_H / WORLD_L;
 const SUN = unit([-.66, .28, -.70]);
 
 export const THERMO_COMPOSITE_GLSL = `
@@ -54,32 +56,28 @@ vec3 ironbowPalette(float t){
 vec3 applyThermoFluxFLIR(vec2 uv, float worldMask, float actorMask, float depth, float time, vec3 hdrColor){
   if(uFlirBlend<=.005)return hdrColor;
   float lum=dot(max(hdrColor,vec3(0.)),vec3(.2126,.7152,.0722));
-  // Keep first-person weapon cleanly styled as cool dark-indigo metallic silhouette + warm glowing barrel
   if(worldMask<.2){
     float barrelHeat=clamp(uGunHeat*.68+.10,0.,1.);
     vec3 vmCol=ironbowPalette(clamp(.08+lum*.16+barrelHeat*.42,0.,.82));
     return mix(hdrColor,vmCol*.88,uFlirBlend);
   }
-  // Sky / distant harbor horizon stays frigid dark-indigo
   if(depth>=.9994){
     vec3 skyIR=ironbowPalette(clamp(.02+lum*.07,0.,.16));
     return mix(hdrColor,skyIR*.85,uFlirBlend);
   }
 
   vec3 wPos=reconstructWorldPos(uv,depth);
-  vec2 tuv=vec2((wPos.x+25.)/50.,(wPos.z+100.)/200.);
+  vec2 tuv=vec2((wPos.x+25.)*.02,(wPos.z+100.)*.005);
   bool inYard=all(greaterThanEqual(tuv,vec2(0.)))&&all(lessThanEqual(tuv,vec2(1.)));
   vec4 th=inYard?texture(uThermoTex,tuv):vec4(0.);
-  float baseT=th.r;       // Solar-baked + diffused surface temperature
-  float spoor=th.g;       // Dynamic footprints, hot craters, ricochet streaks, hot brass!
-  float gradMag=th.b;     // Thermal gradient contour edge
+  float baseT=th.r;
+  float spoor=th.g;
+  float gradMag=th.b;
 
-  // Ground/low surface receives fiery orange-amber footprint spoor (capped below white-hot so actors blaze brightest!)
   float groundWeight=1.-smoothstep(.08,1.5,max(0.,wPos.y));
   float spoorT=clamp(spoor*(.34+.42*groundWeight)+gradMag*.14,0.,.54);
   float temp=clamp(baseT*.38+clamp(lum*.14,0.,.20)+spoorT,0.,.76);
 
-  // Highlight visible live actor bodies (37 C human bio-signature + warm gun heat) strictly on depth-visible pixels!
   float actorGlow=0.;
   for(int i=0;i<6;i++){
     vec4 ac=uFlirActors[i];
@@ -94,7 +92,6 @@ vec3 applyThermoFluxFLIR(vec2 uv, float worldMask, float actorMask, float depth,
   }
   temp=clamp(temp+actorGlow*.86,0.,1.05);
 
-  // Subtle authentic micro-bolometer horizontal scanline + crisp military-grade FLIR contrast
   float scan=.96+.04*sin(gl_FragCoord.y*3.14159+time*18.);
   vec3 ir=ironbowPalette(temp)*scan*.94;
   if(actorGlow>.18){
@@ -105,8 +102,8 @@ vec3 applyThermoFluxFLIR(vec2 uv, float worldMask, float actorMask, float depth,
 `;
 
 export function worldToThermoCell(x, z) {
-  const ix = clamp(Math.floor(((x - WORLD_X0) / WORLD_W) * THERMO_W), 0, THERMO_W - 1);
-  const iz = clamp(Math.floor(((z - WORLD_Z0) / WORLD_L) * THERMO_H), 0, THERMO_H - 1);
+  const ix = clamp(Math.floor((x - WORLD_X0) * INV_W), 0, THERMO_W - 1);
+  const iz = clamp(Math.floor((z - WORLD_Z0) * INV_L), 0, THERMO_H - 1);
   return [ix, iz];
 }
 
@@ -118,16 +115,21 @@ export class ThermoFlux {
     const N = THERMO_W * THERMO_H;
     this.n = N;
 
-    this.baseTemp = new Float32Array(N);  // Static sunlit vs shaded equilibrium (0.14..0.52)
-    this.dynHeat = new Float32Array(N);   // Dynamic footprints, craters, brass, blast heat (0..1.5)
+    this.baseTemp = new Float32Array(N);
+    this.dynHeat = new Float32Array(N);
     this.dynBuf = new Float32Array(N);
-    this.teamTag = new Int8Array(N).fill(-1); // Team ID of freshest thermal footprint at cell (-1 = none/neutral)
-    this.stampTime = new Float32Array(N).fill(-100); // Match time when cell was last heated by an actor
+    this.teamTag = new Int8Array(N).fill(-1);
+    this.stampTime = new Float32Array(N).fill(-100);
 
     this.texData = new Uint8Array(N * 4);
+    this.tex32 = new Uint32Array(this.texData.buffer);
+    this._baseTex32 = new Uint32Array(N);
     this.gl = null;
     this.tex = null;
     this.stepAccum = 0;
+    this._stateVersion = 1;
+    this._uploadedVersion = 0;
+    this._hasDynHeat = false;
 
     this.stats = {
       footprintsStamped: 0,
@@ -141,15 +143,20 @@ export class ThermoFlux {
   }
 
   _bakeSolarBaseline() {
+    const sx = SUN[0] * 38, sy = SUN[1] * 38, sz = SUN[2] * 38;
+    const baseTex32 = this._baseTex32;
     for (let iz = 0; iz < this.h; iz++) {
       const wz = WORLD_Z0 + ((iz + 0.5) / this.h) * WORLD_L;
+      const row = iz * this.w;
       for (let ix = 0; ix < this.w; ix++) {
         const wx = WORLD_X0 + ((ix + 0.5) / this.w) * WORLD_W;
-        const sunEnd = [wx + SUN[0] * 38, 0.35 + SUN[1] * 38, wz + SUN[2] * 38];
-        const sunlit = obstruction([wx, 0.35, wz], sunEnd) > 0.99;
-        // Marine air cools the western water edge slightly; sunlit asphalt & steel bake warmly
-        const seaCool = clamp((wx + 25) / 14, 0, 1) * 0.05;
-        this.baseTemp[iz * this.w + ix] = (sunlit ? 0.36 : 0.14) + seaCool;
+        const sunlit = obstructionCoords(wx, 0.35, wz, wx + sx, 0.35 + sy, wz + sz) > 0.99;
+        const seaCool = clamp((wx + 25) * (1 / 14), 0, 1) * 0.05;
+        const bt = (sunlit ? 0.36 : 0.14) + seaCool;
+        const i = row + ix;
+        this.baseTemp[i] = bt;
+        const r = clamp((bt * 255 + 0.5) | 0, 0, 255);
+        baseTex32[i] = (r | 0xff000000) >>> 0;
       }
     }
   }
@@ -160,7 +167,9 @@ export class ThermoFlux {
     this.teamTag.fill(-1);
     this.stampTime.fill(-100);
     this.stepAccum = 0;
+    this._hasDynHeat = false;
     this.stats = {footprintsStamped: 0, thermalImpacts: 0, spyTrailsFollowed: 0, peakDynHeat: 0};
+    this._stateVersion++;
     this._packTexture();
   }
 
@@ -174,22 +183,27 @@ export class ThermoFlux {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, this.w, this.h, gl.RGBA, gl.UNSIGNED_BYTE, this.texData);
+    this._uploadedVersion = this._stateVersion;
   }
 
   /** Stamps a warm thermal boot-print on the dock surface as an actor walks or sprints! */
   stampFootprint(x, z, team, time, intensity = 0.42) {
-    const [ix, iz] = worldToThermoCell(x, z);
+    const ix = clamp(Math.floor((x - WORLD_X0) * INV_W), 0, this.w - 1);
+    const iz = clamp(Math.floor((z - WORLD_Z0) * INV_L), 0, this.h - 1);
     const idx = iz * this.w + ix;
     this.dynHeat[idx] = Math.min(1.4, Math.max(this.dynHeat[idx], intensity) + intensity * 0.35);
     this.teamTag[idx] = team;
     this.stampTime[idx] = time;
     this.stats.footprintsStamped++;
+    this._hasDynHeat = true;
+    this._stateVersion++;
   }
 
   /** Deposits a diffusing combat thermal bloom (impact crater, ricochet streak, hot brass, blast). */
   depositHeat(x, z, amount = 0.65, radius = 1) {
-    const [cx, cz] = worldToThermoCell(x, z);
     const W = this.w, H = this.h;
+    const cx = clamp(Math.floor((x - WORLD_X0) * INV_W), 0, W - 1);
+    const cz = clamp(Math.floor((z - WORLD_Z0) * INV_L), 0, H - 1);
     for (let dz = -radius; dz <= radius; dz++) {
       const nz = cz + dz;
       if (nz < 0 || nz >= H) continue;
@@ -202,11 +216,14 @@ export class ThermoFlux {
       }
     }
     this.stats.thermalImpacts++;
+    this._hasDynHeat = true;
+    this._stateVersion++;
   }
 
   /** Samples physical normalized surface temperature (0..1.5) & fresh spoor at (x, z). */
   sampleTemp(x, z) {
-    const [ix, iz] = worldToThermoCell(x, z);
+    const ix = clamp(Math.floor((x - WORLD_X0) * INV_W), 0, this.w - 1);
+    const iz = clamp(Math.floor((z - WORLD_Z0) * INV_L), 0, this.h - 1);
     const idx = iz * this.w + ix;
     const base = this.baseTemp[idx];
     const dyn = this.dynHeat[idx];
@@ -224,28 +241,34 @@ export class ThermoFlux {
    * Inspects visible ground cells within `radius` around observer for the freshest warm enemy footprints!
    */
   findEnemySpoor(observerPos, enemyTeam, now, radius = 14) {
-    const [cx, cz] = worldToThermoCell(observerPos[0], observerPos[2]);
-    const rx = Math.ceil(radius / (WORLD_W / this.w));
-    const rz = Math.ceil(radius / (WORLD_L / this.h));
+    if (!this._hasDynHeat) return null;
+    const W = this.w, H = this.h;
+    const cx = clamp(Math.floor((observerPos[0] - WORLD_X0) * INV_W), 0, W - 1);
+    const cz = clamp(Math.floor((observerPos[2] - WORLD_Z0) * INV_L), 0, H - 1);
+    const rx = Math.ceil(radius * INV_W);
+    const rz = Math.ceil(radius * INV_L);
+    const r2Max = radius * radius;
+    const ox = observerPos[0], oy = observerPos[1], oz = observerPos[2];
     let best = null, bestScore = 0.14;
     for (let dz = -rz; dz <= rz; dz++) {
       const nz = cz + dz;
-      if (nz < 0 || nz >= this.h) continue;
+      if (nz < 0 || nz >= H) continue;
+      const wz = WORLD_Z0 + ((nz + 0.5) / H) * WORLD_L;
+      const ddz = wz - oz;
       for (let dx = -rx; dx <= rx; dx++) {
         const nx = cx + dx;
-        if (nx < 0 || nx >= this.w) continue;
-        const idx = nz * this.w + nx;
+        if (nx < 0 || nx >= W) continue;
+        const idx = nz * W + nx;
         if (this.teamTag[idx] !== enemyTeam) continue;
         const age = now - this.stampTime[idx];
         if (age < 0 || age > 11.5) continue;
         const h = this.dynHeat[idx];
         if (h < 0.14) continue;
-        const wx = WORLD_X0 + ((nx + 0.5) / this.w) * WORLD_W;
-        const wz = WORLD_Z0 + ((nz + 0.5) / this.h) * WORLD_L;
-        const d = Math.hypot(wx - observerPos[0], wz - observerPos[2]);
-        if (d < 1.5 || d > radius) continue;
-        // Strict fair play: observer must actually see the floor cell!
-        if (obstruction(observerPos, [wx, 0.25, wz]) < 0.96) continue;
+        const wx = WORLD_X0 + ((nx + 0.5) / W) * WORLD_W;
+        const ddx = wx - ox;
+        const d2 = ddx * ddx + ddz * ddz;
+        if (d2 < 2.25 || d2 > r2Max) continue;
+        if (obstructionCoords(ox, oy, oz, wx, 0.25, wz) < 0.96) continue;
         const score = h * Math.exp(-age * 0.18);
         if (score > bestScore) {
           bestScore = score;
@@ -261,35 +284,51 @@ export class ThermoFlux {
   stepHeat(dt, tankers = null) {
     const W = this.w, H = this.h;
     const stepDt = clamp(dt, 0.01, 0.12);
-    // Warm steady engine heat signature under the 3 Supply Tankers
-    if (tankers) {
-      for (const tk of tankers) {
-        const [ix, iz] = worldToThermoCell(tk.x, tk.z);
+    if (tankers && tankers.length) {
+      for (let ti = 0; ti < tankers.length; ti++) {
+        const tk = tankers[ti];
+        const ix = clamp(Math.floor((tk.x - WORLD_X0) * INV_W), 0, W - 1);
+        const iz = clamp(Math.floor((tk.z - WORLD_Z0) * INV_L), 0, H - 1);
         const idx = iz * W + ix;
-        this.dynHeat[idx] = Math.max(this.dynHeat[idx], tk.cooldown <= 0 ? 0.42 : 0.65);
+        const target = tk.cooldown <= 0 ? 0.42 : 0.65;
+        if (this.dynHeat[idx] < target) this.dynHeat[idx] = target;
       }
+      this._hasDynHeat = true;
     }
-    const alpha = clamp(0.42 * stepDt, 0, 0.18); // Fourier thermal diffusivity
-    const cool = Math.exp(-0.115 * stepDt);      // Newton radiative cooling (~12s footprint fade)
-    const src = this.dynHeat, dst = this.dynBuf;
+    if (!this._hasDynHeat) return;
+
+    const alpha = clamp(0.42 * stepDt, 0, 0.18);
+    const cool = Math.exp(-0.115 * stepDt);
+    const src = this.dynHeat, dst = this.dynBuf, tag = this.teamTag;
     let peak = 0;
     for (let iz = 0; iz < H; iz++) {
+      const row = iz * W;
+      const uOff = iz > 0 ? -W : 0;
+      const dOff = iz < H - 1 ? W : 0;
       for (let ix = 0; ix < W; ix++) {
-        const i = iz * W + ix;
+        const i = row + ix;
         const c = src[i];
         const l = ix > 0 ? src[i - 1] : c;
         const r = ix < W - 1 ? src[i + 1] : c;
-        const u = iz > 0 ? src[i - W] : c;
-        const d = iz < H - 1 ? src[i + W] : c;
-        const lap = (l + r + u + d - 4 * c);
-        const next = (c + alpha * lap) * cool;
-        dst[i] = next < 0.004 ? 0 : next;
-        if (dst[i] > peak) peak = dst[i];
-        if (dst[i] < 0.03) this.teamTag[i] = -1;
+        const u = src[i + uOff];
+        const d = src[i + dOff];
+        const next = (c + alpha * (l + r + u + d - 4 * c)) * cool;
+        if (next < 0.004) {
+          dst[i] = 0;
+          tag[i] = -1;
+        } else {
+          dst[i] = next;
+          if (next > peak) peak = next;
+          if (next < 0.03) tag[i] = -1;
+        }
       }
     }
-    this.dynHeat.set(dst);
+    const prev = this.dynHeat;
+    this.dynHeat = dst;
+    this.dynBuf = prev;
     this.stats.peakDynHeat = peak;
+    this._hasDynHeat = peak > 0;
+    this._stateVersion++;
   }
 
   tick(dt, tankers = null) {
@@ -302,28 +341,49 @@ export class ThermoFlux {
   }
 
   _packTexture() {
-    const W = this.w, H = this.h, out = this.texData, base = this.baseTemp, dyn = this.dynHeat;
+    const out32 = this.tex32, base32 = this._baseTex32;
+    if (!this._hasDynHeat) {
+      out32.set(base32);
+      return;
+    }
+    const W = this.w, H = this.h, base = this.baseTemp, dyn = this.dynHeat;
     for (let iz = 0; iz < H; iz++) {
+      const row = iz * W;
+      const uOff = iz > 0 ? -W : 0;
+      const dOff = iz < H - 1 ? W : 0;
       for (let ix = 0; ix < W; ix++) {
-        const i = iz * W + ix;
-        const o = i * 4;
-        const t = base[i] + dyn[i] * 0.72;
-        const gx = (ix < W - 1 ? dyn[i + 1] : dyn[i]) - (ix > 0 ? dyn[i - 1] : dyn[i]);
-        const gz = (iz < H - 1 ? dyn[i + W] : dyn[i]) - (iz > 0 ? dyn[i - W] : dyn[i]);
-        const grad = Math.hypot(gx, gz) * 1.8;
-        out[o] = clamp(Math.round(t * 255), 0, 255);
-        out[o + 1] = clamp(Math.round(dyn[i] * 255), 0, 255);
-        out[o + 2] = clamp(Math.round(grad * 255), 0, 255);
-        out[o + 3] = 255;
+        const i = row + ix;
+        const d = dyn[i];
+        const dR = ix < W - 1 ? dyn[i + 1] : d;
+        const dL = ix > 0 ? dyn[i - 1] : d;
+        const dD = dyn[i + dOff];
+        const dU = dyn[i + uOff];
+        if (d === 0 && dR === 0 && dL === 0 && dD === 0 && dU === 0) {
+          out32[i] = base32[i];
+          continue;
+        }
+        const gx = dR - dL, gz = dD - dU;
+        const t = base[i] + d * 0.72;
+        const grad = (gx === 0 && gz === 0) ? 0 : Math.sqrt(gx * gx + gz * gz) * 459;
+        let r = (t * 255 + 0.5) | 0;
+        let g = (d * 255 + 0.5) | 0;
+        let b = (grad + 0.5) | 0;
+        if (r < 0) r = 0; else if (r > 255) r = 255;
+        if (g < 0) g = 0; else if (g > 255) g = 255;
+        if (b < 0) b = 0; else if (b > 255) b = 255;
+        out32[i] = (r | (g << 8) | (b << 16) | 0xff000000) >>> 0;
       }
     }
   }
 
+  /** Dirty-gated upload of 32x96 RGBA8 thermal surface field to GPU (only uploads when 12Hz PDE or footprint updates!). */
   uploadToGPU() {
+    if (this._uploadedVersion === this._stateVersion) return;
     this._packTexture();
     if (this.gl && this.tex) {
       this.gl.bindTexture(this.gl.TEXTURE_2D, this.tex);
       this.gl.texSubImage2D(this.gl.TEXTURE_2D, 0, 0, 0, this.w, this.h, this.gl.RGBA, this.gl.UNSIGNED_BYTE, this.texData);
     }
+    this._uploadedVersion = this._stateVersion;
   }
 }

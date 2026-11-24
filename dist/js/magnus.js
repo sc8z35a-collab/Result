@@ -127,31 +127,30 @@ export function stepMagnusAero(shot, wind, dt) {
   // 2. Post-ricochet Magnus lateral curvature from transverse spin (omega x v)
   if (shot.ricocheted && !shot.guided && !shot.fermatLocked && (shot.transverseSpin || 0) > 8 && shot.spinVec) {
     const spec = CALIBER_AERO[shot.gun] || CALIBER_AERO['SW T'];
-    const mx = shot.spinVec[1] * shot.dir[2] - shot.spinVec[2] * shot.dir[1];
-    const my = shot.spinVec[2] * shot.dir[0] - shot.spinVec[0] * shot.dir[2];
-    const mz = shot.spinVec[0] * shot.dir[1] - shot.spinVec[1] * shot.dir[0];
-    const mLen = Math.hypot(mx, my, mz);
+    const sd = shot.dir, sv = shot.spinVec;
+    const mx = sv[1] * sd[2] - sv[2] * sd[1];
+    const my = sv[2] * sd[0] - sv[0] * sd[2];
+    const mz = sv[0] * sd[1] - sv[1] * sd[0];
+    const mLen = Math.sqrt(mx * mx + my * my + mz * mz);
     if (mLen > 1e-4) {
       const curve = clamp(spec.magnusGain * mLen * dt, 0, 0.012);
-      const nextDir = unit([
-        shot.dir[0] + (mx / mLen) * curve,
-        shot.dir[1] + (my / mLen) * curve * 0.45,
-        shot.dir[2] + (mz / mLen) * curve
-      ]);
-      shot.dir = nextDir;
+      const invM = curve / mLen;
+      let nx = sd[0] + mx * invM, ny = sd[1] + my * invM * 0.45, nz = sd[2] + mz * invM;
+      const invN = 1 / (Math.sqrt(nx * nx + ny * ny + nz * nz) || 1);
+      sd[0] = nx * invN; sd[1] = ny * invN; sd[2] = nz * invN;
       shot.magnusTurned = (shot.magnusTurned || 0) + curve;
-      // Exponential aerodynamic spin decay
       const damp = Math.exp(-1.8 * dt);
-      shot.spinVec[0] *= damp;
-      shot.spinVec[1] *= damp;
-      shot.spinVec[2] *= damp;
+      sv[0] *= damp; sv[1] *= damp; sv[2] *= damp;
       shot.transverseSpin *= damp;
     }
   }
 
-  // 3. Crosswind aerodynamic coupling (skipped when Scherp 1.5 actively stabilizes flight)
+  // 3. Crosswind aerodynamic coupling (in-place normalize, zero GC!)
   if (!shot.guided && !shot.scherpApn && wind && wind.speed > 0.35 && shot.p[1] > 0.1 && shot.p[1] < 5.5) {
-    const drag = shot.gun === 'MS10' ? 0.00085 : shot.gun === 'RD40' ? 0.0012 : shot.gun === 'DF40 II' ? 0.00135 : 0.00185;
-    shot.dir = unit([shot.dir[0] + wind.vx * drag * dt, shot.dir[1], shot.dir[2] + wind.vz * drag * dt]);
+    const drag = (shot.gun === 'MS10' ? 0.00085 : shot.gun === 'RD40' ? 0.0012 : shot.gun === 'DF40 II' ? 0.00135 : 0.00185) * dt;
+    const sd = shot.dir;
+    const nx = sd[0] + wind.vx * drag, ny = sd[1], nz = sd[2] + wind.vz * drag;
+    const invN = 1 / (Math.sqrt(nx * nx + ny * ny + nz * nz) || 1);
+    sd[0] = nx * invN; sd[1] = ny * invN; sd[2] = nz * invN;
   }
 }

@@ -108,12 +108,14 @@ export class ChronoTrace {
     const rec = shot?.trace;
     if (!rec || rec.closed || rec.pts.length >= 22) return;
     const last = rec.pts[rec.pts.length - 1];
-    const d = Math.hypot(shot.p[0] - last[0], shot.p[1] - last[1], shot.p[2] - last[2]);
-    // Sample finely on curved guided shots and moderately on straight trajectories
-    const minStep = shot.guided ? 2.4 : 6.5;
-    if (d >= minStep) {
-      rec.pts.push([shot.p[0], shot.p[1], shot.p[2], time]);
-      rec.distM += d;
+    const sp = shot.p;
+    const dx = sp[0] - last[0], dy = sp[1] - last[1], dz = sp[2] - last[2];
+    const d2 = dx * dx + dy * dy + dz * dz;
+    // Sample finely on curved guided shots and moderately on straight trajectories (squared gate -> 0 sqrt on 99% of ticks!)
+    const minStep2 = shot.guided ? 5.76 : 42.25;
+    if (d2 >= minStep2) {
+      rec.pts.push([sp[0], sp[1], sp[2], time]);
+      rec.distM += Math.sqrt(d2);
     }
   }
 

@@ -15,7 +15,7 @@
 //        D01 SENSOR behind-cover tracking!
 
 import {clamp, dot, add, scale, unit} from './geometry.js';
-import {obstruction} from './yard.js';
+import {obstruction, obstructionCoords} from './yard.js';
 
 export const BALLISTICS_VERSION = 'BallisticCore-X 1.0';
 
@@ -39,7 +39,12 @@ export const RICOCHET_SIN_CONCRETE = 0.28;
 
 export function incomingPathClear(shot, distance, point) {
   return !shot.materialPass && distance > 0 && distance <= shot.speed * (shot.life ?? Infinity) &&
-    obstruction(shot.p, point) > 1;
+    obstructionCoords(shot.p[0], shot.p[1], shot.p[2], point[0], point[1], point[2]) > 1;
+}
+
+export function incomingPathClearCoords(shot, distance, px, py, pz) {
+  return !shot.materialPass && distance > 0 && distance <= shot.speed * (shot.life ?? Infinity) &&
+    obstructionCoords(shot.p[0], shot.p[1], shot.p[2], px, py, pz) > 1;
 }
 
 /**

@@ -16,7 +16,7 @@
 //   6. Strict Mode Isolation: 1.5 Scherp is structurally gated to `match.isLab === true` ONLY.
 
 import {clamp, angleDiff, forward, sub, add, scale, dot, unit} from './geometry.js';
-import {obstruction, clearOpticalPath, raycastMaterial} from './yard.js';
+import {obstruction, obstructionCoords, clearOpticalPath, raycastMaterial} from './yard.js';
 import {eyeOf, targetPoint} from './posture.js';
 import {ARV1_LOCK_ACQUIRE, ARV1_LOCK_HOLD} from './df1.js';
 import {WEAPON_PENETRATION} from './ballistics.js';
@@ -519,11 +519,12 @@ export function updateUniversalAA(match, a, dt) {
 
   if (disabled) {
     if (aa.focusId >= 0 || aa.locked) clearUniversalLock(aa, t);
-    const k = 1 - Math.exp(-16 * dt);
-    aa.lockBlend += (0 - aa.lockBlend) * k;
-    aa.wallBlend += (0 - aa.wallBlend) * k;
-    aa.trackYaw += (0 - aa.trackYaw) * k;
-    aa.trackPitch += (0 - aa.trackPitch) * k;
+    if (aa.lockBlend === 0 && aa.wallBlend === 0 && aa.trackYaw === 0 && aa.trackPitch === 0) return;
+    const keep = Math.exp(-16 * dt);
+    aa.lockBlend = aa.lockBlend > 1e-4 ? aa.lockBlend * keep : 0;
+    aa.wallBlend = aa.wallBlend > 1e-4 ? aa.wallBlend * keep : 0;
+    aa.trackYaw = Math.abs(aa.trackYaw) > 1e-4 ? aa.trackYaw * keep : 0;
+    aa.trackPitch = Math.abs(aa.trackPitch) > 1e-4 ? aa.trackPitch * keep : 0;
     return;
   }
 
@@ -860,16 +861,21 @@ export function steerScherpShot(match, s, dt) {
     return;
   }
 
-  const tp = targetPoint(e);
+  const lean = e.lean || 0;
+  const tpx = e.x + Math.cos(e.yaw) * lean;
+  const tpy = e.y + 1.23 * (1 - (e.crouch || 0) * 0.34);
+  const tpz = e.z + Math.sin(e.yaw) * lean;
+  const spx = s.p[0], spy = s.p[1], spz = s.p[2];
   // Scherp 1.5 mmWave pierces smoke; solid walls still gate direct APN unless shot is already penetrating
-  if (!s.scherpPen && obstruction(s.p, tp) <= 1) return;
+  if (!s.scherpPen && obstructionCoords(spx, spy, spz, tpx, tpy, tpz) <= 1) return;
 
-  const rx = tp[0] - s.p[0], ry = tp[1] - s.p[1], rz = tp[2] - s.p[2];
+  const rx = tpx - spx, ry = tpy - spy, rz = tpz - spz;
   const dist = Math.hypot(rx, ry, rz);
   if (dist < 0.22) return;
 
   const spd = Math.max(70, s.speed || 360);
-  const svx = s.dir[0] * spd, svy = s.dir[1] * spd, svz = s.dir[2] * spd;
+  const d0 = s.dir[0], d1 = s.dir[1], d2 = s.dir[2];
+  const svx = d0 * spd, svy = d1 * spd, svz = d2 * spd;
   const tvx = e.vx || 0, tvy = e.vy || 0, tvz = e.vz || 0;
   const vrelX = tvx - svx, vrelY = tvy - svy, vrelZ = tvz - svz;
 
@@ -890,32 +896,37 @@ export function steerScherpShot(match, s, dt) {
   const zemY = ry + vrelY * tgo + ay * t2 * 0.75;
   const zemZ = rz + vrelZ * tgo + az * t2 * 0.85;
 
-  // Desired intercept line for cone validation
-  const predX = tp[0] + tvx * tgo + ax * t2 * 0.72;
-  const predY = Math.max(e.y + 0.6, tp[1] + tvy * tgo * 0.75 + ay * t2 * 0.65);
-  const predZ = tp[2] + tvz * tgo + az * t2 * 0.72;
-  const toPred = unit([predX - s.p[0], predY - s.p[1], predZ - s.p[2]]);
-  const cosA = clamp(dot(s.dir, toPred), -1, 1);
+  // Desired intercept line for cone validation (scalar zero-GC)
+  const pdx = (tpx + tvx * tgo + ax * t2 * 0.72) - spx;
+  const pdy = Math.max(e.y + 0.6, tpy + tvy * tgo * 0.75 + ay * t2 * 0.65) - spy;
+  const pdz = (tpz + tvz * tgo + az * t2 * 0.72) - spz;
+  const pdInv = 1 / (Math.hypot(pdx, pdy, pdz) || 1);
+  const cosA = clamp((d0 * pdx + d1 * pdy + d2 * pdz) * pdInv, -1, 1);
   if (cosA < (s.homingCos || SCHERP_HOMING_COS)) return;
 
   // Project ZEM orthogonal to shot velocity s.dir -> exact APN lateral command a_c = N' * ZEM_perp / t_go^2
-  const zemAlong = zemX * s.dir[0] + zemY * s.dir[1] + zemZ * s.dir[2];
-  const zpX = zemX - s.dir[0] * zemAlong;
-  const zpY = zemY - s.dir[1] * zemAlong;
-  const zpZ = zemZ - s.dir[2] * zemAlong;
+  const zemAlong = zemX * d0 + zemY * d1 + zemZ * d2;
+  const zpX = zemX - d0 * zemAlong;
+  const zpY = zemY - d1 * zemAlong;
+  const zpZ = zemZ - d2 * zemAlong;
   const zpLen = Math.hypot(zpX, zpY, zpZ);
   if (zpLen < 1e-5) return;
 
   const N = s.apnNavConst || SCHERP_APN_NAV_CONST;
-  // Angular turn rate omega_cmd = |a_c| / spd = N * |ZEM_perp| / (spd * t_go^2)
   const omegaCmd = (N * zpLen) / Math.max(0.05, spd * tgo * tgo);
   const maxErrAng = Math.acos(cosA);
   const step = Math.min(maxErrAng * 1.15, omegaCmd * dt, (s.homingRate || SCHERP_HOMING_RATE) * dt, s.homingBudget);
   if (step < 1e-6) return;
 
   const invZp = 1 / zpLen;
-  const pUnit = [zpX * invZp, zpY * invZp, zpZ * invZp];
-  s.dir = unit(add(scale(s.dir, Math.cos(step)), scale(pUnit, Math.sin(step))));
+  const cs = Math.cos(step), sn = Math.sin(step) * invZp;
+  const nx = d0 * cs + zpX * sn;
+  const ny = d1 * cs + zpY * sn;
+  const nz = d2 * cs + zpZ * sn;
+  const nInv = 1 / (Math.hypot(nx, ny, nz) || 1);
+  s.dir[0] = nx * nInv;
+  s.dir[1] = ny * nInv;
+  s.dir[2] = nz * nInv;
   s.homingBudget = Math.max(0, s.homingBudget - step);
   s.homingTurned = (s.homingTurned || 0) + step;
 }

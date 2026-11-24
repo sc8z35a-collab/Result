@@ -1399,29 +1399,38 @@ export class HumanOFC_AimV23 {
     const clutch = mind ? mind.clutchLevel : 0;
     const gunProf = WEAPON_RECOIL_PROFILE[a.gun] || WEAPON_RECOIL_PROFILE.SRA;
 
-    // 1. Weapon-Specific Recoil Muscle Memory (delayed ~95ms recognition, then crisp pull-down + drift counter!)
+    // 1. Weapon-Specific Recoil Muscle Memory (dt-cached exponentials -> 0 Math.exp per substep!)
+    if (dt !== this._lastExpDt) {
+      this._lastExpDt = dt;
+      this._kPull = 1 - Math.exp(-12.5 * dt);
+      this._kRel = Math.exp(-10.5 * dt);
+      this._recDecay = Math.exp(-(this.isNv21 ? 12.0 : 9.2) * dt);
+      this._flDecay = Math.exp(-(this.isNv21 ? 12.5 : 9.0) * dt);
+      this._strafeDecay = Math.exp(-(this.isNv21 ? 5.8 : 4.2) * dt);
+      this._wSmooth = 1 - Math.exp(-(this.isNv21 ? 7.2 : 5.2) * dt);
+    }
     const spraying = t - this.lastShotAt < 0.28;
     const sprayAge = t - this.burstStartAt;
     const recLag = this.isNv21 ? 0.080 : 0.098;
     if (spraying && sprayAge > recLag) {
       const mastery = clamp(gunProf.pullSkill * (0.86 + (this.persona.burstDiscipline || 0.75) * 0.18) * flow, 0.70, 0.95);
-      const kPull = 1 - Math.exp(-12.5 * dt);
+      const kPull = this._kPull;
       this.recoilCompP = mix(this.recoilCompP, this.recoilP * mastery, kPull);
       this.recoilCompY = mix(this.recoilCompY, this.recoilY * (mastery * 0.22), kPull);
     } else if (!spraying) {
-      const kRel = Math.exp(-10.5 * dt);
+      const kRel = this._kRel;
       this.recoilCompP *= kRel;
       this.recoilCompY *= kRel;
     }
 
-    const recDecay = Math.exp(-(this.isNv21 ? 12.0 : 9.2) * dt);
+    const recDecay = this._recDecay;
     this.recoilY *= recDecay;
     this.recoilP *= recDecay;
     this.bloom = Math.max(0, this.bloom - dt * (this.isNv21 ? 0.050 : 0.036));
-    const flDecay = Math.exp(-(this.isNv21 ? 12.5 : 9.0) * dt);
+    const flDecay = this._flDecay;
     this.flinchY *= flDecay;
     this.flinchP *= flDecay;
-    this.strafeShock *= Math.exp(-(this.isNv21 ? 5.8 : 4.2) * dt);
+    this.strafeShock *= this._strafeDecay;
 
     // 2. Smooth OU Human Drift + Respiratory Sway (steadied in Clutch/Quiet Eye) + Stress Tremor
     if (t >= this.wanderNextAt) {
@@ -1433,20 +1442,30 @@ export class HumanOFC_AimV23 {
       this.leadNoise = (this.rng() - 0.5) * (this.isNv21 ? 0.16 : 0.28);
       this.leadNextAt = t + 0.30 + this.rng() * 0.34;
     }
-    const wSmooth = 1 - Math.exp(-(this.isNv21 ? 7.2 : 5.2) * dt);
+    const wSmooth = this._wSmooth;
     this.wanderY += (this.wanderGoalY - this.wanderY) * wSmooth;
     this.wanderP += (this.wanderGoalP - this.wanderP) * wSmooth;
 
     const breathHz = 0.27 + exertion * 0.17 + stress * 0.13 - clutch * 0.05;
-    this.breathPhase += dt * Math.max(0.18, breathHz) * Math.PI * 2;
+    this.breathPhase += dt * Math.max(0.18, breathHz) * 6.283185307179586;
     const breathAmp = (1 + exertion * 0.52 + stress * 0.30) * (1 - clutch * 0.18);
-    const breathY = (Math.sin(this.breathPhase + this.phaseA) * 0.15 + Math.sin(t * 5.0 + this.phaseB) * 0.05) * breathAmp;
-    const breathP = (Math.cos(this.breathPhase + this.phaseB) * 0.16 + Math.sin(t * 4.2 + this.phaseA) * 0.05) * breathAmp;
-    const tremor = stress > 0.58 ? (stress - 0.58) * (1 - clutch * 0.35) * 0.0080 : 0;
-    const tremorY = tremor * Math.sin(t * 49.0 + this.phaseA);
-    const tremorP = tremor * Math.cos(t * 43.0 + this.phaseB);
+    let breathY = 0, breathP = 0, tremorY = 0, tremorP = 0;
+    if (seenTarget) {
+      breathY = (Math.sin(this.breathPhase + this.phaseA) * 0.15 + Math.sin(t * 5.0 + this.phaseB) * 0.05) * breathAmp;
+      breathP = (Math.cos(this.breathPhase + this.phaseB) * 0.16 + Math.sin(t * 4.2 + this.phaseA) * 0.05) * breathAmp;
+      if (stress > 0.58) {
+        const tremor = (stress - 0.58) * (1 - clutch * 0.35) * 0.0080;
+        tremorY = tremor * Math.sin(t * 49.0 + this.phaseA);
+        tremorP = tremor * Math.cos(t * 43.0 + this.phaseB);
+      }
+    }
 
-    const eye = eyeOf(a);
+    // Zero-alloc inline scalar eyeOf(a)
+    const leanA = a.lean || 0;
+    const ex = leanA ? a.x + Math.cos(a.yaw) * leanA : a.x;
+    const ey = a.y + (a.human ? 1.61 : 1.5) * (1 - (a.crouch || 0) * 0.34);
+    const ez = leanA ? a.z + Math.sin(a.yaw) * leanA : a.z;
+
     let idealYaw = fallbackYaw;
     let idealPitch = fallbackPitch;
     let dist = 25;
@@ -1465,16 +1484,22 @@ export class HumanOFC_AimV23 {
       this.observeVisibleTarget(seenTarget, t, backstabBonus, primed);
       const perc = this.sampleDelayedTarget(t);
 
-      const liveTp = targetPoint(seenTarget);
-      const lrx = liveTp[0] - eye[0], lry = liveTp[1] - eye[1], lrz = liveTp[2] - eye[2];
-      dist = Math.hypot(lrx, lry, lrz);
+      // Zero-alloc inline scalar targetPoint(seenTarget)
+      const leanS = seenTarget.lean || 0;
+      const ltx = leanS ? seenTarget.x + Math.cos(seenTarget.yaw) * leanS : seenTarget.x;
+      const lty = seenTarget.y + 1.23 * (1 - (seenTarget.crouch || 0) * 0.34);
+      const ltz = leanS ? seenTarget.z + Math.sin(seenTarget.yaw) * leanS : seenTarget.z;
+      const lrx = ltx - ex, lry = lty - ey, lrz = ltz - ez;
+      const lHoriz2 = lrx * lrx + lrz * lrz;
+      dist = Math.sqrt(lHoriz2 + lry * lry);
       trueYaw = Math.atan2(lrx, -lrz);
-      truePitch = clamp(Math.atan2(lry, Math.hypot(lrx, lrz)), -0.78, 0.78);
+      truePitch = clamp(Math.atan2(lry, Math.sqrt(lHoriz2)), -0.78, 0.78);
 
       if (perc) {
-        const pdx = perc.x - eye[0], pdy = perc.y - eye[1], pdz = perc.z - eye[2];
-        const pHoriz = Math.max(0.8, Math.hypot(pdx, pdz));
-        const pDist = Math.hypot(pdx, pdy, pdz);
+        const pdx = perc.x - ex, pdy = perc.y - ey, pdz = perc.z - ez;
+        const pHoriz2 = pdx * pdx + pdz * pdz;
+        const pHoriz = Math.max(0.8, Math.sqrt(pHoriz2));
+        const pDist = Math.sqrt(pHoriz2 + pdy * pdy);
         targetHalfWidth = clamp(0.39 / Math.max(2.5, pDist), 0.011, 0.095);
 
         // Delayed target angular velocity for velocity-matched Smooth Pursuit (self-strafe parallax corrected via OFC feedback!)
@@ -1493,24 +1518,25 @@ export class HumanOFC_AimV23 {
         const aimY = perc.y + perc.vy * (leadT * 0.40 + extrapT * 0.28) + (perc.onGround ? 0 : 0.04);
         const aimZ = perc.z + perc.vz * (leadT * leadMul + extrapT);
 
-        const rx = aimX - eye[0], ry = aimY - eye[1], rz = aimZ - eye[2];
+        const rx = aimX - ex, ry = aimY - ey, rz = aimZ - ez;
         idealYaw = Math.atan2(rx, -rz);
-        idealPitch = clamp(Math.atan2(ry, Math.hypot(rx, rz)), -0.78, 0.78);
+        idealPitch = clamp(Math.atan2(ry, Math.sqrt(rx * rx + rz * rz)), -0.78, 0.78);
 
         // Trigger Predictive Primary Saccade (Fitts + Minimum-Jerk + Undershoot) on target switch or large angle!
-        const errMag = Math.hypot(angleDiff(idealYaw, a.yaw), idealPitch - a.pitch);
+        const eyD = angleDiff(idealYaw, a.yaw), epD = idealPitch - a.pitch;
+        const errMag = Math.sqrt(eyD * eyD + epD * epD);
         if ((prevTgtId !== seenTarget.id || errMag > 0.30) && this.motorPhase !== 'FLICK' && errMag > 0.13) {
           this.triggerBallisticFlick(a.yaw, a.pitch, idealYaw, idealPitch, t, stress, startled, metrics, pDist);
         }
 
         // Dynamic human hand error envelope
-        const ownSpeed = Math.hypot(a.vx, a.vz);
+        const ownSpeed = Math.sqrt(a.vx * a.vx + a.vz * a.vz);
         const moveMul = counterStrafing ? 0.62
           : !a.onGround ? 1.54
           : dodging ? (this.isNv21 ? 1.15 : 1.32)
-          : (1 + clamp(ownSpeed / 4.8, 0, 1.15) * (this.isNv21 ? 0.24 : 0.46));
+          : (1 + clamp(ownSpeed * (1 / 4.8), 0, 1.15) * (this.isNv21 ? 0.24 : 0.46));
         const stanceMul = (1 - a.crouch * 0.24 - a.aimPose * 0.14) * (backstabBonus ? 0.72 : 1.0);
-        const rangeMul = 0.86 + clamp((pDist - 12) / 50, 0, 0.42);
+        const rangeMul = 0.86 + clamp((pDist - 12) * 0.02, 0, 0.42);
         const stressErr = targetAngSpeed * this.angVelErr + this.strafeShock * (this.isNv21 ? 0.011 : 0.019);
         const flowDiv = 1 / Math.max(0.76, flow);
         const errAmp = (this.baseWander * moveMul * stanceMul * rangeMul * flowDiv) + stressErr + this.bloom;
@@ -1524,7 +1550,8 @@ export class HumanOFC_AimV23 {
         );
 
         // Quiet Eye pre-shot stabilization accumulation
-        const curAlign = Math.hypot(angleDiff(idealYaw, a.yaw), (idealPitch - a.pitch) * 0.8);
+        const caY = angleDiff(idealYaw, a.yaw), caP = (idealPitch - a.pitch) * 0.8;
+        const curAlign = Math.sqrt(caY * caY + caP * caP);
         const velErr = Math.abs(this.velYaw - percOmegaYaw);
         const quietTol = clamp(targetHalfWidth * 1.55, 0.026, 0.090);
         if (this.motorPhase !== 'FLICK' && !startled && curAlign < quietTol && velErr < 2.2) {
@@ -1555,10 +1582,11 @@ export class HumanOFC_AimV23 {
         readyToFire = t >= this.acquireReadyAt && !startled && this.motorPhase !== 'FLICK' && clickGateOk && !holdingForArv;
       }
     } else if (suppressPos) {
-      const rx = suppressPos[0] - eye[0], ry = suppressPos[1] - eye[1], rz = suppressPos[2] - eye[2];
-      dist = Math.hypot(rx, ry, rz);
+      const rx = suppressPos[0] - ex, ry = suppressPos[1] - ey, rz = suppressPos[2] - ez;
+      const rHoriz2 = rx * rx + rz * rz;
+      dist = Math.sqrt(rHoriz2 + ry * ry);
       idealYaw = Math.atan2(rx, -rz) + (this.wanderY * 0.036 + (this.recoilY - this.recoilCompY));
-      idealPitch = clamp(Math.atan2(ry, Math.hypot(rx, rz)) + (this.wanderP * 0.026 + Math.max(0, this.recoilP - this.recoilCompP)), -0.78, 0.78);
+      idealPitch = clamp(Math.atan2(ry, Math.sqrt(rHoriz2)) + (this.wanderP * 0.026 + Math.max(0, this.recoilP - this.recoilCompP)), -0.78, 0.78);
       trueYaw = idealYaw;
       truePitch = idealPitch;
       readyToFire = !startled;
@@ -1640,19 +1668,24 @@ export class HumanOFC_AimV23 {
     const quietTighten = quietEyeShot ? 0.88 : 1.0;
     const microSpread = (((this.isNv21 ? 0.0062 : 0.0132) + this.bloom * 0.38) * ownMoveSpread * quietTighten) / Math.max(0.84, flow);
 
-    return {
-      readyToFire,
-      alignPerceived,
-      alignTrue,
-      dist,
-      microSpread,
-      targetAngSpeed,
-      motorPhase: this.motorPhase,
-      wantBurstReset,
-      quietEyeShot,
-      holdingForArv,
-      yawRate: Math.abs(this.velYaw)
-    };
+    const r = this._aimRes || (this._aimRes = {
+      readyToFire: false, alignPerceived: 0, alignTrue: 0, dist: 18,
+      microSpread: 0, targetAngSpeed: 0, motorPhase: 'PURSUIT',
+      wantBurstReset: false, quietEyeShot: false, holdingForArv: false,
+      yawRate: 0, breathHeld: false, eyeYaw: 0, liftingMouse: false, interceptShot: false
+    });
+    r.readyToFire = readyToFire;
+    r.alignPerceived = alignPerceived;
+    r.alignTrue = alignTrue;
+    r.dist = dist;
+    r.microSpread = microSpread;
+    r.targetAngSpeed = targetAngSpeed;
+    r.motorPhase = this.motorPhase;
+    r.wantBurstReset = wantBurstReset;
+    r.quietEyeShot = quietEyeShot;
+    r.holdingForArv = holdingForArv;
+    r.yawRate = Math.abs(this.velYaw);
+    return r;
   }
 }
 
@@ -1939,43 +1972,52 @@ export class HumanTacticsV23 {
    * Returns `{sprinting, silentWalk, paceFactor}`.
    */
   computeMovementPace(actor, b, t, mind, isSpy = false) {
-    const emergency = b.state === '戦術退避' || b.state === '一斉突入' || b.state === 'トレード突入'
-      || b.state === 'リロード狩り' || b.state === '離脱・再潜伏' || b.state === '裏どり急襲'
+    const out = this._paceOut || (this._paceOut = {sprinting: false, silentWalk: false, paceFactor: 1});
+    const st = b.state;
+    const emergency = st === '戦術退避' || st === '一斉突入' || st === 'トレード突入'
+      || st === 'リロード狩り' || st === '離脱・再潜伏' || st === '裏どり急襲'
       || t < (b.dodgeUntil || -1) || t - (b.underFireAt || -10) < 1.5;
 
-    const stealthStates = b.state === '潜入裏どり中' || b.state === '連携側面展開' || b.state === 'ベイズ追跡'
-      || b.state === '予測待ち伏せ' || b.state === '視認偵察' || b.state === '戦術掃討';
+    const stealthStates = st === '潜入裏どり中' || st === '連携側面展開' || st === 'ベイズ追跡'
+      || st === '予測待ち伏せ' || st === '視認偵察' || st === '戦術掃討';
 
-    // Distance to nearest suspected/remembered enemy (strictly fair-play!)
+    // Distance to nearest suspected/remembered enemy (strictly fair-play, zero array alloc!)
     const mem = b.vision?.getPrimaryMemory(t, 6.5);
-    const refPos = mem ? [mem.x, mem.z] : b.lastPos;
-    const dThreat = refPos ? Math.hypot(refPos[0] - actor.x, refPos[1] - actor.z) : 99;
+    let dThreat = 99;
+    if (mem) {
+      const dx = mem.x - actor.x, dz = mem.z - actor.z;
+      dThreat = Math.sqrt(dx * dx + dz * dz);
+    } else if (b.lastPos) {
+      const dx = b.lastPos[0] - actor.x, dz = b.lastPos[1] - actor.z;
+      dThreat = Math.sqrt(dx * dx + dz * dz);
+    }
 
     const stealthScore = (this.persona.stealthPreference || 0.55) + (mind?.clutchLevel || 0) * 0.28 + (isSpy ? 0.22 : 0);
     const shouldSilent = !emergency && !b.seen && stealthStates
       && dThreat > 4.5 && dThreat < 27.5
-      && (stealthScore > 0.56 || b.state === '潜入裏どり中');
+      && (stealthScore > 0.56 || st === '潜入裏どり中');
 
     if (shouldSilent) {
       this.silentWalking = true;
-      // Keep hSpd <= 4.15 m/s (< 4.65 m/s threshold in match.js:481 -> sprintAmt stays <= 0.30 -> silent!)
-      return {
-        sprinting: false,
-        silentWalk: true,
-        paceFactor: clamp(0.84 - (actor.crouch || 0) * 0.22, 0.55, 0.86)
-      };
+      out.sprinting = false;
+      out.silentWalk = true;
+      out.paceFactor = clamp(0.84 - (actor.crouch || 0) * 0.22, 0.55, 0.86);
+      return out;
     }
 
     this.silentWalking = false;
     const sprinting = emergency
-      || b.state === '補給確保' || b.state === '前進展開'
+      || st === '補給確保' || st === '前進展開'
       || (stealthStates && dThreat >= 27.5)
-      || (this.currentPeekStyle === PEEK_STYLES.WIDE_SWING && b.state === 'ピーク射撃');
+      || (this.currentPeekStyle === PEEK_STYLES.WIDE_SWING && st === 'ピーク射撃');
 
     const adrenalineBoost = (mind?.adrenaline || 0) * 0.04;
     const sprintPace = (isSpy ? 1.26 : 1.21) + adrenalineBoost;
     const basePace = b.vault ? 1.16 : sprinting ? sprintPace : 1.0 - (actor.crouch || 0) * 0.35 - (actor.aimPose || 0) * 0.08;
-    return {sprinting, silentWalk: false, paceFactor: basePace};
+    out.sprinting = sprinting;
+    out.silentWalk = false;
+    out.paceFactor = basePace;
+    return out;
   }
 
   /**

@@ -889,8 +889,10 @@ export class HumainSensorimotorV25 extends ManusiaNeuromotorAimV24 {
 
     // 4. Delegate to NV 2.4 Manusia neuromotor layer (OFC + Meyer SUBMOVE + 1/f Pink Noise + Breath-Hold)
     //    If oculomotor eye-gaze was ALREADY locked on the target's corner, treat acquisition as primed!
-    const stepOpts = eyeAlreadyOnTarget && !opts.primed ? {...opts, primed: true} : opts;
-    const res = super.step(a, dt, t, stepOpts);
+    const prevPrimed = opts.primed;
+    if (eyeAlreadyOnTarget && !prevPrimed) opts.primed = true;
+    const res = super.step(a, dt, t, opts);
+    if (eyeAlreadyOnTarget && !prevPrimed) opts.primed = prevPrimed;
 
     // 5. Apply Spray-Stop Overpull spring-back & Henneman High-Torque Motor-Unit Noise
     if (Math.abs(this.overpullPitch) > 0.0005) {
@@ -898,17 +900,13 @@ export class HumainSensorimotorV25 extends ManusiaNeuromotorAimV24 {
       this.overpullPitch *= Math.exp(-11.0 * dt);
     }
 
-    // Henneman Size-Principle: rapid high-torque swings recruit coarser motor units -> subtle velocity-scaled spread!
     const angSpeed = Math.abs(this.velYaw || 0);
     const torqueNoiseMul = angSpeed > 3.2 ? (1 + clamp((angSpeed - 3.2) * 0.035, 0, 0.12)) : 1.0;
 
-    // 6. Pro Crosshair-Placement Intercept Timing:
-    //    When crosshair is planted calmly on a corridor and a MOVING enemy crosses into the angle,
-    //    real human click-timing delivers surgical intercept accuracy (0.82x spread on moving targets!).
     let interceptShot = false;
     if (seenTarget && !liftingMouse && angSpeed < 1.05 && res.alignPerceived < 0.062 && this.motorPhase === 'PURSUIT') {
-      const tgtSpd = Math.hypot(seenTarget.vx || 0, seenTarget.vz || 0);
-      if (tgtSpd > 1.4 && Math.hypot(a.vx || 0, a.vz || 0) < 3.0) {
+      const tvx = seenTarget.vx || 0, tvz = seenTarget.vz || 0;
+      if (tvx * tvx + tvz * tvz > 1.96 && ((a.vx || 0) * (a.vx || 0) + (a.vz || 0) * (a.vz || 0)) < 9.0) {
         interceptShot = true;
         if (t - this.lastInterceptAt > 0.70) {
           this.lastInterceptAt = t;
@@ -920,14 +918,12 @@ export class HumainSensorimotorV25 extends ManusiaNeuromotorAimV24 {
     const startleFrozen = !!mind?.isStartleFrozen?.(t) && res.alignPerceived > 0.09;
     const interceptMul = interceptShot ? 0.82 : 1.0;
 
-    return {
-      ...res,
-      readyToFire: res.readyToFire && !liftingMouse && !startleFrozen,
-      microSpread: res.microSpread * torqueNoiseMul * interceptMul,
-      eyeYaw: this.eyeYaw,
-      liftingMouse,
-      interceptShot
-    };
+    res.readyToFire = res.readyToFire && !liftingMouse && !startleFrozen;
+    res.microSpread = res.microSpread * torqueNoiseMul * interceptMul;
+    res.eyeYaw = this.eyeYaw;
+    res.liftingMouse = liftingMouse;
+    res.interceptShot = interceptShot;
+    return res;
   }
 }
 

@@ -20,6 +20,7 @@ import {eyeOf} from './posture.js';
 
 export const ECHOPULSE_VERSION = 'EchoPulse 1.0';
 const MAX_PULSES = 24;
+const _EMPTY_ARRIVED = Object.freeze([]);
 
 export class EchoPulseField {
   constructor() {
@@ -134,22 +135,29 @@ export class EchoPulseField {
    */
   step(match) {
     const tNow = match.time || 0;
-    const arrived = [];
-    for (let i = this.queue.length - 1; i >= 0; i--) {
-      if (this.queue[i].arriveAt <= tNow) {
-        const report = this.queue[i];
-        this.queue.splice(i, 1);
+    const pw = this.playerWaves;
+    const pSpawn = match.player?.spawnId;
+    for (let i = pw.length - 1; i >= 0; i--) {
+      if (pw[i].expireAt <= tNow || pw[i].listenerSpawnId !== pSpawn) pw.splice(i, 1);
+    }
+    const q = this.queue;
+    if (q.length === 0) return _EMPTY_ARRIVED;
+    let arrived = null;
+    for (let i = q.length - 1; i >= 0; i--) {
+      if (q[i].arriveAt <= tNow) {
+        const report = q[i];
+        q.splice(i, 1);
         const listener = match.actors[report.listenerId];
         if (listener?.alive && listener.spawnId === report.listenerSpawnId) {
-          arrived.push(report);
+          if (!arrived) arrived = [report];
+          else arrived.push(report);
           this.stats.delivered++;
         }
       }
     }
-    for (let i = this.playerWaves.length - 1; i >= 0; i--) {
-      if (this.playerWaves[i].expireAt <= tNow || this.playerWaves[i].listenerSpawnId !== match.player?.spawnId) this.playerWaves.splice(i, 1);
-    }
-    return arrived.sort((a, b) => a.arriveAt - b.arriveAt);
+    if (!arrived) return _EMPTY_ARRIVED;
+    if (arrived.length > 1) arrived.sort((a, b) => a.arriveAt - b.arriveAt);
+    return arrived;
   }
 
   /**

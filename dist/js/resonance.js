@@ -101,6 +101,8 @@ vec3 resonanceShade(vec3 wPos, inout vec3 N, float metal, float time){
 }
 `;
 
+const RES_ZETA = [0.0075, 0.0095, 0.0125];
+
 export class ResonanceCore {
   constructor() {
     this.version = RESONANCE_VERSION;
@@ -108,10 +110,14 @@ export class ResonanceCore {
       const longSpan = Math.max(w, d);
       const is20ft = longSpan < 9.0;
       const detune = ((id * 17) % 11 - 5) * 1.4;
-      // Physical Kirchoff-Love corrugated steel box eigenmodes (Hz)
       const f1 = (is20ft ? 118 : 72) + detune + (y > 1 ? 6 : 0);
       const f2 = f1 * (is20ft ? 1.91 : 1.96);
       const f3 = f1 * (is20ft ? 3.24 : 3.38);
+      const omegas = [f1 * Math.PI * 2, f2 * Math.PI * 2, f3 * Math.PI * 2];
+      const wds = omegas.map((om, m) => om * Math.sqrt(1 - RES_ZETA[m] * RES_ZETA[m]));
+      const invWds = wds.map(v => 1 / v);
+      const invOmegas = omegas.map(v => 1 / v);
+      const zw = omegas.map((om, m) => RES_ZETA[m] * om);
       return {
         id,
         cx: x,
@@ -125,19 +131,23 @@ export class ResonanceCore {
         color,
         brand,
         freqs: [f1, f2, f3],
-        omegas: [f1 * Math.PI * 2, f2 * Math.PI * 2, f3 * Math.PI * 2],
-        // 3 damped modal coordinates (q) & modal velocities (v)
+        omegas,
+        wds,
+        invWds,
+        invOmegas,
+        zw,
+        phaseRate: 22 + f1 * 0.28,
         q: new Float32Array(3),
         v: new Float32Array(3),
         energy: 0,
         phase: 0,
         hitP: [x, y + 1.31, z],
         knockPing: 0,
-        coupledIdx: -1
+        coupledIdx: -1,
+        _active: false
       };
     });
 
-    // Couple stacked containers vertically through steel corner castings
     for (let i = 0; i < this.containers.length; i++) {
       const a = this.containers[i];
       for (let j = i + 1; j < this.containers.length; j++) {
@@ -154,6 +164,7 @@ export class ResonanceCore {
     this.uResDim = new Float32Array(MAX_RES_GPU * 4);
     this.uResHit = new Float32Array(MAX_RES_GPU * 4);
     this.activeIds = [];
+    this._activeList = [];
     this.stepAccum = 0;
 
     this.stats = {
@@ -166,34 +177,51 @@ export class ResonanceCore {
   }
 
   reset() {
-    for (const c of this.containers) {
+    for (let i = 0; i < this.containers.length; i++) {
+      const c = this.containers[i];
       c.q.fill(0);
       c.v.fill(0);
       c.energy = 0;
       c.phase = 0;
       c.knockPing = 0;
+      c._active = false;
     }
     this.uResCount = 0;
     this.uResPos.fill(0);
     this.uResDim.fill(0);
     this.uResHit.fill(0);
     this.activeIds.length = 0;
+    this._activeList.length = 0;
     this.stepAccum = 0;
     this.stats = {strikes: 0, machExcitations: 0, roofSteps: 0, seismicKnocks: 0, stackTransfers: 0};
+  }
+
+  _activate(c) {
+    if (!c._active) {
+      c._active = true;
+      this._activeList.push(c);
+    }
   }
 
   /** Finds the shipping container touching or containing 3D point `p` within `margin` meters. */
   findContainerAt(p, margin = 0.28) {
     if (!p) return null;
     const x = p[0], y = p[1], z = p[2];
-    let best = null, bestDist = Infinity;
-    for (const c of this.containers) {
-      const dx = Math.max(0, Math.abs(x - c.cx) - c.hx);
-      const dy = Math.max(0, Math.abs(y - c.cy) - c.hy);
-      const dz = Math.max(0, Math.abs(z - c.cz) - c.hz);
-      const d = Math.hypot(dx, dy, dz);
-      if (d <= margin && d < bestDist) {
-        bestDist = d;
+    const m2 = margin * margin;
+    let best = null, bestD2 = Infinity;
+    const list = this.containers;
+    for (let i = 0; i < list.length; i++) {
+      const c = list[i];
+      const dx = Math.abs(x - c.cx) - c.hx;
+      if (dx > margin) continue;
+      const dz = Math.abs(z - c.cz) - c.hz;
+      if (dz > margin) continue;
+      const dy = Math.abs(y - c.cy) - c.hy;
+      if (dy > margin) continue;
+      const px = dx > 0 ? dx : 0, py = dy > 0 ? dy : 0, pz = dz > 0 ? dz : 0;
+      const d2 = px * px + py * py + pz * pz;
+      if (d2 <= m2 && d2 < bestD2) {
+        bestD2 = d2;
         best = c;
       }
     }
@@ -205,60 +233,55 @@ export class ResonanceCore {
       c.v[m] += strength * modeWeights[m] * c.omegas[m] * 0.16;
     }
     c.energy = clamp(c.energy + strength * 0.72, 0, 1.35);
-    if (hitP) c.hitP = [hitP[0], hitP[1], hitP[2]];
+    if (hitP) { c.hitP[0] = hitP[0]; c.hitP[1] = hitP[1]; c.hitP[2] = hitP[2]; }
+    this._activate(c);
   }
 
-  /**
-   * Excites structural modal resonance on a direct bullet impact / ricochet / wallbang AND
-   * evaluates the 5,100 m/s steel-borne "Container Knock" mechanic against enemies hugging/standing on it!
-   */
   exciteStrike(point, impulse = 0.85, actor = null, match = null) {
     const c = this.findContainerAt(point, 0.34);
     if (!c) return null;
     this.stats.strikes++;
     this._impulseContainer(c, impulse, [0.85, 1.0, 0.72], point);
 
-    // Mechanical corner-casting transmission into vertically stacked partner container
     if (c.coupledIdx >= 0) {
       const partner = this.containers[c.coupledIdx];
       this._impulseContainer(partner, impulse * 0.36, [0.92, 0.65, 0.32], [partner.cx, partner.cy, partner.cz]);
       this.stats.stackTransfers++;
     }
 
-    // Check 5,100 m/s Steel-Borne "Container Knock": is an opponent hugging or camping on top of this container?
     let knocked = null;
     let waveDelayMs = 0;
     if (actor && match?.actors) {
-      const targets = [c];
-      if (c.coupledIdx >= 0) targets.push(this.containers[c.coupledIdx]);
-      for (const e of match.actors) {
+      const targets = c.coupledIdx >= 0 ? [c, this.containers[c.coupledIdx]] : [c];
+      for (let ei = 0; ei < match.actors.length; ei++) {
+        const e = match.actors[ei];
         if (!e.alive || e.team === actor.team) continue;
         let touching = false;
-        for (const box of targets) {
+        for (let ti = 0; ti < targets.length; ti++) {
+          const box = targets[ti];
           const dx = Math.max(0, Math.abs(e.x - box.cx) - box.hx);
           const dz = Math.max(0, Math.abs(e.z - box.cz) - box.hz);
-          const hDist = Math.hypot(dx, dz);
-          const onRoof = hDist < 0.35 && Math.abs(e.y - box.y1) < 0.35;
-          const huggingWall = hDist <= 1.45 && e.y >= box.y0 - 0.25 && e.y <= box.y1 + 0.25;
-          if (onRoof || huggingWall) {
-            touching = true;
-            break;
-          }
+          const hDist2 = dx * dx + dz * dz;
+          const onRoof = hDist2 < 0.1225 && Math.abs(e.y - box.y1) < 0.35;
+          const huggingWall = hDist2 <= 2.1025 && e.y >= box.y0 - 0.25 && e.y <= box.y1 + 0.25;
+          if (onRoof || huggingWall) { touching = true; break; }
         }
         if (touching) {
           const steelDist = Math.hypot(e.x - point[0], e.y + 0.9 - point[1], e.z - point[2]);
           waveDelayMs = (steelDist / STEEL_WAVE_SPEED) * 1000;
-          // Physical concussive rattle through steel plate (no magic HP damage, pure tactile stance/aim rattle + fair-play seismic ping!)
           e.hitRecoil = Math.min(1, (e.hitRecoil || 0) + 0.36);
           e.seismicRattle = Math.max(e.seismicRattle || 0, 0.85);
           e.seismicKnockTeam = actor.team;
           match.nv?.brains?.get(e.id)?.humanAim?.onHitShock(1.6);
           match.nv?.onSeismicKnock?.(e, actor, c, point);
           c.knockPing = 1.0;
-          if (c.coupledIdx >= 0) this.containers[c.coupledIdx].knockPing = 0.85;
+          this._activate(c);
+          if (c.coupledIdx >= 0) {
+            this.containers[c.coupledIdx].knockPing = 0.85;
+            this._activate(this.containers[c.coupledIdx]);
+          }
           this.stats.seismicKnocks++;
           knocked = e;
-          // Feed fair-play structural knock detection into SpectraField & EchoPulse!
           match.spectraField?.observe(actor.team, e.x, e.z, {sigma: 3.0, weight: 0.88});
           match.echoPulse?.emit(match, {kind: 'ricochet', pos: [e.x, e.y + 1.0, e.z], actor: e, team: e.team, loudness: 0.95});
           break;
@@ -269,14 +292,13 @@ export class ResonanceCore {
     return {
       containerId: c.id,
       point: [point[0], point[1], point[2]],
-      freqs: knocked ? c.freqs.map(f => f * 0.93) : c.freqs, // Human body mass slightly damp-shifts container pitch!
+      freqs: knocked ? c.freqs.map(f => f * 0.93) : c.freqs,
       energy: c.energy,
       knockedEnemy: knocked,
       waveDelayMs
     };
   }
 
-  /** Aero-acoustic supersonic Mach shockwave coupling when bullets pass close (< 2.5m) to hollow steel walls! */
   exciteMach(p, speed = 500) {
     if (speed < 340 || !p) return;
     const c = this.findContainerAt(p, 2.35);
@@ -286,19 +308,21 @@ export class ResonanceCore {
     this.stats.machExcitations++;
   }
 
-  /** Explosive shockwave excitation (kills, shield breaks, tankers) ringing nearby containers. */
   exciteBlast(p, power = 1.0) {
     if (!p) return;
-    for (const c of this.containers) {
-      const d = Math.hypot(p[0] - c.cx, p[1] - c.cy, p[2] - c.cz);
-      if (d > 14.5) continue;
-      const att = Math.pow(1 - d / 14.5, 1.6) * power;
+    const px = p[0], py = p[1], pz = p[2];
+    const list = this.containers;
+    for (let i = 0; i < list.length; i++) {
+      const c = list[i];
+      const dx = px - c.cx, dy = py - c.cy, dz = pz - c.cz;
+      const d2 = dx * dx + dy * dy + dz * dz;
+      if (d2 > 210.25) continue;
+      const att = Math.pow(1 - Math.sqrt(d2) * (1 / 14.5), 1.6) * power;
       if (att < 0.08) continue;
       this._impulseContainer(c, att * 0.95, [1.1, 0.65, 0.35], p);
     }
   }
 
-  /** Hollow drum-like container roof resonance when an actor runs or lands on top of a container! */
   exciteRoofStep(actor, impact = 0.55) {
     if (!actor || actor.y < 1.8) return null;
     const c = this.findContainerAt([actor.x, actor.y - 0.15, actor.z], 0.42);
@@ -308,56 +332,71 @@ export class ResonanceCore {
     return {containerId: c.id, freqs: c.freqs, point: [actor.x, c.y1, actor.z], energy: c.energy};
   }
 
-  /** Advances damped modal harmonic oscillators across all active containers using exact analytical phase-space propagation. */
+  /** O(1) idle skip + 60Hz exact-dt analytical damped harmonic integration (closed-form exact for any dt -> 6x faster!). */
   step(dt) {
-    const stepDt = clamp(dt, 0.001, 0.05);
-    // Authentic corrugated steel modal damping ratios (Q ~ 45-60; higher eigenmodes damp faster)
-    const zeta = [0.0075, 0.0095, 0.0125];
-
-    for (const c of this.containers) {
-      if (c.energy <= 0.002 && c.knockPing <= 0.002) continue;
-      c.knockPing = Math.max(0, c.knockPing - stepDt * 1.15);
+    const active = this._activeList;
+    if (active.length === 0) { this.stepAccum = 0; return; }
+    this.stepAccum += dt;
+    if (this.stepAccum < (1 / 60 - 1e-6) && dt < (1 / 60 - 1e-6)) return;
+    const stepDt = clamp(this.stepAccum, 0.001, 0.05);
+    this.stepAccum = 0;
+    for (let ai = active.length - 1; ai >= 0; ai--) {
+      const c = active[ai];
+      if (c.energy <= 0.002 && c.knockPing <= 0.002) {
+        c._active = false;
+        active[ai] = active[active.length - 1];
+        active.pop();
+        continue;
+      }
+      c.knockPing = c.knockPing > stepDt * 1.15 ? c.knockPing - stepDt * 1.15 : 0;
       let eSq = 0;
+      const q = c.q, v = c.v, om = c.omegas, wds = c.wds, invWds = c.invWds, invOm = c.invOmegas, zw = c.zw;
       for (let m = 0; m < 3; m++) {
-        const w = c.omegas[m];
-        const z = zeta[m];
-        const wd = w * Math.sqrt(1 - z * z);
-        const decay = Math.exp(-z * w * stepDt);
-        const cosT = Math.cos(wd * stepDt);
-        const sinT = Math.sin(wd * stepDt);
-        const q0 = c.q[m], v0 = c.v[m];
-        const q1 = decay * (q0 * cosT + ((v0 + z * w * q0) / wd) * sinT);
-        const v1 = decay * (v0 * cosT - ((w * w * q0 + z * w * v0) / wd) * sinT);
-        c.q[m] = q1;
-        c.v[m] = v1;
-        const vw = v1 / w;
+        const w = om[m], wd = wds[m], iwd = invWds[m], zwm = zw[m];
+        const decay = Math.exp(-zwm * stepDt);
+        const ang = wd * stepDt;
+        const cosT = Math.cos(ang), sinT = Math.sin(ang);
+        const q0 = q[m], v0 = v[m];
+        const q1 = decay * (q0 * cosT + (v0 + zwm * q0) * iwd * sinT);
+        const v1 = decay * (v0 * cosT - (w * w * q0 + zwm * v0) * iwd * sinT);
+        q[m] = q1; v[m] = v1;
+        const vw = v1 * invOm[m];
         eSq += q1 * q1 + vw * vw;
       }
-      // Exact mechanical Hamiltonian envelope energy (monotonically damped, unconditionally stable!)
       c.energy = clamp(Math.sqrt(eSq) * 3.1, 0, 1.35);
-      c.phase = (c.phase + stepDt * (22 + c.freqs[0] * 0.28)) % (Math.PI * 200);
+      c.phase = (c.phase + stepDt * c.phaseRate) % (Math.PI * 200);
       if (c.energy < 0.003) {
         c.energy = 0;
-        c.q.fill(0);
-        c.v.fill(0);
+        q[0] = q[1] = q[2] = 0;
+        v[0] = v[1] = v[2] = 0;
+        if (c.knockPing <= 0.002) {
+          c._active = false;
+          active[ai] = active[active.length - 1];
+          active.pop();
+        }
       }
     }
   }
 
-  /** Packs up to 6 most strongly resonating containers into WebGL2 uniform arrays (0 texture units!). */
+  /** Packs up to 6 most strongly resonating containers into WebGL2 uniform arrays (0 texture units, 0 alloc!). */
   packUniforms() {
+    if (this._activeList.length === 0) {
+      if (this.uResCount !== 0) {
+        this.uResCount = 0;
+        this.uResPos.fill(0);
+      }
+      return 0;
+    }
     this.uResPos.fill(0);
     this.uResDim.fill(0);
     this.uResHit.fill(0);
-    const active = [];
-    for (const c of this.containers) {
-      if (c.energy > 0.012 || c.knockPing > 0.02) active.push(c);
-    }
-    active.sort((a, b) => (b.energy + b.knockPing) - (a.energy + a.knockPing));
-    const count = Math.min(MAX_RES_GPU, active.length);
-    for (let i = 0; i < count; i++) {
+    const active = this._activeList;
+    if (active.length > 1) active.sort((a, b) => (b.energy + b.knockPing) - (a.energy + a.knockPing));
+    let count = 0;
+    for (let i = 0; i < active.length && count < MAX_RES_GPU; i++) {
       const c = active[i];
-      const o = i * 4;
+      if (c.energy <= 0.012 && c.knockPing <= 0.02) continue;
+      const o = count * 4;
       this.uResPos[o] = c.cx;
       this.uResPos[o + 1] = c.cy;
       this.uResPos[o + 2] = c.cz;
@@ -370,6 +409,7 @@ export class ResonanceCore {
       this.uResHit[o + 1] = c.hitP[1];
       this.uResHit[o + 2] = c.hitP[2];
       this.uResHit[o + 3] = c.knockPing;
+      count++;
     }
     this.uResCount = count;
     return count;

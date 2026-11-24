@@ -4,123 +4,210 @@ import {eyeOf, targetPoint} from './posture.js';
 const STEP = 2, W = 25, H = 100, dirs = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, 1], [1, -1], [-1, -1]];
 const position = i => [-24 + (i % W) * STEP, -99 + Math.floor(i / W) * STEP];
 const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
-class Frontier {
-  constructor() {
-    this.a = []
-  }
-  add(id, cost) {
-    const a = this.a;
-    let i = a.length;
-    a.push([id, cost]);
-    while (i) {
-      const p = (i - 1) >> 1;
-      if (a[p][1] <= cost)break;
-      a[i] = a[p];
-      i = p
-    }
-    a[i] = [id, cost]
-  }
-  pop() {
-    const a = this.a, result = a[0][0], last = a.pop();
-    if (a.length) {
-      let i = 0;
-      while (i * 2 + 1 < a.length) {
-        let c = i * 2 + 1;
-        if (c + 1 < a.length && a[c + 1][1] < a[c][1])c++;
-        if (a[c][1] >= last[1])break;
-        a[i] = a[c];
-        i = c
-      }
-      a[i] = last
-    }
-    return result
-  }
-}
+const CELLS_NAV = W * H;
+const INV_STEP = 1 / STEP;
+
 export class WharfNavigation {
   constructor() {
     this.W = W;
     this.H = H;
-    this.open = new Uint8Array(W * H);
-    this.links = Array.from({length: W * H}, () => []);
-    for (let i = 0; i < W * H; i++)this.open[i] = walkable(...position(i), .60) ? 1 : 0;
-    for (let i = 0; i < W * H; i++) {
-      if (!this.open[i])continue;
-      const x = i % W, z = Math.floor(i / W), p = position(i);
+    this.open = new Uint8Array(CELLS_NAV);
+    this.posX = new Float32Array(CELLS_NAV);
+    this.posZ = new Float32Array(CELLS_NAV);
+    this.links = Array.from({length: CELLS_NAV}, () => []);
+    for (let i = 0; i < CELLS_NAV; i++) {
+      const px = -24 + (i % W) * STEP;
+      const pz = -99 + ((i / W) | 0) * STEP;
+      this.posX[i] = px;
+      this.posZ[i] = pz;
+      this.open[i] = walkable(px, pz, .60) ? 1 : 0;
+    }
+    const linkDstList = [];
+    const linkCostList = [];
+    this.linkOff = new Int32Array(CELLS_NAV + 1);
+    for (let i = 0; i < CELLS_NAV; i++) {
+      this.linkOff[i] = linkDstList.length;
+      if (!this.open[i]) continue;
+      const x = i % W, z = (i / W) | 0;
+      const px = this.posX[i], pz = this.posZ[i];
       for (const [dx, dz] of dirs) {
         const nx = x + dx, nz = z + dz;
-        if (nx < 0 || nx >= W || nz < 0 || nz >= H)continue;
+        if (nx < 0 || nx >= W || nz < 0 || nz >= H) continue;
         const j = nx + nz * W;
-        if (!this.open[j] || (dx && dz && (!this.open[nx + z * W] || !this.open[x + nz * W])))continue;
-        if (!this.clear(p, position(j)))continue;
-        this.links[i].push([j, Math.hypot(dx, dz)])
+        if (!this.open[j] || (dx && dz && (!this.open[nx + z * W] || !this.open[x + nz * W]))) continue;
+        if (!this.clearCoords(px, pz, this.posX[j], this.posZ[j])) continue;
+        const cost = dx && dz ? Math.SQRT2 : 1;
+        this.links[i].push([j, cost]);
+        linkDstList.push(j);
+        linkCostList.push(cost);
       }
     }
+    this.linkOff[CELLS_NAV] = linkDstList.length;
+    this.linkDst = new Int16Array(linkDstList);
+    this.linkCost = new Float32Array(linkCostList);
+
+    // ZeroAlloc-AStar reusable scratch buffers (O(visited) stamp reset, zero per-query allocations!)
+    this._back = new Int16Array(CELLS_NAV);
+    this._costs = new Float32Array(CELLS_NAV);
+    this._costStamp = new Uint32Array(CELLS_NAV);
+    this._visStamp = new Uint32Array(CELLS_NAV);
+    this._stampGen = 0;
+    this._heapId = new Int16Array(CELLS_NAV * 2);
+    this._heapCost = new Float32Array(CELLS_NAV * 2);
+    this._rawIdx = new Int16Array(CELLS_NAV);
+  }
+  clearCoords(ax, az, bx, bz) {
+    const dx = bx - ax, dz = bz - az;
+    const len = Math.hypot(dx, dz);
+    const n = len > .72 ? Math.ceil(len / .72) : 1;
+    const invN = 1 / n;
+    for (let j = 1; j <= n; j++) {
+      const f = j * invN;
+      if (!walkable(ax + dx * f, az + dz * f, .52)) return false;
+    }
+    return true;
   }
   clear(a, b) {
-    const n = Math.max(1, Math.ceil(dist(a, b) / .72));
-    for (let j = 1; j <= n; j++)if (!walkable(mix(a[0], b[0], j / n), mix(a[1], b[1], j / n), .52))return false;
-    return true
+    return this.clearCoords(a[0], a[1], b[0], b[1]);
   }
   closest(p) {
-    const cx = clamp(Math.round((p[0] + 24) / STEP), 0, W - 1), cz = clamp(Math.round((p[1] + 99) / STEP), 0, H - 1);
-    let best = -1, score = Infinity;
+    const px = p[0], pz = p[1];
+    const cx = clamp(Math.round((px + 24) * INV_STEP), 0, W - 1);
+    const cz = clamp(Math.round((pz + 99) * INV_STEP), 0, H - 1);
+    const center = cz * W + cx;
+    // Fast O(1) path when the nearest grid cell itself is open (true >85% of queries!)
+    if (this.open[center]) {
+      const d0 = Math.hypot(this.posX[center] - px, this.posZ[center] - pz);
+      if (d0 <= 1.0) return center;
+    }
+    let best = -1, score2 = Infinity, score = Infinity;
+    const open = this.open, posX = this.posX, posZ = this.posZ;
     for (let r = 0; r < 9; r++) {
-      for (let z = Math.max(0, cz - r); z <= Math.min(H - 1, cz + r); z++)for (let x = Math.max(0, cx - r); x <= Math.min(W - 1, cx + r); x++) {
-        if (Math.max(Math.abs(x - cx), Math.abs(z - cz)) !== r)continue;
-        const i = z * W + x;
-        if (this.open[i]) {
-          const d = dist(position(i), p);
-          if (d < score) {
-            score = d;
-            best = i
+      const z0 = cz - r > 0 ? cz - r : 0;
+      const z1 = cz + r < H - 1 ? cz + r : H - 1;
+      const x0 = cx - r > 0 ? cx - r : 0;
+      const x1 = cx + r < W - 1 ? cx + r : W - 1;
+      for (let z = z0; z <= z1; z++) {
+        const dzR = z > cz ? z - cz : cz - z;
+        const row = z * W;
+        for (let x = x0; x <= x1; x++) {
+          const dxR = x > cx ? x - cx : cx - x;
+          if ((dxR > dzR ? dxR : dzR) !== r) continue;
+          const i = row + x;
+          if (open[i]) {
+            const dx = posX[i] - px, dz = posZ[i] - pz;
+            const d2 = dx * dx + dz * dz;
+            if (d2 < score2) {
+              score2 = d2;
+              score = Math.sqrt(d2);
+              best = i;
+            }
           }
         }
       }
-      if (best >= 0 && r * STEP > score + 1)break
+      if (best >= 0 && r * STEP > score + 1) break;
     }
-    return best
+    return best;
   }
   route(from, to, traffic) {
     const start = this.closest(from), goal = this.closest(to);
-    if (start < 0 || goal < 0)return [];
-    const end = position(goal);
-    if (this.clear(from, end))return [end];
-    const back = new Int16Array(W * H);
-    back.fill(-1);
-    const costs = new Float32Array(W * H);
-    costs.fill(Infinity);
-    const visited = new Uint8Array(W * H);
-    const q = new Frontier();
+    if (start < 0 || goal < 0) return [];
+    const posX = this.posX, posZ = this.posZ;
+    const endX = posX[goal], endZ = posZ[goal];
+    if (this.clearCoords(from[0], from[1], endX, endZ)) return [[endX, endZ]];
+
+    let gen = ++this._stampGen;
+    if (gen === 0) {
+      this._costStamp.fill(0);
+      this._visStamp.fill(0);
+      gen = this._stampGen = 1;
+    }
+    const back = this._back, costs = this._costs;
+    const costStamp = this._costStamp, visStamp = this._visStamp;
+    const linkOff = this.linkOff, linkDst = this.linkDst, linkCost = this.linkCost;
+    const heapId = this._heapId, heapCost = this._heapCost;
+    const hasTraffic = !!(traffic && traffic.size > 0);
+
     costs[start] = 0;
-    q.add(start, 0);
-    while (q.a.length) {
-      const u = q.pop();
-      if (visited[u])continue;
-      visited[u] = 1;
-      if (u === goal)break;
-      for (const [v, edge] of this.links[u]) {
-        if (visited[v])continue;
-        const g = costs[u] + edge + (traffic?.get(v) ?? 0);
-        if (g >= costs[v])continue;
+    costStamp[start] = gen;
+    back[start] = -1;
+    let heapLen = 1;
+    heapId[0] = start;
+    heapCost[0] = 0;
+
+    while (heapLen > 0) {
+      const u = heapId[0];
+      heapLen--;
+      if (heapLen > 0) {
+        const lastId = heapId[heapLen];
+        const lastC = heapCost[heapLen];
+        let i = 0;
+        while (true) {
+          let c = (i << 1) + 1;
+          if (c >= heapLen) break;
+          if (c + 1 < heapLen && heapCost[c + 1] < heapCost[c]) c++;
+          if (heapCost[c] >= lastC) break;
+          heapId[i] = heapId[c];
+          heapCost[i] = heapCost[c];
+          i = c;
+        }
+        heapId[i] = lastId;
+        heapCost[i] = lastC;
+      }
+      if (visStamp[u] === gen) continue;
+      visStamp[u] = gen;
+      if (u === goal) break;
+
+      const cu = costs[u];
+      const eStart = linkOff[u], eEnd = linkOff[u + 1];
+      for (let ei = eStart; ei < eEnd; ei++) {
+        const v = linkDst[ei];
+        if (visStamp[v] === gen) continue;
+        const g = cu + linkCost[ei] + (hasTraffic ? (traffic.get(v) || 0) : 0);
+        if (costStamp[v] === gen && g >= costs[v]) continue;
         costs[v] = g;
+        costStamp[v] = gen;
         back[v] = u;
-        q.add(v, g + dist(position(v), end) / STEP)
+        const f = g + Math.hypot(posX[v] - endX, posZ[v] - endZ) * INV_STEP;
+        let hi = heapLen++;
+        while (hi > 0) {
+          const p = (hi - 1) >> 1;
+          if (heapCost[p] <= f) break;
+          heapId[hi] = heapId[p];
+          heapCost[hi] = heapCost[p];
+          hi = p;
+        }
+        heapId[hi] = v;
+        heapCost[hi] = f;
       }
     }
-    if (goal !== start && back[goal] < 0)return [];
-    const raw = [end];
-    for (let i = goal; i !== start && back[i] >= 0; i = back[i])raw.push(position(back[i]));
-    raw.reverse();
+
+    if (goal !== start && (costStamp[goal] !== gen || back[goal] < 0)) return [];
+    const rawIdx = this._rawIdx;
+    let rawLen = 0;
+    rawIdx[rawLen++] = goal;
+    for (let i = goal; i !== start && back[i] >= 0; i = back[i]) rawIdx[rawLen++] = back[i];
+
+    // String-pull smoothing directly over reversed rawIdx (zero intermediate [x,z] array churn!)
     const path = [];
-    let anchor = from, index = 0;
-    while (index < raw.length) {
-      let next = index;
-      while (next + 1 < raw.length && next - index < 8 && this.clear(anchor, raw[next + 1]))next++;
-      anchor = raw[next];
-      path.push(anchor);
-      index = next + 1
+    let anchorX = from[0], anchorZ = from[1];
+    let k = rawLen - 1;
+    while (k >= 0) {
+      let next = k;
+      let steps = 0;
+      while (next > 0 && steps < 8) {
+        const ni = rawIdx[next - 1];
+        if (!this.clearCoords(anchorX, anchorZ, posX[ni], posZ[ni])) break;
+        next--;
+        steps++;
+      }
+      const chosen = rawIdx[next];
+      anchorX = posX[chosen];
+      anchorZ = posZ[chosen];
+      path.push([anchorX, anchorZ]);
+      k = next - 1;
     }
-    return path
+    return path;
   }
 }
 let nav;

@@ -29,9 +29,11 @@ export function vertical(a, dt, floorAt, gravityScale = 1) {
     a.onGround = false;
   }
 }
+let _pLastDt = -1, _pLastK = 0;
 export function postureStep(a, dt, crouch, lean, ads) {
-  const k = 1 - Math.exp(-7 * dt);
-  a.crouch += (Number(crouch) - a.crouch) * k;
+  if (dt !== _pLastDt) { _pLastDt = dt; _pLastK = 1 - Math.exp(-7 * dt); }
+  const k = _pLastK;
+  a.crouch += ((crouch ? 1 : 0) - a.crouch) * k;
   a.lean += (clamp(lean, -.32, .32) - a.lean) * k;
-  a.aimPose += (Number(ads) - a.aimPose) * k
+  a.aimPose += ((ads ? 1 : 0) - a.aimPose) * k;
 }

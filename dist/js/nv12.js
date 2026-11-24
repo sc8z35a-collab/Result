@@ -1,4 +1,4 @@
-import {incomingPathClear} from './ballistics.js';
+import {incomingPathClear, incomingPathClearCoords} from './ballistics.js';
 import {NV11} from './nv11.js';
 import {clamp, mix, angleDiff} from './geometry.js';
 import {walkable, obstacles, obstruction, rayBox, moveActor, floorAt} from './yard.js';
@@ -105,19 +105,31 @@ export class NV12 extends NV11 {
   }
 
   detectIncoming(a, b) {
+    const shots = this.match.shots;
+    if (!shots.length) return;
     const t = this.match.time;
     if (t - b.underFireAt < .22) return;
-    const center = targetPoint(a);
-    for (const s of this.match.shots) {
+    const lean = a.lean || 0;
+    const cx = a.x + Math.cos(a.yaw) * lean;
+    const cy = a.y + 1.23 * (1 - (a.crouch || 0) * .34);
+    const cz = a.z + Math.sin(a.yaw) * lean;
+    for (let i = 0; i < shots.length; i++) {
+      const s = shots[i];
       if (s.team === a.team || s.materialPass || s.shafferCloaked) continue;
-      const rx = center[0] - s.p[0], ry = center[1] - s.p[1], rz = center[2] - s.p[2];
-      const forwardDist = rx * s.dir[0] + ry * s.dir[1] + rz * s.dir[2];
+      const sx = s.p[0], sy = s.p[1], sz = s.p[2];
+      const dx = s.dir[0], dy = s.dir[1], dz = s.dir[2];
+      const rx = cx - sx, ry = cy - sy, rz = cz - sz;
+      const forwardDist = rx * dx + ry * dy + rz * dz;
       if (forwardDist <= 0 || forwardDist > 26) continue;
-      const point = s.p.map((v, i) => v + s.dir[i] * forwardDist);
-      if (Math.hypot(point[0] - center[0], point[2] - center[2]) < 2.2 &&
-          Math.abs(point[1] - center[1]) <= 1.2 && incomingPathClear(s, forwardDist, point)) {
+      const px = sx + dx * forwardDist;
+      const py = sy + dy * forwardDist;
+      const pz = sz + dz * forwardDist;
+      const ex = px - cx, ez = pz - cz;
+      if (ex * ex + ez * ez < 4.84 &&
+          Math.abs(py - cy) <= 1.2 && incomingPathClearCoords(s, forwardDist, px, py, pz)) {
         b.underFireAt = t;
-        b.threatDir = [-s.dir[0], -s.dir[2]];
+        if (b.threatDir) { b.threatDir[0] = -dx; b.threatDir[1] = -dz; }
+        else b.threatDir = [-dx, -dz];
         this.metrics.evade++;
         if (a.hp < 75 || b.state === '巡回' || b.state === '戦術前進') {
           b.planAt = Math.min(b.planAt, t + .05);

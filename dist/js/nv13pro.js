@@ -1,6 +1,6 @@
 import {NV12} from './nv12.js';
 import {clamp, mix, angleDiff} from './geometry.js';
-import {walkable, obstacles, obstruction, rayBox, moveActor, floorAt, tankers as mapTankers} from './yard.js';
+import {walkable, obstacles, obstruction, obstructionCoords, rayBox, moveActor, floorAt, tankers as mapTankers} from './yard.js';
 import {eyeOf, targetPoint, postureStep, vertical} from './posture.js';
 
 export const STEP = 2, W = 25, H = 100, CELLS = W * H;
@@ -26,6 +26,9 @@ export const WEAPON_BAND = {
   'RD 50': {min: 9, ideal: 22, max: 44, burstMax: 7, cap: 50},
   'DF40 II': {min: 12, ideal: 25, max: 48, burstMax: 6, cap: 88}
 };
+
+const NEG_OBS_COS = [Math.cos(-.42), Math.cos(-.16), Math.cos(.16), Math.cos(.42)];
+const NEG_OBS_SIN = [Math.sin(-.42), Math.sin(-.16), Math.sin(.16), Math.sin(.42)];
 
 // Module-cached Prebaked Tactical Cover & Visibility Graph (computed once per harbor map, ~18 KB total).
 let cachedGraph = null;
@@ -63,16 +66,15 @@ export function getTacticalGraph() {
     }
     if (dup) continue;
     let coverMask = 0;
-    const eye = [x, 1.38, z];
     for (let d = 0; d < 8; d++) {
       const [dx, dz] = DIRS8[d];
-      if (obstruction(eye, [x + dx * 2.8, 1.38, z + dz * 2.8]) <= 1) coverMask |= (1 << d);
+      if (obstructionCoords(x, 1.38, z, x + dx * 2.8, 1.38, z + dz * 2.8) <= 1) coverMask |= (1 << d);
     }
     if (!coverMask) continue;
     const peeks = [];
     for (const [ox, oz] of [[1.85, 0], [-1.85, 0], [0, 1.85], [0, -1.85], [1.45, 1.45], [-1.45, 1.45], [1.45, -1.45], [-1.45, -1.45]]) {
       const px = x + ox, pz = z + oz;
-      if (walkable(px, pz, .52) && obstruction(eye, [px, 1.38, pz]) > 1) {
+      if (walkable(px, pz, .52) && obstructionCoords(x, 1.38, z, px, 1.38, pz) > 1) {
         peeks.push([px, pz]);
         if (peeks.length >= 4) break;
       }
@@ -95,13 +97,13 @@ export function getTacticalGraph() {
   const visStride = (N + 31) >>> 5;
   const visBits = new Uint32Array(N * visStride);
   for (let i = 0; i < N; i++) {
-    const a = [nodes[i].x, 1.42, nodes[i].z];
+    const ax = nodes[i].x, az = nodes[i].z;
     visBits[i * visStride + (i >>> 5)] |= (1 << (i & 31));
     for (let j = i + 1; j < N; j++) {
-      const b = [nodes[j].x, 1.42, nodes[j].z];
-      const d2 = (a[0] - b[0]) ** 2 + (a[2] - b[2]) ** 2;
-      if (d2 > 5400) continue; // >73m irrelevant for cover sightline bitmatrix
-      if (obstruction(a, b) > 1) {
+      const bx = nodes[j].x, bz = nodes[j].z;
+      const dx = ax - bx, dz = az - bz;
+      if (dx * dx + dz * dz > 5400) continue; // >73m irrelevant for cover sightline bitmatrix
+      if (obstructionCoords(ax, 1.42, az, bx, 1.42, bz) > 1) {
         visBits[i * visStride + (j >>> 5)] |= (1 << (j & 31));
         visBits[j * visStride + (i >>> 5)] |= (1 << (i & 31));
       }
@@ -113,13 +115,14 @@ export function getTacticalGraph() {
     const cx = cellX(c), cz = cellZ(c);
     let best = -1, bestD2 = Infinity;
     for (let i = 0; i < N; i++) {
-      const d2 = (nodes[i].x - cx) ** 2 + (nodes[i].z - cz) ** 2;
+      const dx = nodes[i].x - cx, dz = nodes[i].z - cz;
+      const d2 = dx * dx + dz * dz;
       if (d2 < bestD2) { bestD2 = d2; best = i; }
     }
     cellToNode[c] = best;
   }
 
-  cachedGraph = {walkMask, walkableCells, nodes, N, visStride, visBits, cellToNode};
+  cachedGraph = {walkMask, walkableCells: new Int16Array(walkableCells), nodes, N, visStride, visBits, cellToNode};
   return cachedGraph;
 }
 
@@ -146,6 +149,8 @@ class TeamCognition {
     this.syncAttackAt = 0;
     this.roles = new Map();
     this.tankerTimers = mapTankers.map(() => 0);
+    this._cleared = new Int16Array(28);
+    this._samplePt = [0, 1.38, 0];
   }
 
   ensureEnemy(id) {
@@ -182,17 +187,20 @@ class TeamCognition {
     const cx = clamp(Math.round((x + 24) * .5), 0, W - 1);
     const cz = clamp(Math.round((z + 99) * .5), 0, H - 1);
     const r2 = radius * radius;
+    const invR = 1 / radius;
     const x0 = Math.max(0, cx - rCells), x1 = Math.min(W - 1, cx + rCells);
     const z0 = Math.max(0, cz - rCells), z1 = Math.min(H - 1, cz + rCells);
     for (let gz = z0; gz <= z1; gz++) {
       const dz = (gz - cz) * STEP;
+      const dz2 = dz * dz;
       const row = gz * W;
       for (let gx = x0; gx <= x1; gx++) {
-        const d2 = ((gx - cx) * STEP) ** 2 + dz * dz;
+        const dx = (gx - cx) * STEP;
+        const d2 = dx * dx + dz2;
         if (d2 > r2) continue;
         const idx = row + gx;
-        const w = 1 - Math.sqrt(d2) / radius;
-        field[idx] = Math.min(maxVal, field[idx] + value * w);
+        const nv = field[idx] + value * (1 - Math.sqrt(d2) * invR);
+        field[idx] = nv > maxVal ? maxVal : nv;
       }
     }
   }
@@ -205,21 +213,26 @@ class TeamCognition {
     const inv2s2 = .5 / (sigma * sigma);
     const prob = bf.prob;
     const keep = conf >= .9 ? .04 : .35;
+    const walkIds = this.graph.walkableCells;
+    const nWalk = walkIds.length;
     let sum = 0;
-    for (let i = 0; i < CELLS; i++) {
-      prob[i] *= keep;
-      sum += prob[i];
+    for (let k = 0; k < nWalk; k++) {
+      const idx = walkIds[k];
+      const v = prob[idx] * keep;
+      prob[idx] = v;
+      sum += v;
     }
     const x0 = Math.max(0, cx - rCells), x1 = Math.min(W - 1, cx + rCells);
     const z0 = Math.max(0, cz - rCells), z1 = Math.min(H - 1, cz + rCells);
     const wm = this.graph.walkMask;
+    const addGain = 1 - keep + .4;
     for (let gz = z0; gz <= z1; gz++) {
-      const dz = (gz - cz) * STEP, row = gz * W;
+      const dz = (gz - cz) * STEP, dz2 = dz * dz, row = gz * W;
       for (let gx = x0; gx <= x1; gx++) {
         const idx = row + gx;
         if (!wm[idx]) continue;
-        const d2 = ((gx - cx) * STEP) ** 2 + dz * dz;
-        const add = Math.exp(-d2 * inv2s2) * (1 - keep + .4);
+        const dx = (gx - cx) * STEP;
+        const add = Math.exp(-(dx * dx + dz2) * inv2s2) * addGain;
         prob[idx] += add;
         sum += add;
       }
@@ -227,10 +240,11 @@ class TeamCognition {
     if (sum > 1e-8) {
       const inv = 1 / sum;
       let bestI = cz * W + cx, bestP = -1;
-      for (let i = 0; i < CELLS; i++) {
-        const v = prob[i] * inv;
-        prob[i] = v;
-        if (v > bestP) { bestP = v; bestI = i; }
+      for (let k = 0; k < nWalk; k++) {
+        const idx = walkIds[k];
+        const v = prob[idx] * inv;
+        prob[idx] = v;
+        if (v > bestP) { bestP = v; bestI = idx; }
       }
       bf.peakCell = bestI;
       bf.peakX = cellX(bestI);
@@ -253,46 +267,56 @@ class TeamCognition {
   }
 
   // Negative observation: clear visible cells where enemy is NOT seen -> probability flows to unseen flank lanes!
-  suppressVisible(origin, yaw, seenEnemyIds, t, obscured = () => false) {
+  suppressVisible(origin, yaw, seenEnemyIds, t, obscured = null) {
     const wm = this.graph.walkMask;
+    const ox = origin[0], oy = origin[1], oz = origin[2];
     const fx = Math.sin(yaw), fz = -Math.cos(yaw);
     const rx = Math.cos(yaw), rz = Math.sin(yaw);
-    const cleared = [];
-    for (const angOff of [-.42, -.16, .16, .42]) {
-      const ca = Math.cos(angOff), sa = Math.sin(angOff);
+    const cleared = this._cleared;
+    const sample = this._samplePt;
+    let cLen = 0;
+    for (let a = 0; a < 4; a++) {
+      const ca = NEG_OBS_COS[a], sa = NEG_OBS_SIN[a];
       const dx = fx * ca + rx * sa, dz = fz * ca + rz * sa;
       for (let dist = 6; dist <= 34; dist += 6) {
-        const px = origin[0] + dx * dist, pz = origin[2] + dz * dist;
-        if (Math.abs(px) > 24 || Math.abs(pz) > 98) break;
+        const px = ox + dx * dist, pz = oz + dz * dist;
+        if (px < -24 || px > 24 || pz < -98 || pz > 98) break;
         const c = cellOf(px, pz);
         if (!wm[c]) break;
-        const sample = [px, 1.38, pz];
-        if (obstruction(origin, sample) <= 1 || obscured(sample)) break;
-        cleared.push(c);
+        if (obstructionCoords(ox, oy, oz, px, 1.38, pz) <= 1) break;
+        if (obscured) {
+          sample[0] = px; sample[2] = pz;
+          if (obscured(sample)) break;
+        }
+        cleared[cLen++] = c;
       }
     }
-    if (!cleared.length) return;
+    if (!cLen) return;
+    const walkIds = this.graph.walkableCells;
+    const nWalk = walkIds.length;
     for (const [eid, bf] of this.beliefs) {
       if (seenEnemyIds.has(eid) || t - bf.lastSightAt < .45 || bf.deadUntil > t) continue;
       const prob = bf.prob;
       let removed = 0;
-      for (let k = 0; k < cleared.length; k++) {
+      for (let k = 0; k < cLen; k++) {
         const c = cleared[k];
-        if (prob[c] > 1e-5) {
-          removed += prob[c] * .88;
-          prob[c] *= .12;
+        const pc = prob[c];
+        if (pc > 1e-5) {
+          removed += pc * .88;
+          prob[c] = pc * .12;
         }
       }
       if (removed > .005) {
         let sum = 0, bestI = bf.peakCell, bestP = -1;
-        for (let i = 0; i < CELLS; i++) {
-          const v = prob[i];
+        for (let k = 0; k < nWalk; k++) {
+          const idx = walkIds[k];
+          const v = prob[idx];
           sum += v;
-          if (v > bestP) { bestP = v; bestI = i; }
+          if (v > bestP) { bestP = v; bestI = idx; }
         }
         if (sum > 1e-6) {
           const inv = 1 / sum;
-          for (let i = 0; i < CELLS; i++) prob[i] *= inv;
+          for (let k = 0; k < nWalk; k++) prob[walkIds[k]] *= inv;
           bf.peakCell = bestI;
           bf.peakX = cellX(bestI);
           bf.peakZ = cellZ(bestI);
@@ -303,61 +327,66 @@ class TeamCognition {
 
   // Incremental time-sliced maintenance: decays influence maps & diffuses unseen beliefs without frame spikes.
   stepFields(t, dt) {
-    // 1. Decay 25 rows of threat/allyCtrl/deathHeat per call (full map every 4 ticks -> ~0.01ms)
+    // 1. Decay 25 rows of threat/allyCtrl/deathHeat per call (cached dt exponentials!)
     const r0 = this.decayRow;
-    const r1 = Math.min(H, r0 + 25);
-    const threatMul = Math.exp(-dt * 4 * .24);
-    const allyMul = Math.exp(-dt * 4 * .55);
-    const deathMul = Math.exp(-dt * 4 * .018);
-    for (let z = r0; z < r1; z++) {
-      const row = z * W;
-      for (let x = 0; x < W; x++) {
-        const idx = row + x;
-        this.threat[idx] *= threatMul;
-        this.allyCtrl[idx] *= allyMul;
-        this.deathHeat[idx] *= deathMul;
-      }
+    const r1 = r0 + 25 < H ? r0 + 25 : H;
+    if (dt !== this._lastFieldDt) {
+      this._lastFieldDt = dt;
+      this._threatMul = Math.exp(-dt * 4 * .24);
+      this._allyMul = Math.exp(-dt * 4 * .55);
+      this._deathMul = Math.exp(-dt * 4 * .018);
+    }
+    const threatMul = this._threatMul, allyMul = this._allyMul, deathMul = this._deathMul;
+    const threat = this.threat, allyCtrl = this.allyCtrl, deathHeat = this.deathHeat;
+    const iStart = r0 * W, iEnd = r1 * W;
+    for (let idx = iStart; idx < iEnd; idx++) {
+      const th = threat[idx]; if (th > 1e-5) threat[idx] = th * threatMul; else if (th !== 0) threat[idx] = 0;
+      const al = allyCtrl[idx]; if (al > 1e-5) allyCtrl[idx] = al * allyMul; else if (al !== 0) allyCtrl[idx] = 0;
+      const dh = deathHeat[idx]; if (dh > 1e-5) deathHeat[idx] = dh * deathMul; else if (dh !== 0) deathHeat[idx] = 0;
     }
     this.decayRow = r1 >= H ? 0 : r1;
 
-    // 2. Diffuse one enemy belief incrementally per step (20 rows per call)
+    // 2. Diffuse one enemy belief incrementally over compact walkableCells (skips all solid wall cells!)
     const wm = this.graph.walkMask;
+    const walkIds = this.graph.walkableCells;
+    const nWalk = walkIds.length;
     for (const bf of this.beliefs.values()) {
       if (t - bf.lastSightAt < .65 || bf.deadUntil > t) continue;
       bf.conf = Math.max(.08, bf.conf - dt * .055);
-      const br0 = bf.diffRow, br1 = Math.min(H, br0 + 20);
+      const k0 = bf._diffK || 0;
+      const k1 = k0 + 240 < nWalk ? k0 + 240 : nWalk;
       const prob = bf.prob, scr = bf.scratch;
-      if (br0 === 0) scr.fill(0);
+      if (k0 === 0) scr.fill(0);
       const biasX = clamp(bf.vx * .12, -.35, .35), biasZ = clamp(bf.vz * .12, -.35, .35);
-      for (let gz = br0; gz < br1; gz++) {
-        const row = gz * W;
-        for (let gx = 0; gx < W; gx++) {
-          const i = row + gx;
-          const p = prob[i];
-          if (p < 1e-6) continue;
-          scr[i] += p * .52;
-          const spread = p * .12;
-          if (gx > 0 && wm[i - 1]) scr[i - 1] += spread * (1 - biasX);
-          else scr[i] += spread * (1 - biasX);
-          if (gx < W - 1 && wm[i + 1]) scr[i + 1] += spread * (1 + biasX);
-          else scr[i] += spread * (1 + biasX);
-          if (gz > 0 && wm[i - W]) scr[i - W] += spread * (1 - biasZ);
-          else scr[i] += spread * (1 - biasZ);
-          if (gz < H - 1 && wm[i + W]) scr[i + W] += spread * (1 + biasZ);
-          else scr[i] += spread * (1 + biasZ);
-        }
+      const wL = .12 * (1 - biasX), wR = .12 * (1 + biasX), wU = .12 * (1 - biasZ), wD = .12 * (1 + biasZ);
+      for (let k = k0; k < k1; k++) {
+        const i = walkIds[k];
+        const p = prob[i];
+        if (p < 1e-6) continue;
+        const gz = (i / W) | 0;
+        const gx = i - gz * W;
+        let keep = p * .52;
+        if (gx > 0 && wm[i - 1]) scr[i - 1] += p * wL; else keep += p * wL;
+        if (gx < W - 1 && wm[i + 1]) scr[i + 1] += p * wR; else keep += p * wR;
+        if (gz > 0 && wm[i - W]) scr[i - W] += p * wU; else keep += p * wU;
+        if (gz < H - 1 && wm[i + W]) scr[i + W] += p * wD; else keep += p * wD;
+        scr[i] += keep;
       }
-      bf.diffRow = br1 >= H ? 0 : br1;
-      if (bf.diffRow === 0) {
+      bf._diffK = k1 >= nWalk ? 0 : k1;
+      if (bf._diffK === 0) {
         let sum = 0, bestI = bf.peakCell, bestP = -1;
-        for (let i = 0; i < CELLS; i++) {
-          const v = scr[i];
+        for (let k = 0; k < nWalk; k++) {
+          const idx = walkIds[k];
+          const v = scr[idx];
           sum += v;
-          if (v > bestP) { bestP = v; bestI = i; }
+          if (v > bestP) { bestP = v; bestI = idx; }
         }
         if (sum > 1e-7) {
           const inv = 1 / sum;
-          for (let i = 0; i < CELLS; i++) prob[i] = scr[i] * inv;
+          for (let k = 0; k < nWalk; k++) {
+            const idx = walkIds[k];
+            prob[idx] = scr[idx] * inv;
+          }
           bf.peakCell = bestI;
           bf.peakX = cellX(bestI);
           bf.peakZ = cellZ(bestI);
@@ -700,16 +729,31 @@ export class NV13Pro extends NV12 {
   }
 
   // Upgrade perception: integrates Bayesian Belief updates, Opponent Profiling, and Negative Observation!
-  perceive(a, b, obscured = () => false, recognize = () => true) {
+  perceive(a, b, obscured = null, recognize = null) {
     const t = this.match.time;
     const cog = this.teams[a.team];
-    const eye = eyeOf(a);
-    const seenIds = new Set();
+    const leanA = a.lean || 0;
+    const ex = a.x + Math.cos(a.yaw) * leanA;
+    const ey = a.y + (a.human ? 1.61 : 1.5) * (1 - (a.crouch || 0) * .34);
+    const ez = a.z + Math.sin(a.yaw) * leanA;
+    const eye = this._eyeScratch || (this._eyeScratch = [0, 0, 0]);
+    eye[0] = ex; eye[1] = ey; eye[2] = ez;
+    const tpScratch = this._tpScratch || (this._tpScratch = [0, 0, 0]);
+    const seenIds = this._seenIds || (this._seenIds = new Set());
+    seenIds.clear();
 
     // Stamp friendly control map
     cog.stampField(cog.allyCtrl, a.x, a.z, 10, .85, 3.0);
 
-    for (const e of this.match.actors) {
+    const actors = this.match.actors;
+    const maxD = b.spy ? 86 : 82;
+    const maxD2 = maxD * maxD;
+    const nearD = b.spy ? 16 : 12;
+    const nearD2 = nearD * nearD;
+    const cosFov = Math.cos(b.spy ? 1.72 : 1.48);
+    const fwdX = Math.sin(a.yaw), fwdZ = -Math.cos(a.yaw);
+    for (let i = 0; i < actors.length; i++) {
+      const e = actors[i];
       if (!e.alive || e.team === a.team) continue;
       if ((e.shafferTimer || 0) > 0) {
         const old = b.contacts.get(e.id);
@@ -717,35 +761,58 @@ export class NV13Pro extends NV12 {
         b.contacts.delete(e.id);
         continue;
       }
-      const tp = targetPoint(e);
-      const dx = e.x - a.x, dz = e.z - a.z, d = Math.hypot(dx, dz);
-      const aimYaw = Math.atan2(dx, -dz);
-      const fovDiff = Math.abs(angleDiff(a.yaw, aimYaw));
-      const inView = b.spy ? d < 16 || (d < 86 && fovDiff < 1.72) : d < 12 || (d < 82 && fovDiff < 1.48);
-      if (inView && obstruction(eye, tp) > 1 && !obscured(tp) && recognize(e)) {
-        seenIds.add(e.id);
-        b.contacts.set(e.id, {
-          x: e.x, y: e.y, z: e.z, vx: e.vx || 0, vz: e.vz || 0,
-          t, spawnId: e.spawnId, seen: true, gun: e.gun, hp: e.hp + e.shield
-        });
-        this.intel[a.team].set(e.id, {x: e.x, z: e.z, t, by: a.id});
-        cog.collapseBelief(e.id, e.x, e.z, e.vx || 0, e.vz || 0, 1.0, t, 2.2);
-        cog.lastCombatAt = Math.max(cog.lastCombatAt, t - 2);
-        const gunThreat = e.gun === 'MS10' ? 1.55 : e.gun === 'DF1 OUT' ? 1.25 : 1.0;
-        cog.stampField(cog.threat, e.x, e.z, 10, gunThreat * .6, 5.5);
-
-        // Update online behavioral profile
-        const {pr} = cog.ensureEnemy(e.id);
-        pr.gun = e.gun;
-        pr.avgDist = mix(pr.avgDist, d, .12);
-        const closing = ((a.x - e.x) * (e.vx || 0) + (a.z - e.z) * (e.vz || 0)) / Math.max(1, d);
-        if (closing > 1.8) pr.aggression = Math.min(1, pr.aggression + .05);
-        else if (closing < -1.2) pr.aggression = Math.max(0, pr.aggression - .04);
-        if (e.reload > .1) pr.reloadUntil = Math.max(pr.reloadUntil, t + e.reload);
-      } else {
+      const dx = e.x - a.x, dz = e.z - a.z;
+      const d2 = dx * dx + dz * dz;
+      if (d2 >= maxD2) {
         const old = b.contacts.get(e.id);
         if (old) old.seen = false;
+        continue;
       }
+      const d = Math.sqrt(d2);
+      const inView = d2 < nearD2 || (dx * fwdX + dz * fwdZ) > d * cosFov;
+      if (inView) {
+        const leanE = e.lean || 0;
+        const tx = e.x + Math.cos(e.yaw) * leanE;
+        const ty = e.y + 1.23 * (1 - (e.crouch || 0) * .34);
+        const tz = e.z + Math.sin(e.yaw) * leanE;
+        if (obstructionCoords(ex, ey, ez, tx, ty, tz) > 1) {
+          tpScratch[0] = tx; tpScratch[1] = ty; tpScratch[2] = tz;
+          if ((!obscured || !obscured(tpScratch)) && (!recognize || recognize(e))) {
+            seenIds.add(e.id);
+            const prevC = b.contacts.get(e.id);
+            if (prevC) {
+              prevC.x = e.x; prevC.y = e.y; prevC.z = e.z;
+              prevC.vx = e.vx || 0; prevC.vz = e.vz || 0;
+              prevC.t = t; prevC.spawnId = e.spawnId; prevC.seen = true;
+              prevC.gun = e.gun; prevC.hp = e.hp + e.shield;
+            } else {
+              b.contacts.set(e.id, {
+                x: e.x, y: e.y, z: e.z, vx: e.vx || 0, vz: e.vz || 0,
+                t, spawnId: e.spawnId, seen: true, gun: e.gun, hp: e.hp + e.shield
+              });
+            }
+            const prevI = this.intel[a.team].get(e.id);
+            if (prevI) { prevI.x = e.x; prevI.z = e.z; prevI.t = t; prevI.by = a.id; }
+            else this.intel[a.team].set(e.id, {x: e.x, z: e.z, t, by: a.id});
+            cog.collapseBelief(e.id, e.x, e.z, e.vx || 0, e.vz || 0, 1.0, t, 2.2);
+            cog.lastCombatAt = Math.max(cog.lastCombatAt, t - 2);
+            const gunThreat = e.gun === 'MS10' ? 1.55 : e.gun === 'DF1 OUT' ? 1.25 : 1.0;
+            cog.stampField(cog.threat, e.x, e.z, 10, gunThreat * .6, 5.5);
+
+            // Update online behavioral profile
+            const {pr} = cog.ensureEnemy(e.id);
+            pr.gun = e.gun;
+            pr.avgDist = mix(pr.avgDist, d, .12);
+            const closing = ((a.x - e.x) * (e.vx || 0) + (a.z - e.z) * (e.vz || 0)) / Math.max(1, d);
+            if (closing > 1.8) pr.aggression = Math.min(1, pr.aggression + .05);
+            else if (closing < -1.2) pr.aggression = Math.max(0, pr.aggression - .04);
+            if (e.reload > .1) pr.reloadUntil = Math.max(pr.reloadUntil, t + e.reload);
+            continue;
+          }
+        }
+      }
+      const old = b.contacts.get(e.id);
+      if (old) old.seen = false;
     }
 
     // Periodic Negative Observation sweep -> shifts Bayesian mass to unseen flanks!
@@ -756,13 +823,15 @@ export class NV13Pro extends NV12 {
 
     // Expire dead/stale contacts
     for (const [id, c] of b.contacts) {
-      const e = this.match.actors[id];
+      const e = actors[id];
       if (!e?.alive || e.spawnId !== c.spawnId || t - c.t > 12) b.contacts.delete(id);
     }
 
     // Pick best target combining live contacts, squad intel, reload vulnerability, and threat priority!
     let best = null, bestScore = -Infinity, bestSeen = false;
-    for (const e of this.match.actors) {
+    const band = WEAPON_BAND[a.gun] || WEAPON_BAND['SW T'];
+    for (let i = 0; i < actors.length; i++) {
+      const e = actors[i];
       if (!e.alive || e.team === a.team) continue;
       const c = b.contacts.get(e.id);
       const {bf, pr} = cog.ensureEnemy(e.id);
@@ -772,7 +841,6 @@ export class NV13Pro extends NV12 {
       const tx = seen ? e.x : c ? c.x : bf.peakX;
       const tz = seen ? e.z : c ? c.z : bf.peakZ;
       const d = dist2(a.x, a.z, tx, tz);
-      const band = WEAPON_BAND[a.gun] || WEAPON_BAND['SW T'];
       let sc = (seen ? 62 : bf.conf * 34) - Math.abs(d - band.ideal) * .42;
       if (c && c.hp < 45) sc += 26;
       if (e.id === cog.primaryTargetId) sc += 16; // Squad focus fire
@@ -821,12 +889,14 @@ export class NV13Pro extends NV12 {
     // Only inject significant cells into weights map to keep A* ultra-fast
     const minZ = clamp(Math.floor((Math.min(a.z, b.planGoal?.[1] ?? a.z) - 24 + 99) * .5), 0, H - 1);
     const maxZ = clamp(Math.ceil((Math.max(a.z, b.planGoal?.[1] ?? a.z) + 24 + 99) * .5), 0, H - 1);
+    const threat = cog.threat, deathHeat = cog.deathHeat;
+    const thresh = .35 / extraDanger;
     for (let gz = minZ; gz <= maxZ; gz++) {
       const row = gz * W;
       for (let gx = 0; gx < W; gx++) {
         const i = row + gx;
-        const pen = (cog.threat[i] * ms10Alert + cog.deathHeat[i] * .9) * extraDanger;
-        if (pen > .35) weights.set(i, (weights.get(i) || 0) + pen * 1.4);
+        const raw = threat[i] * ms10Alert + deathHeat[i] * .9;
+        if (raw > thresh) weights.set(i, (weights.get(i) || 0) + raw * extraDanger * 1.4);
       }
     }
     return weights;
@@ -838,47 +908,58 @@ export class NV13Pro extends NV12 {
     const cog = this.teams[a.team];
     const band = WEAPON_BAND[a.gun] || WEAPON_BAND['SW T'];
     const maxSearchD = mode === 'retreat' ? 30 : 34;
+    const maxSearchD2 = maxSearchD * maxSearchD;
     const primary = threats[0];
     const pNode = primary ? g.cellToNode[cellOf(primary.x, primary.z)] : -1;
+    const isRetreat = mode === 'retreat';
+    const needsKnock = !!b.vision?.needsKnockReposition(this.match.time);
+    const nodes = g.nodes;
+    const actors = this.match.actors;
 
     let best = null, bestScore = -Infinity;
     for (let i = 0; i < g.N; i++) {
-      const n = g.nodes[i];
-      const dSelf = dist2(a.x, a.z, n.x, n.z);
-      if (dSelf > maxSearchD) continue;
+      const n = nodes[i];
+      const dsx = a.x - n.x, dsz = a.z - n.z;
+      const dSelf2 = dsx * dsx + dsz * dsz;
+      if (dSelf2 > maxSearchD2) continue;
       // Fast O(1) bitmatrix pre-filter before expensive exact raycasts!
-      if (mode === 'retreat' && pNode >= 0 && canSeeNode(g, i, pNode)) continue;
+      if (isRetreat && pNode >= 0 && canSeeNode(g, i, pNode)) continue;
 
       let hiddenFromAll = true;
       let minThreatD = Infinity;
-      for (const th of threats) {
+      for (let ti = 0; ti < threats.length; ti++) {
+        const th = threats[ti];
         const td = dist2(n.x, n.z, th.x, th.z);
         if (td < minThreatD) minThreatD = td;
-        if (obstruction([n.x, 1.38, n.z], [th.x, 1.42, th.z]) > 1) {
+        if (obstructionCoords(n.x, 1.38, n.z, th.x, 1.42, th.z) > 1) {
           hiddenFromAll = false;
           break;
         }
       }
       if (!hiddenFromAll) continue;
 
+      const dSelf = Math.sqrt(dSelf2);
       let sc = 30 - dSelf * .85 - cog.threat[n.cell] * 5.2 - cog.deathHeat[n.cell] * 5.0 + cog.allyCtrl[n.cell] * 2.2;
       let bestPeek = null;
-      if (mode === 'retreat') {
+      if (isRetreat) {
         sc += clamp(minThreatD, 0, 34) * .85;
         if (minThreatD < 9) sc -= 28;
         // Prefer retreating toward friendly Overwatcher (Bait-and-Trade!)
-        for (const ally of this.match.actors) {
+        for (let ai = 0; ai < actors.length; ai++) {
+          const ally = actors[ai];
           if (!ally.alive || ally.team !== a.team || ally.id === a.id) continue;
-          const ad = dist2(n.x, n.z, ally.x, ally.z);
-          if (ad > 4 && ad < 22) sc += 9;
+          const ax = n.x - ally.x, az = n.z - ally.z;
+          const ad2 = ax * ax + az * az;
+          if (ad2 > 16 && ad2 < 484) sc += 9;
         }
       } else if (primary) {
         // Pick a pre-verified peek offset (preferring alternating edge sign so human players can't pre-fire us!)
-        for (const [px, pz] of n.peeks) {
-          if (obstruction([px, 1.42, pz], [primary.x, 1.42, primary.z]) > 1) {
-            bestPeek = [px, pz];
-            const sideMatch = ((px - n.x) * b.peekEdgeSign) >= 0;
-            if (sideMatch) break;
+        const peeks = n.peeks;
+        for (let pi = 0; pi < peeks.length; pi++) {
+          const pk = peeks[pi];
+          if (obstructionCoords(pk[0], 1.42, pk[1], primary.x, 1.42, primary.z) > 1) {
+            bestPeek = pk;
+            if (((pk[0] - n.x) * b.peekEdgeSign) >= 0) break;
           }
         }
         if (!bestPeek) continue;
@@ -892,7 +973,7 @@ export class NV13Pro extends NV12 {
         }
       }
       // ResonanceCore 5,100 m/s Container Knock: immediately abandon a knocked steel cover node!
-      if (b.vision?.needsKnockReposition(this.match.time) && i === b.coverNodeId) {
+      if (needsKnock && i === b.coverNodeId) {
         sc -= 36;
       }
 

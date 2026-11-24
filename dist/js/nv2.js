@@ -21,9 +21,9 @@
 
 import {NV13Pro, getTacticalGraph, canSeeNode, WEAPON_BAND, cellOf, CELLS, lowCover} from './nv13pro.js';
 import {clamp, mix, angleDiff, random, dot, forward, sub, unit} from './geometry.js';
-import {walkable, obstruction, clearOpticalPath, rayBox, moveActor, floorAt} from './yard.js';
+import {walkable, obstruction, obstructionCoords, clearOpticalPath, rayBox, moveActor, floorAt} from './yard.js';
 import {eyeOf, targetPoint, postureStep, vertical} from './posture.js';
-import {incomingPathClear} from './ballistics.js';
+import {incomingPathClear, incomingPathClearCoords} from './ballistics.js';
 import {
   HumanAimController,
   SpyAgentState,
@@ -80,7 +80,7 @@ import {
   ForceFixationGazeV26
 } from './nv26-force.js';
 
-const dist2 = (ax, az, bx, bz) => Math.hypot(ax - bx, az - bz);
+const dist2 = (ax, az, bx, bz) => { const dx = ax - bx, dz = az - bz; return Math.sqrt(dx * dx + dz * dz); };
 const sigmoid = x => 1 / (1 + Math.exp(-clamp(x, -12, 12)));
 const silu = x => x * sigmoid(x);
 const siluGrad = x => {
@@ -133,21 +133,82 @@ function softmaxInPlace(arr, len = arr.length) {
   return arr;
 }
 
-function layerNorm(out, x, gamma, beta, eps = 1e-5) {
+// 4-wide unrolled GEMV kernels (all Transformer cols 8/24/48 are exact multiples of 8!)
+function matVecSet(out, outOff, x, xOff, w, rows, cols) {
+  for (let o = 0; o < cols; o += 4) {
+    out[outOff + o] = 0; out[outOff + o + 1] = 0; out[outOff + o + 2] = 0; out[outOff + o + 3] = 0;
+  }
+  for (let i = 0; i < rows; i++) {
+    const xi = x[xOff + i];
+    if (xi === 0) continue;
+    const row = i * cols;
+    for (let o = 0; o < cols; o += 4) {
+      out[outOff + o]     += xi * w[row + o];
+      out[outOff + o + 1] += xi * w[row + o + 1];
+      out[outOff + o + 2] += xi * w[row + o + 2];
+      out[outOff + o + 3] += xi * w[row + o + 3];
+    }
+  }
+}
+
+function matVecAdd(out, outOff, x, xOff, w, rows, cols) {
+  for (let i = 0; i < rows; i++) {
+    const xi = x[xOff + i];
+    if (xi === 0) continue;
+    const row = i * cols;
+    for (let o = 0; o < cols; o += 4) {
+      out[outOff + o]     += xi * w[row + o];
+      out[outOff + o + 1] += xi * w[row + o + 1];
+      out[outOff + o + 2] += xi * w[row + o + 2];
+      out[outOff + o + 3] += xi * w[row + o + 3];
+    }
+  }
+}
+
+function matVecOutGrad(dx, dOut, x, w, g, rows, cols) {
+  for (let i = 0; i < rows; i++) {
+    const xi = x[i], row = i * cols;
+    let acc = 0;
+    for (let o = 0; o < cols; o += 4) {
+      const d0 = dOut[o], d1 = dOut[o + 1], d2 = dOut[o + 2], d3 = dOut[o + 3];
+      const w0 = row + o;
+      g[w0]     += xi * d0;
+      g[w0 + 1] += xi * d1;
+      g[w0 + 2] += xi * d2;
+      g[w0 + 3] += xi * d3;
+      acc += d0 * w[w0] + d1 * w[w0 + 1] + d2 * w[w0 + 2] + d3 * w[w0 + 3];
+    }
+    dx[i] += acc;
+  }
+}
+
+function layerNormOff(out, outOff, x, xOff, gamma, beta, eps = 1e-5) {
   let mean = 0;
-  for (let i = 0; i < D_MOD; i++) mean += x[i];
-  mean /= D_MOD;
+  for (let i = 0; i < D_MOD; i++) mean += x[xOff + i];
+  mean *= (1 / D_MOD);
   let varSum = 0;
   for (let i = 0; i < D_MOD; i++) {
-    const d = x[i] - mean;
+    const d = x[xOff + i] - mean;
     varSum += d * d;
   }
-  const invStd = 1 / Math.sqrt(varSum / D_MOD + eps);
+  const invStd = 1 / Math.sqrt(varSum * (1 / D_MOD) + eps);
   for (let i = 0; i < D_MOD; i++) {
-    out[i] = ((x[i] - mean) * invStd) * gamma[i] + beta[i];
+    out[outOff + i] = ((x[xOff + i] - mean) * invStd) * gamma[i] + beta[i];
   }
-  return {mean, invStd};
 }
+
+function layerNorm(out, x, gamma, beta, eps = 1e-5) {
+  layerNormOff(out, 0, x, 0, gamma, beta, eps);
+}
+
+const PLAYBOOK_DEFS = [
+  {name: 'EXECUTE_COLLAPSE', actIdx: 0, payoff: new Float32Array([-0.15, 0.25, 0.20, 0.20, 0.85, 1.10, 0.55, -0.45])},
+  {name: 'PINCER_DOUBLE_FLANK', actIdx: 1, payoff: new Float32Array([0.15, 0.85, 0.25, 0.25, 0.65, 0.55, 0.30, 0.90])},
+  {name: 'ANCHOR_AND_CUT', actIdx: 6, payoff: new Float32Array([0.80, 0.35, 1.05, 1.05, 0.15, 0.20, 0.35, 0.25])},
+  {name: 'BAIT_TRAP_CROSSFIRE', actIdx: 5, payoff: new Float32Array([1.05, 0.75, 0.40, 0.40, 0.05, 0.25, 0.15, 0.30])},
+  {name: 'TANKER_DENIAL_BOX', actIdx: 4, payoff: new Float32Array([0.20, 0.25, 0.30, 0.30, 0.45, 0.40, 1.25, 0.20])},
+  {name: 'FALLBACK_KILLZONE', actIdx: 7, payoff: new Float32Array([0.95, 0.45, 0.35, 0.35, -0.25, -0.35, -0.20, 0.20])}
+];
 
 // Pure TypedArray Adam-optimized parameter tensor
 class Param {
@@ -255,6 +316,9 @@ export class NV2NeuralCore {
     this.sTmpD = new Float32Array(D_MOD);
     this.sTmpF = new Float32Array(D_FFN);
     this.sTmpF2 = new Float32Array(D_FFN);
+    this._dh = new Float32Array(D_MOD);
+    this._dz1 = new Float32Array(D_MOD);
+    this._dQ2 = new Float32Array(D_MOD);
 
     // Experience Replay Buffer (N = 128 transitions)
     this.replay = [];
@@ -309,194 +373,159 @@ export class NV2NeuralCore {
     this.wVal.w[16] -= 0.70; // recent damage
   }
 
-  // Forward pass through 2-layer Causal Transformer + SwiGLU + 3 Output Heads.
+  // Forward pass through 2-layer Causal Transformer + SwiGLU + 3 Output Heads (Monomorphic FMA + CausalKV-Memo).
   // tokenBuf: Float32Array(T_CTX * D_MOD), count: number of active tokens (1..T_CTX), headIdx: ring buffer write pointer.
-  forward(tokenBuf, count, headIdx, cache = false) {
+  forward(tokenBuf, count, headIdx, cache = false, teamCache = null) {
     this.inferences++;
+    if (teamCache && teamCache._fwdSeq === teamCache.tokenSeq && teamCache._fwdUpdates === this.updates && teamCache._fwdOut && (!cache || teamCache._fwdOut.snap)) {
+      return teamCache._fwdOut;
+    }
     const L = clamp(count, 1, T_CTX);
     const start = (headIdx - L + T_CTX * 4) % T_CTX;
+    const sIn = this.sIn, sQ1 = this.sQ1, sK1 = this.sK1, sV1 = this.sV1;
+    const sH1 = this.sH1, sL1 = this.sL1, sTmpD = this.sTmpD, sTmpF = this.sTmpF, sTmpF2 = this.sTmpF2;
+    const sScores = this.sScores;
 
-    // 1. Gather chronological sequence [0..L-1] + Sinusoidal Positional Encoding
-    for (let t = 0; t < L; t++) {
-      const srcOff = ((start + t) % T_CTX) * D_MOD;
-      const dstOff = t * D_MOD;
-      const peOff = t * D_MOD;
-      for (let d = 0; d < D_MOD; d++) {
-        this.sIn[dstOff + d] = tokenBuf[srcOff + d] + POS_ENC[peOff + d];
+    // 1. Layer 1 (frozen causal weights): reuse cached L1 activations if token sequence unchanged!
+    if (teamCache && teamCache._l1Seq === teamCache.tokenSeq && teamCache._l1Buf && teamCache._l1L === L) {
+      sL1.set(teamCache._l1Buf, 0);
+    } else {
+      for (let t = 0; t < L; t++) {
+        const srcOff = ((start + t) % T_CTX) * D_MOD;
+        const dstOff = t * D_MOD;
+        for (let d = 0; d < D_MOD; d++) sIn[dstOff + d] = tokenBuf[srcOff + d] + POS_ENC[dstOff + d];
       }
-    }
 
-    // 2. Layer 1: Full Causal Multi-Head Self-Attention (L x L) + Residual LayerNorm + SwiGLU FFN
-    const wq1 = this.l1Wq.w, wk1 = this.l1Wk.w, wv1 = this.l1Wv.w, wo1 = this.l1Wo.w;
-    for (let t = 0; t < L; t++) {
-      const off = t * D_MOD;
-      for (let o = 0; o < D_MOD; o++) {
-        let sq = 0, sk = 0, sv = 0;
-        for (let i = 0; i < D_MOD; i++) {
-          const x = this.sIn[off + i];
-          const wi = i * D_MOD + o;
-          sq += x * wq1[wi];
-          sk += x * wk1[wi];
-          sv += x * wv1[wi];
-        }
-        this.sQ1[off + o] = sq;
-        this.sK1[off + o] = sk;
-        this.sV1[off + o] = sv;
+      const wq1 = this.l1Wq.w, wk1 = this.l1Wk.w, wv1 = this.l1Wv.w, wo1 = this.l1Wo.w;
+      for (let t = 0; t < L; t++) {
+        const off = t * D_MOD;
+        matVecSet(sQ1, off, sIn, off, wq1, D_MOD, D_MOD);
+        matVecSet(sK1, off, sIn, off, wk1, D_MOD, D_MOD);
+        matVecSet(sV1, off, sIn, off, wv1, D_MOD, D_MOD);
       }
-    }
 
-    const wg1 = this.l1Wgate.w, wu1 = this.l1Wup.w, wd1 = this.l1Wdown.w;
-    for (let t = 0; t < L; t++) {
-      const qOff = t * D_MOD;
-      this.sTmpD.fill(0);
-      for (let h = 0; h < N_HEADS; h++) {
-        const hOff = h * D_HEAD;
-        for (let j = 0; j <= t; j++) {
-          const kOff = j * D_MOD + hOff;
-          let dot = 0;
-          for (let d = 0; d < D_HEAD; d++) dot += this.sQ1[qOff + hOff + d] * this.sK1[kOff + d];
-          this.sScores[j] = dot * INV_SQRT_DK;
+      const wg1 = this.l1Wgate.w, wu1 = this.l1Wup.w, wd1 = this.l1Wdown.w;
+      const l1Ln1G = this.l1Ln1G.w, l1Ln1B = this.l1Ln1B.w, l1Ln2G = this.l1Ln2G.w, l1Ln2B = this.l1Ln2B.w;
+      for (let t = 0; t < L; t++) {
+        const qOff = t * D_MOD;
+        sTmpD.fill(0);
+        for (let h = 0; h < N_HEADS; h++) {
+          const hOff = h * D_HEAD;
+          const qhOff = qOff + hOff;
+          for (let j = 0; j <= t; j++) {
+            const kOff = j * D_MOD + hOff;
+            let dSum = 0;
+            for (let d = 0; d < D_HEAD; d++) dSum += sQ1[qhOff + d] * sK1[kOff + d];
+            sScores[j] = dSum * INV_SQRT_DK;
+          }
+          softmaxInPlace(sScores, t + 1);
+          for (let j = 0; j <= t; j++) {
+            const w = sScores[j];
+            const vOff = j * D_MOD + hOff;
+            for (let d = 0; d < D_HEAD; d++) sTmpD[hOff + d] += w * sV1[vOff + d];
+          }
         }
-        softmaxInPlace(this.sScores, t + 1);
-        for (let j = 0; j <= t; j++) {
-          const w = this.sScores[j];
-          const vOff = j * D_MOD + hOff;
-          for (let d = 0; d < D_HEAD; d++) this.sTmpD[hOff + d] += w * this.sV1[vOff + d];
-        }
-      }
-      // Output projection + residual + LayerNorm 1
-      for (let o = 0; o < D_MOD; o++) {
-        let s = 0;
-        for (let i = 0; i < D_MOD; i++) s += this.sTmpD[i] * wo1[i * D_MOD + o];
-        this.sH1[qOff + o] = this.sIn[qOff + o] + s;
-      }
-      const sub1 = this.sH1.subarray(qOff, qOff + D_MOD);
-      layerNorm(this.sTmpD, sub1, this.l1Ln1G.w, this.l1Ln1B.w);
+        for (let o = 0; o < D_MOD; o++) sH1[qOff + o] = sIn[qOff + o];
+        matVecAdd(sH1, qOff, sTmpD, 0, wo1, D_MOD, D_MOD);
+        layerNormOff(sTmpD, 0, sH1, qOff, l1Ln1G, l1Ln1B);
 
-      // Layer 1 SwiGLU FFN: (silu(x W_gate) * (x W_up)) W_down
-      for (let f = 0; f < D_FFN; f++) {
-        let sg = 0, su = 0;
-        for (let i = 0; i < D_MOD; i++) {
-          const x = this.sTmpD[i];
-          const wi = i * D_FFN + f;
-          sg += x * wg1[wi];
-          su += x * wu1[wi];
-        }
-        this.sTmpF[f] = silu(sg) * su;
+        matVecSet(sTmpF, 0, sTmpD, 0, wg1, D_MOD, D_FFN);
+        matVecSet(sTmpF2, 0, sTmpD, 0, wu1, D_MOD, D_FFN);
+        for (let f = 0; f < D_FFN; f++) sTmpF[f] = silu(sTmpF[f]) * sTmpF2[f];
+        matVecAdd(sTmpD, 0, sTmpF, 0, wd1, D_FFN, D_MOD);
+        layerNormOff(sL1, qOff, sTmpD, 0, l1Ln2G, l1Ln2B);
       }
-      for (let o = 0; o < D_MOD; o++) {
-        let s = 0;
-        for (let f = 0; f < D_FFN; f++) s += this.sTmpF[f] * wd1[f * D_MOD + o];
-        this.sTmpD[o] = this.sTmpD[o] + s;
+
+      if (teamCache) {
+        if (!teamCache._l1Buf || teamCache._l1Buf.length !== L * D_MOD) teamCache._l1Buf = new Float32Array(L * D_MOD);
+        teamCache._l1Buf.set(sL1.subarray(0, L * D_MOD), 0);
+        teamCache._l1Seq = teamCache.tokenSeq;
+        teamCache._l1L = L;
       }
-      layerNorm(this.sL1.subarray(qOff, qOff + D_MOD), this.sTmpD, this.l1Ln2G.w, this.l1Ln2B.w);
     }
 
     // 3. Layer 2: Causal Query Self-Attention from latest token (t = L-1) over all Layer-1 keys/values
     const lastOff = (L - 1) * D_MOD;
     const wq2 = this.l2Wq.w, wk2 = this.l2Wk.w, wv2 = this.l2Wv.w, wo2 = this.l2Wo.w;
-    for (let o = 0; o < D_MOD; o++) {
-      let sq = 0;
-      for (let i = 0; i < D_MOD; i++) sq += this.sL1[lastOff + i] * wq2[i * D_MOD + o];
-      this.sQ2[o] = sq;
-    }
+    const sQ2 = this.sQ2, sK2 = this.sK2, sV2 = this.sV2, sCtx2 = this.sCtx2, sAttn2 = this.sAttn2;
+    matVecSet(sQ2, 0, sL1, lastOff, wq2, D_MOD, D_MOD);
     for (let j = 0; j < L; j++) {
       const off = j * D_MOD;
-      for (let o = 0; o < D_MOD; o++) {
-        let sk = 0, sv = 0;
-        for (let i = 0; i < D_MOD; i++) {
-          const x = this.sL1[off + i];
-          const wi = i * D_MOD + o;
-          sk += x * wk2[wi];
-          sv += x * wv2[wi];
-        }
-        this.sK2[off + o] = sk;
-        this.sV2[off + o] = sv;
-      }
+      matVecSet(sK2, off, sL1, off, wk2, D_MOD, D_MOD);
+      matVecSet(sV2, off, sL1, off, wv2, D_MOD, D_MOD);
     }
-    this.sCtx2.fill(0);
+    sCtx2.fill(0);
     for (let h = 0; h < N_HEADS; h++) {
       const hOff = h * D_HEAD;
       for (let j = 0; j < L; j++) {
         const kOff = j * D_MOD + hOff;
-        let dot = 0;
-        for (let d = 0; d < D_HEAD; d++) dot += this.sQ2[hOff + d] * this.sK2[kOff + d];
-        this.sScores[j] = dot * INV_SQRT_DK;
+        let dSum = 0;
+        for (let d = 0; d < D_HEAD; d++) dSum += sQ2[hOff + d] * sK2[kOff + d];
+        sScores[j] = dSum * INV_SQRT_DK;
       }
-      softmaxInPlace(this.sScores, L);
+      softmaxInPlace(sScores, L);
+      const aOff = h * T_CTX;
       for (let j = 0; j < L; j++) {
-        const a = this.sScores[j];
-        this.sAttn2[h * T_CTX + j] = a;
+        const a = sScores[j];
+        sAttn2[aOff + j] = a;
         const vOff = j * D_MOD + hOff;
-        for (let d = 0; d < D_HEAD; d++) this.sCtx2[hOff + d] += a * this.sV2[vOff + d];
+        for (let d = 0; d < D_HEAD; d++) sCtx2[hOff + d] += a * sV2[vOff + d];
       }
     }
 
-    for (let o = 0; o < D_MOD; o++) {
-      let s = 0;
-      for (let i = 0; i < D_MOD; i++) s += this.sCtx2[i] * wo2[i * D_MOD + o];
-      this.sTmpD[o] = this.sL1[lastOff + o] + s;
-    }
-    layerNorm(this.sZ1, this.sTmpD, this.l2Ln1G.w, this.l2Ln1B.w);
+    for (let o = 0; o < D_MOD; o++) sTmpD[o] = sL1[lastOff + o];
+    matVecAdd(sTmpD, 0, sCtx2, 0, wo2, D_MOD, D_MOD);
+    layerNormOff(this.sZ1, 0, sTmpD, 0, this.l2Ln1G.w, this.l2Ln1B.w);
 
     // Layer 2 SwiGLU FFN
     const wg2 = this.l2Wgate.w, wu2 = this.l2Wup.w, wd2 = this.l2Wdown.w;
-    for (let f = 0; f < D_FFN; f++) {
-      let sg = 0, su = 0;
-      for (let i = 0; i < D_MOD; i++) {
-        const x = this.sZ1[i];
-        const wi = i * D_FFN + f;
-        sg += x * wg2[wi];
-        su += x * wu2[wi];
-      }
-      this.sGate[f] = sg;
-      this.sUp[f] = su;
-      this.sAct[f] = silu(sg) * su;
-    }
-    for (let o = 0; o < D_MOD; o++) {
-      let s = 0;
-      for (let f = 0; f < D_FFN; f++) s += this.sAct[f] * wd2[f * D_MOD + o];
-      this.sFfn[o] = this.sZ1[o] + s;
-    }
-    layerNorm(this.sFinal, this.sFfn, this.l2Ln2G.w, this.l2Ln2B.w);
+    const sZ1 = this.sZ1, sGate = this.sGate, sUp = this.sUp, sAct = this.sAct, sFfn = this.sFfn;
+    matVecSet(sGate, 0, sZ1, 0, wg2, D_MOD, D_FFN);
+    matVecSet(sUp, 0, sZ1, 0, wu2, D_MOD, D_FFN);
+    for (let f = 0; f < D_FFN; f++) sAct[f] = silu(sGate[f]) * sUp[f];
+    for (let o = 0; o < D_MOD; o++) sFfn[o] = sZ1[o];
+    matVecAdd(sFfn, 0, sAct, 0, wd2, D_FFN, D_MOD);
+    layerNormOff(this.sFinal, 0, sFfn, 0, this.l2Ln2G.w, this.l2Ln2B.w);
 
     // 4. Three Output Heads: LLM Next-Action Predictor, Actor Policy, Critic Value
+    const sFinal = this.sFinal;
     const predProbs = new Float32Array(N_INTENTS);
-    for (let c = 0; c < N_INTENTS; c++) {
-      let s = this.bPred.w[c];
-      for (let i = 0; i < D_MOD; i++) s += this.sFinal[i] * this.wPred.w[i * N_INTENTS + c];
-      predProbs[c] = s;
-    }
+    for (let c = 0; c < N_INTENTS; c++) predProbs[c] = this.bPred.w[c];
+    matVecAdd(predProbs, 0, sFinal, 0, this.wPred.w, D_MOD, N_INTENTS);
     softmaxInPlace(predProbs, N_INTENTS);
 
     const piProbs = new Float32Array(N_ACTIONS);
-    for (let a = 0; a < N_ACTIONS; a++) {
-      let s = this.bPi.w[a];
-      for (let i = 0; i < D_MOD; i++) s += this.sFinal[i] * this.wPi.w[i * N_ACTIONS + a];
-      piProbs[a] = s;
-    }
+    for (let a = 0; a < N_ACTIONS; a++) piProbs[a] = this.bPi.w[a];
+    matVecAdd(piProbs, 0, sFinal, 0, this.wPi.w, D_MOD, N_ACTIONS);
     softmaxInPlace(piProbs, N_ACTIONS);
 
     let value = this.bVal.w[0];
-    for (let i = 0; i < D_MOD; i++) value += this.sFinal[i] * this.wVal.w[i];
+    const wValW = this.wVal.w;
+    for (let i = 0; i < D_MOD; i++) value += sFinal[i] * wValW[i];
     value = Math.tanh(value) * 3.0;
 
     const snap = cache ? {
       L,
-      l1Seq: new Float32Array(this.sL1.subarray(0, L * D_MOD)),
-      q2: new Float32Array(this.sQ2),
-      k2: new Float32Array(this.sK2.subarray(0, L * D_MOD)),
-      v2: new Float32Array(this.sV2.subarray(0, L * D_MOD)),
-      attn2: new Float32Array(this.sAttn2),
-      ctx2: new Float32Array(this.sCtx2),
-      z1: new Float32Array(this.sZ1),
-      gate: new Float32Array(this.sGate),
-      up: new Float32Array(this.sUp),
-      act: new Float32Array(this.sAct),
-      h: new Float32Array(this.sFinal)
+      l1Seq: sL1.slice(0, L * D_MOD),
+      q2: new Float32Array(sQ2),
+      k2: sK2.slice(0, L * D_MOD),
+      v2: sV2.slice(0, L * D_MOD),
+      attn2: new Float32Array(sAttn2),
+      ctx2: new Float32Array(sCtx2),
+      z1: new Float32Array(sZ1),
+      gate: new Float32Array(sGate),
+      up: new Float32Array(sUp),
+      act: new Float32Array(sAct),
+      h: new Float32Array(sFinal)
     } : null;
 
-    return {predProbs, piProbs, value, h: new Float32Array(this.sFinal), snap};
+    const res = {predProbs, piProbs, value, h: new Float32Array(sFinal), snap};
+    if (teamCache) {
+      teamCache._fwdSeq = teamCache.tokenSeq;
+      teamCache._fwdUpdates = this.updates;
+      teamCache._fwdOut = res;
+    }
+    return res;
   }
 
   // Push transition into experience replay buffer for PPO/A2C + Next-Action mini-batch training
@@ -511,7 +540,8 @@ export class NV2NeuralCore {
     const {snap, action, advantage, targetVal, piProbs, value, predProbs, predTarget} = exp;
     if (!snap) return;
     const h = snap.h;
-    const dh = new Float32Array(D_MOD);
+    const dh = this._dh;
+    dh.fill(0);
 
     // 1. Critic Value Head gradient (Huber TD error)
     if (Number.isFinite(targetVal)) {
@@ -520,9 +550,10 @@ export class NV2NeuralCore {
       const dtanh = 1 - (value / 3.0) ** 2;
       const gRaw = err * 0.5 * 3.0 * Math.max(0.08, dtanh) * lrScale;
       this.bVal.g[0] += gRaw;
+      const wValW = this.wVal.w, wValG = this.wVal.g;
       for (let i = 0; i < D_MOD; i++) {
-        this.wVal.g[i] += gRaw * h[i];
-        dh[i] += gRaw * this.wVal.w[i];
+        wValG[i] += gRaw * h[i];
+        dh[i] += gRaw * wValW[i];
       }
     }
 
@@ -531,117 +562,109 @@ export class NV2NeuralCore {
       const adv = clamp(advantage, -2.5, 2.5);
       this.policyLoss = this.policyLoss * 0.92 + Math.abs(adv) * 0.08;
       const entBeta = 0.018;
-      // Compute mean log p for entropy gradient
       let ent = 0;
-      for (let a = 0; a < N_ACTIONS; a++) ent -= piProbs[a] * Math.log(Math.max(1e-6, piProbs[a]));
+      const dLogits = this.sScores;
       for (let a = 0; a < N_ACTIONS; a++) {
-        const ind = a === action ? 1 : 0;
-        const logP = Math.log(Math.max(1e-6, piProbs[a]));
-        const gEnt = entBeta * piProbs[a] * (logP + ent);
-        const dLogit = (-(ind - piProbs[a]) * adv + gEnt) * lrScale;
-        this.bPi.g[a] += dLogit;
-        for (let i = 0; i < D_MOD; i++) {
-          this.wPi.g[i * N_ACTIONS + a] += dLogit * h[i];
-          dh[i] += dLogit * this.wPi.w[i * N_ACTIONS + a];
-        }
+        const pa = piProbs[a];
+        ent -= pa * Math.log(pa > 1e-6 ? pa : 1e-6);
       }
+      for (let a = 0; a < N_ACTIONS; a++) {
+        const pa = piProbs[a];
+        const ind = a === action ? 1 : 0;
+        const logP = Math.log(pa > 1e-6 ? pa : 1e-6);
+        const dL = (-(ind - pa) * adv + entBeta * pa * (logP + ent)) * lrScale;
+        dLogits[a] = dL;
+        this.bPi.g[a] += dL;
+      }
+      matVecOutGrad(dh, dLogits, h, this.wPi.w, this.wPi.g, D_MOD, N_ACTIONS);
     }
 
     // 3. LLM Next-Action Prediction Head gradient (Exact Cross-Entropy)
     if (predTarget >= 0 && predTarget < N_INTENTS && predProbs) {
-      const ce = -Math.log(Math.max(1e-6, predProbs[predTarget]));
+      const pt = predProbs[predTarget];
+      const ce = -Math.log(pt > 1e-6 ? pt : 1e-6);
       this.predLoss = this.predLoss * 0.90 + ce * 0.10;
+      const dLogits = this.sScores;
+      const sScale = 0.85 * lrScale;
       for (let c = 0; c < N_INTENTS; c++) {
-        const dLogit = (predProbs[c] - (c === predTarget ? 1 : 0)) * 0.85 * lrScale;
-        this.bPred.g[c] += dLogit;
-        for (let i = 0; i < D_MOD; i++) {
-          this.wPred.g[i * N_INTENTS + c] += dLogit * h[i];
-          dh[i] += dLogit * this.wPred.w[i * N_INTENTS + c];
-        }
+        const dL = (predProbs[c] - (c === predTarget ? 1 : 0)) * sScale;
+        dLogits[c] = dL;
+        this.bPred.g[c] += dL;
       }
+      matVecOutGrad(dh, dLogits, h, this.wPred.w, this.wPred.g, D_MOD, N_INTENTS);
     }
 
     // 4. Backprop through Layer-2 SwiGLU FFN: sFfn = z1 + (silu(z1 Wg) * (z1 Wu)) Wd
-    const dz1 = new Float32Array(D_MOD);
-    for (let i = 0; i < D_MOD; i++) dz1[i] = dh[i]; // Residual skip gradient
+    const dz1 = this._dz1;
+    for (let i = 0; i < D_MOD; i++) dz1[i] = dh[i];
 
     const dAct = this.sTmpF;
     dAct.fill(0);
+    matVecOutGrad(dAct, dh, snap.act, this.l2Wdown.w, this.l2Wdown.g, D_FFN, D_MOD);
+
+    const dGateBuf = this.sTmpF2;
     for (let f = 0; f < D_FFN; f++) {
-      let g = 0;
-      const actF = snap.act[f];
-      for (let o = 0; o < D_MOD; o++) {
-        const wi = f * D_MOD + o;
-        this.l2Wdown.g[wi] += actF * dh[o];
-        g += dh[o] * this.l2Wdown.w[wi];
-      }
-      dAct[f] = g;
+      const gf = snap.gate[f];
+      const sig = sigmoid(gf);
+      const sv = gf * sig;
+      const daf = dAct[f];
+      dGateBuf[f] = daf * snap.up[f] * (sig + sv * (1 - sig));
+      dAct[f] = daf * sv;
     }
-    for (let f = 0; f < D_FFN; f++) {
-      const dg = dAct[f] * snap.up[f] * siluGrad(snap.gate[f]);
-      const du = dAct[f] * silu(snap.gate[f]);
-      for (let i = 0; i < D_MOD; i++) {
-        const z = snap.z1[i];
-        const wi = i * D_FFN + f;
-        this.l2Wgate.g[wi] += z * dg;
-        this.l2Wup.g[wi] += z * du;
-        dz1[i] += dg * this.l2Wgate.w[wi] + du * this.l2Wup.w[wi];
-      }
-    }
+    matVecOutGrad(dz1, dGateBuf, snap.z1, this.l2Wgate.w, this.l2Wgate.g, D_MOD, D_FFN);
+    matVecOutGrad(dz1, dAct, snap.z1, this.l2Wup.w, this.l2Wup.g, D_MOD, D_FFN);
 
     // 5. Backprop through Layer-2 Multi-Head Attention Output Projection W_O and Q/K/V!
     const dCtx = this.sTmpD;
     dCtx.fill(0);
-    for (let i = 0; i < D_MOD; i++) {
-      let g = 0;
-      const ci = snap.ctx2[i];
-      for (let o = 0; o < D_MOD; o++) {
-        const wi = i * D_MOD + o;
-        this.l2Wo.g[wi] += ci * dz1[o];
-        g += dz1[o] * this.l2Wo.w[wi];
-      }
-      dCtx[i] = g;
-    }
+    matVecOutGrad(dCtx, dz1, snap.ctx2, this.l2Wo.w, this.l2Wo.g, D_MOD, D_MOD);
 
-    // Backprop through attention weights attn2 -> Q2, K2, V2
     const L = snap.L;
     const lastOff = (L - 1) * D_MOD;
-    const dQ2 = new Float32Array(D_MOD);
+    const dQ2 = this._dQ2;
+    dQ2.fill(0);
+    const wv2G = this.l2Wv.g, wk2G = this.l2Wk.g, wq2G = this.l2Wq.g;
+    const dvRow = this.sFfn;
+    const dkRow = this.sZ1;
+    const l1Seq = snap.l1Seq, q2 = snap.q2, k2 = snap.k2, v2 = snap.v2, attn2 = snap.attn2;
     for (let hIdx = 0; hIdx < N_HEADS; hIdx++) {
       const hOff = hIdx * D_HEAD;
+      const aBase = hIdx * T_CTX;
       const dA = this.sScores;
       let dotDA = 0;
       for (let j = 0; j < L; j++) {
-        const a = snap.attn2[hIdx * T_CTX + j];
+        const a = attn2[aBase + j];
         const vOff = j * D_MOD + hOff;
         let da = 0;
-        for (let d = 0; d < D_HEAD; d++) da += dCtx[hOff + d] * snap.v2[vOff + d];
+        for (let d = 0; d < D_HEAD; d++) da += dCtx[hOff + d] * v2[vOff + d];
         dA[j] = da;
         dotDA += da * a;
       }
       for (let j = 0; j < L; j++) {
-        const a = snap.attn2[hIdx * T_CTX + j];
+        const a = attn2[aBase + j];
         const dScore = a * (dA[j] - dotDA) * INV_SQRT_DK;
         const xOff = j * D_MOD;
         const kOff = xOff + hOff;
         for (let d = 0; d < D_HEAD; d++) {
-          const dv = a * dCtx[hOff + d];
-          const dk = dScore * snap.q2[hOff + d];
-          dQ2[hOff + d] += dScore * snap.k2[kOff + d];
-          const oCol = hOff + d;
-          for (let i = 0; i < D_MOD; i++) {
-            const xj = snap.l1Seq[xOff + i];
-            const wi = i * D_MOD + oCol;
-            this.l2Wv.g[wi] += xj * dv;
-            this.l2Wk.g[wi] += xj * dk;
+          const hd = hOff + d;
+          dvRow[d] = a * dCtx[hd];
+          dkRow[d] = dScore * q2[hd];
+          dQ2[hd] += dScore * k2[kOff + d];
+        }
+        for (let i = 0; i < D_MOD; i++) {
+          const xj = l1Seq[xOff + i];
+          const base = i * D_MOD + hOff;
+          for (let d = 0; d < D_HEAD; d++) {
+            wv2G[base + d] += xj * dvRow[d];
+            wk2G[base + d] += xj * dkRow[d];
           }
         }
       }
     }
-    for (let o = 0; o < D_MOD; o++) {
-      const dq = dQ2[o];
-      for (let i = 0; i < D_MOD; i++) {
-        this.l2Wq.g[i * D_MOD + o] += snap.l1Seq[lastOff + i] * dq;
+    for (let i = 0; i < D_MOD; i++) {
+      const xi = l1Seq[lastOff + i], row = i * D_MOD;
+      for (let o = 0; o < D_MOD; o++) {
+        wq2G[row + o] += xi * dQ2[o];
       }
     }
   }
@@ -649,7 +672,8 @@ export class NV2NeuralCore {
   // Run one Adam mini-batch optimization step over Replay Buffer (with global gradient norm clipping)
   trainMiniBatch(batchSize = 8, lr = 0.0028) {
     if (this.replay.length < 4) return false;
-    for (const p of this.trainable) p.zeroGrad();
+    const trainable = this.trainable;
+    for (let pi = 0; pi < trainable.length; pi++) trainable[pi].zeroGrad();
 
     const n = Math.min(batchSize, this.replay.length);
     const invN = 1 / n;
@@ -663,29 +687,36 @@ export class NV2NeuralCore {
 
     // Global L2 gradient norm clipping (maxNorm = 1.0)
     let norm2 = 0;
-    for (const p of this.trainable) {
-      const g = p.g;
+    for (let pi = 0; pi < trainable.length; pi++) {
+      const g = trainable[pi].g;
       for (let i = 0; i < g.length; i++) norm2 += g[i] * g[i];
     }
     if (!Number.isFinite(norm2) || norm2 < 1e-12) return false;
     const clipScale = norm2 > 1.0 ? 1 / Math.sqrt(norm2) : 1.0;
 
-    // Adam optimizer update with mild L2 weight decay
+    // Adam optimizer update with mild L2 weight decay (hoisted scalars outside 8,281-weight loop!)
     this.stepCount++;
-    const b1 = 0.9, b2 = 0.999, eps = 1e-6, wd = 0.0004;
-    const bc1 = 1 - Math.pow(b1, this.stepCount);
-    const bc2 = 1 - Math.pow(b2, this.stepCount);
-    for (const p of this.trainable) {
+    const b1 = 0.9, b2 = 0.999, eps = 1e-6;
+    const oneMinusB1 = 1 - b1, oneMinusB2 = 1 - b2;
+    const invBc1 = 1 / (1 - Math.pow(b1, this.stepCount));
+    const invBc2 = 1 / (1 - Math.pow(b2, this.stepCount));
+    const decay = 1 - lr * 0.0004;
+    const lrInvBc1 = lr * invBc1;
+    for (let pi = 0; pi < trainable.length; pi++) {
+      const p = trainable[pi];
       const w = p.w, g = p.g, m = p.m, v = p.v;
-      for (let i = 0; i < w.length; i++) {
+      const len = w.length;
+      for (let i = 0; i < len; i++) {
         const gi = g[i] * clipScale;
-        if (!Number.isFinite(gi)) continue;
-        m[i] = b1 * m[i] + (1 - b1) * gi;
-        v[i] = b2 * v[i] + (1 - b2) * gi * gi;
-        const mHat = m[i] / bc1;
-        const vHat = v[i] / bc2;
-        const nw = w[i] * (1 - lr * wd) - lr * mHat / (Math.sqrt(vHat) + eps);
-        w[i] = clamp(nw, -3.5, 3.5);
+        if (gi !== gi) continue; // fast NaN check
+        const mi = b1 * m[i] + oneMinusB1 * gi;
+        const vi = b2 * v[i] + oneMinusB2 * gi * gi;
+        m[i] = mi;
+        v[i] = vi;
+        let nw = w[i] * decay - lrInvBc1 * mi / (Math.sqrt(vi * invBc2) + eps);
+        if (nw > 3.5) nw = 3.5;
+        else if (nw < -3.5) nw = -3.5;
+        w[i] = nw;
       }
     }
     this.updates++;
@@ -731,6 +762,13 @@ class NV2TeamState {
     this.tokens = new Float32Array(T_CTX * D_MOD);
     this.tokenCount = 0;
     this.tokenHead = 0;
+    this.tokenSeq = 0;
+    this._l1Seq = -1;
+    this._l1L = 0;
+    this._l1Buf = null;
+    this._fwdSeq = -1;
+    this._fwdUpdates = -1;
+    this._fwdOut = null;
     this.lastPulseAt = -1;
     this.lastPred = new Float32Array(N_INTENTS).fill(1 / N_INTENTS);
     this.lastPi = new Float32Array(N_ACTIONS).fill(1 / N_ACTIONS);
@@ -753,6 +791,7 @@ class NV2TeamState {
     for (let i = 0; i < D_MOD; i++) this.tokens[off + i] = clamp(vec[i] || 0, -2, 2);
     this.tokenHead = (this.tokenHead + 1) % T_CTX;
     if (this.tokenCount < T_CTX) this.tokenCount++;
+    this.tokenSeq++;
   }
 }
 
@@ -891,6 +930,8 @@ export class NV2 extends NV13Pro {
       forceSuppressPins: 0,
       forcePlayerOrders: 0
     };
+    this._visExtra = {yawRate: 0, visibleCount: 1, nearSmokeEdge: false};
+    this._pEye = [0, 0, 0];
   }
 
   isTeamHumanMode(teamIdx) {
@@ -915,6 +956,13 @@ export class NV2 extends NV13Pro {
     super.attach(actor);
     const b = this.brains.get(actor.id);
     if (b) {
+      b._ownerNv = this;
+      actor._nv2B = b;
+      b._paceState = '';
+      b._paceSeen = false;
+      b._paceDodge = false;
+      b._paceFeint = 'none';
+      b._cachedPace = null;
       const tier = this.getActorAiTier(actor);
       const isNv21 = actor.aiVersion === 'NV2.1' || !!actor.isSpy || tier === 'nv21';
       const actorHuman = tier !== 'classic' && tier !== 'nv21';
@@ -967,6 +1015,32 @@ export class NV2 extends NV13Pro {
       b.unstuckUntil = -10;
       b.unstuckSign = 1;
       b.body = null;
+      // MultiRate-CognitiveCoalescing & zero-GC reusable call contexts
+      b._cogAccum = 0;
+      b._cogReady = false;
+      b._lastDdmOut = null;
+      b._aimAccum = 0;
+      b._lastAimRes = null;
+      b._prevSeenFlag = false;
+      b._prevTargetId = -1;
+      b._prevSuppress = false;
+      b._dodgeAccum = 0;
+      b._tacAt = 0;
+      b._cachedPhysAct = null;
+      b._gazeAt = 0;
+      b._cachedGazeYaw = actor.yaw;
+      b._cachedGazePitch = 0;
+      b._cachedGazeState = '';
+      b._mindCtx = {aliveAllies: 1, aliveEnemies: 1, killsToWin: 99, metrics: this.metrics};
+      b._gazeCtx = {allies: null};
+      b._aimOpts = {
+        seenTarget: null, wpn: null, fallbackYaw: 0, fallbackPitch: 0,
+        suppressPos: null, counterStrafing: false, dodging: false, backstabBonus: false,
+        primed: false, mind: null, tom: null, metrics: this.metrics,
+        urgentRearWhip: false, holdingTrapAngle: false,
+        syncStaging: false, syncExecuting: false, baitOverwatch: false
+      };
+      b._incomingPool = [];
 
       if (isForce) {
         // Flagship NV2.6 Force across ALL NPCs — INCLUDING 3v3 Spy Allies (NAGI / KAI)!
@@ -1238,10 +1312,20 @@ export class NV2 extends NV13Pro {
     const tok = new Float32Array(D_MOD);
     if (eventChannel >= 0 && eventChannel < 8) tok[eventChannel] = 1.0;
 
-    // Self or team average vitals
-    const allies = this.match.actors.filter(x => x.alive && x.team === teamIdx);
-    const enemiesAlive = this.match.actors.filter(x => x.alive && x.team !== teamIdx).length;
-    const ref = actor || allies[0];
+    // Self or team average vitals (single-pass zero-GC scan)
+    let alliesCount = 0, enemiesAlive = 0, firstAlly = null;
+    const actors = this.match.actors;
+    for (let i = 0; i < actors.length; i++) {
+      const x = actors[i];
+      if (!x.alive) continue;
+      if (x.team === teamIdx) {
+        alliesCount++;
+        if (!firstAlly) firstAlly = x;
+      } else {
+        enemiesAlive++;
+      }
+    }
+    const ref = actor || firstAlly;
     if (ref) {
       const w = this.match.weapon(ref);
       tok[8] = ref.hp / 100;
@@ -1267,7 +1351,7 @@ export class NV2 extends NV13Pro {
       tok[14] = 0.75;
     }
 
-    tok[20] = clamp((allies.length - enemiesAlive) / 3, -1, 1);
+    tok[20] = clamp((alliesCount - enemiesAlive) / 3, -1, 1);
     let tkReady = 0;
     for (const tk of this.match.tankers || []) {
       if (tk.cooldown <= 3.0) { tkReady = 1; break; }
@@ -1703,8 +1787,16 @@ export class NV2 extends NV13Pro {
     const t = this.match.time;
     const cog = this.teams[teamIdx];
     const st = this.nv2Teams[teamIdx];
-    const allies = this.match.actors.filter(a => a.alive && a.team === teamIdx);
-    const enemies = this.match.actors.filter(a => a.alive && a.team !== teamIdx);
+    const allies = this._teamAllies[teamIdx];
+    const enemies = this._teamAllies[1 - teamIdx];
+    // Refresh team rosters if invoked directly outside tick()
+    if (!allies.length && !enemies.length) {
+      const actors = this.match.actors;
+      for (let i = 0; i < actors.length; i++) {
+        const a = actors[i];
+        if (a.alive) this._teamAllies[a.team].push(a);
+      }
+    }
     if (!allies.length || !enemies.length) return;
 
     this.metrics.lookaheadPlans++;
@@ -1716,7 +1808,7 @@ export class NV2 extends NV13Pro {
       st.pushToken(this.buildToken(teamIdx, 7, allies[0], primary?.alive ? primary : null));
     }
 
-    const out = this.neural.forward(st.tokens, st.tokenCount, st.tokenHead, true);
+    const out = this.neural.forward(st.tokens, st.tokenCount, st.tokenHead, true, st);
     this.metrics.neuralInferences = this.neural.inferences;
 
     // Close previous TD(lambda) Actor-Critic transition into Experience Replay!
@@ -1756,71 +1848,47 @@ export class NV2 extends NV13Pro {
     const P = out.predProbs; // Opponent predicted next intent distribution
     const Pi = out.piProbs;  // Transformer actor policy distribution
 
-    // Compute squad tactical state features for 2-ply minimax rollout
-    const avgHp = allies.reduce((s, a) => s + a.hp + a.shield * 2, 0) / allies.length;
+    // Compute squad tactical state features for 2-ply minimax rollout (zero-GC)
+    let hpSum = 0, needSupply = false;
+    for (let i = 0; i < allies.length; i++) {
+      const a = allies[i];
+      hpSum += a.hp + a.shield * 2;
+      if (a.stock < 65 || (a.ammoRate || 1) < 1.1) needSupply = true;
+    }
+    const avgHp = hpSum / allies.length;
     const outnumbered = allies.length < enemies.length;
     const manAdv = allies.length > enemies.length;
     const execTarget = st.executeTargetId >= 0 && t < st.executeUntil ? this.match.actors[st.executeTargetId] : null;
     const execValid = !!(execTarget && execTarget.alive && avgHp > 56);
-    const tankerSoon = (this.match.tankers || []).some(tk => tk.cooldown <= 4.5);
+    let tankerSoon = false;
+    const tankers = this.match.tankers;
+    if (tankers) {
+      for (let i = 0; i < tankers.length; i++) {
+        if (tankers[i].cooldown <= 4.5) { tankerSoon = true; break; }
+      }
+    }
     let anyEnemyReloading = false;
     for (const pr of cog.profiles.values()) if (t < pr.reloadUntil) { anyEnemyReloading = true; break; }
 
-    // 2-Ply Minimax Evaluation across 6 coordinated squad playbooks:
-    // Score(playbook) = BaseTacticalValue + NeuralPolicyPrior(Pi) + sum_c P_next[c] * CounterPayoff(playbook, oppIntent_c)
-    const playbooks = [
-      {
-        name: 'EXECUTE_COLLAPSE',
-        actIdx: 0,
-        base: (execValid ? 1.55 : -0.45) + (manAdv ? 0.55 : 0) + (anyEnemyReloading ? 0.65 : 0) + (avgHp > 75 ? 0.28 : -0.55),
-        // Counters RETREAT_COVER(4), RELOAD_WINDOW(5), TANKER_RUSH(6); risky vs AMBUSH_HOLD(7)
-        payoff: [-0.15, 0.25, 0.20, 0.20, 0.85, 1.10, 0.55, -0.45]
-      },
-      {
-        name: 'PINCER_DOUBLE_FLANK',
-        actIdx: 1,
-        base: (allies.length >= 2 ? 0.88 : 0.10) + (avgHp > 58 ? 0.25 : -0.30),
-        // Dominates PEEK_DUEL(1), AMBUSH_HOLD(7), RETREAT_COVER(4)
-        payoff: [0.15, 0.85, 0.25, 0.25, 0.65, 0.55, 0.30, 0.90]
-      },
-      {
-        name: 'ANCHOR_AND_CUT',
-        actIdx: 6,
-        base: 0.62 + (allies.length >= 2 ? 0.22 : 0),
-        // Hard-counters FLANK_LEFT(2), FLANK_RIGHT(3), PUSH_AGGRO(0)
-        payoff: [0.80, 0.35, 1.05, 1.05, 0.15, 0.20, 0.35, 0.25]
-      },
-      {
-        name: 'BAIT_TRAP_CROSSFIRE',
-        actIdx: 5,
-        base: (allies.length >= 2 ? 0.72 : 0.28) + (avgHp > 48 ? 0.18 : 0),
-        // Baits & punishes PUSH_AGGRO(0), PEEK_DUEL(1)
-        payoff: [1.05, 0.75, 0.40, 0.40, 0.05, 0.25, 0.15, 0.30]
-      },
-      {
-        name: 'TANKER_DENIAL_BOX',
-        actIdx: 4,
-        base: (tankerSoon ? 0.95 : -0.90) + (allies.some(a => a.stock < 65 || (a.ammoRate || 1) < 1.1) ? 0.48 : 0),
-        // Dominates TANKER_RUSH(6)
-        payoff: [0.20, 0.25, 0.30, 0.30, 0.45, 0.40, 1.25, 0.20]
-      },
-      {
-        name: 'FALLBACK_KILLZONE',
-        actIdx: 7,
-        base: (outnumbered ? 0.75 : -0.35) + (avgHp < 52 ? 1.15 : -0.55),
-        // Punishes over-eager PUSH_AGGRO(0) when hurt
-        payoff: [0.95, 0.45, 0.35, 0.35, -0.25, -0.35, -0.20, 0.20]
-      }
-    ];
+    // 2-Ply Minimax Evaluation across 6 hoisted coordinated squad playbooks (zero array/object allocs)
+    const pbBases = this._pbBases || (this._pbBases = new Float32Array(6));
+    pbBases[0] = (execValid ? 1.55 : -0.45) + (manAdv ? 0.55 : 0) + (anyEnemyReloading ? 0.65 : 0) + (avgHp > 75 ? 0.28 : -0.55);
+    pbBases[1] = (allies.length >= 2 ? 0.88 : 0.10) + (avgHp > 58 ? 0.25 : -0.30);
+    pbBases[2] = 0.62 + (allies.length >= 2 ? 0.22 : 0);
+    pbBases[3] = (allies.length >= 2 ? 0.72 : 0.28) + (avgHp > 48 ? 0.18 : 0);
+    pbBases[4] = (tankerSoon ? 0.95 : -0.90) + (needSupply ? 0.48 : 0);
+    pbBases[5] = (outnumbered ? 0.75 : -0.35) + (avgHp < 52 ? 1.15 : -0.55);
 
     const syn = teamIdx === 1 && this.match.synapse ? this.match.synapse.getCounterDirective() : null;
-    let bestPb = playbooks[1], bestScore = -Infinity;
-    for (const pb of playbooks) {
+    let bestPb = PLAYBOOK_DEFS[1], bestScore = -Infinity;
+    for (let k = 0; k < PLAYBOOK_DEFS.length; k++) {
+      const pb = PLAYBOOK_DEFS[k];
+      const payoff = pb.payoff;
       let expectedCounter = 0;
-      for (let c = 0; c < N_INTENTS; c++) expectedCounter += P[c] * pb.payoff[c];
+      for (let c = 0; c < N_INTENTS; c++) expectedCounter += P[c] * payoff[c];
       const neuralBoost = Pi[pb.actIdx] * 1.15;
       const synBoost = syn ? (syn.playbookBias[pb.name] || 0) : 0;
-      const sc = pb.base + expectedCounter + neuralBoost + synBoost;
+      const sc = pbBases[k] + expectedCounter + neuralBoost + synBoost;
       if (sc > bestScore) { bestScore = sc; bestPb = pb; }
     }
 
@@ -1836,8 +1904,8 @@ export class NV2 extends NV13Pro {
     if (bestPb.name === 'EXECUTE_COLLAPSE' && execValid) {
       cog.primaryTargetId = execTarget.id;
       cog.syncAttackAt = t + 0.12;
-      for (const a of allies) {
-        const ord = cog.roles.get(a.id);
+      for (let i = 0; i < allies.length; i++) {
+        const ord = cog.roles.get(allies[i].id);
         if (ord) {
           ord.execute = true;
           ord.targetId = execTarget.id;
@@ -1847,7 +1915,10 @@ export class NV2 extends NV13Pro {
       // Predicted flank wing cut-off (enhanced by NV-Synapse personal player lane memory!)
       const predictedLeft = syn && Math.abs(syn.favoredLaneX) > 5 ? (syn.favoredLaneX < 0) : (P[2] >= P[3]);
       const cutLane = predictedLeft ? -1 : 1;
-      const cutter = allies.find(a => cog.roles.get(a.id)?.role !== 'ANCHOR') || allies[0];
+      let cutter = allies[0];
+      for (let i = 0; i < allies.length; i++) {
+        if (cog.roles.get(allies[i].id)?.role !== 'ANCHOR') { cutter = allies[i]; break; }
+      }
       const ord = cog.roles.get(cutter.id);
       if (ord) {
         ord.cutLane = cutLane;
@@ -1855,8 +1926,9 @@ export class NV2 extends NV13Pro {
         const pBf = cog.primaryTargetId >= 0 ? cog.beliefs.get(cog.primaryTargetId) : null;
         if (pBf) {
           let bestN = -1, bestS = -Infinity;
+          const nodes = this.graph.nodes;
           for (let i = 0; i < this.graph.N; i++) {
-            const n = this.graph.nodes[i];
+            const n = nodes[i];
             if (n.lane !== cutLane) continue;
             const dE = dist2(n.x, n.z, pBf.peakX, pBf.peakZ);
             if (dE < 10 || dE > 34) continue;
@@ -1875,12 +1947,14 @@ export class NV2 extends NV13Pro {
   // so NPCs NEVER slam into walls while maximizing clearance & stepping toward cover!
   // ============================================================================
   dodgeIncomingShots(a, b) {
-    const t = this.match.time;
     const shots = this.match.shots;
-    if (!shots.length || t < (b.dodgeCooldownAt || 0)) return;
+    if (!shots.length) return;
+    const t = this.match.time;
+    if (t < (b.dodgeCooldownAt || 0)) return;
     if (b.mind?.isStartled(t)) return; // startled human briefly freezes before dodging
     const ax = a.x, ay = a.y + 1.02, az = a.z;
     const incoming = b._incoming || (b._incoming = []);
+    const pool = b._incomingPool || (b._incomingPool = []);
     incoming.length = 0;
     let bestImp = 0.27;
     let duckHigh = false;
@@ -1888,21 +1962,30 @@ export class NV2 extends NV13Pro {
     for (let i = 0; i < shots.length; i++) {
       const s = shots[i];
       if (s.team === a.team || s.shafferCloaked) continue;
-      const rx = ax - s.p[0], ry = ay - s.p[1], rz = az - s.p[2];
+      const sx = s.p[0], sy = s.p[1], sz = s.p[2];
+      const rx = ax - sx, ry = ay - sy, rz = az - sz;
       const d2 = rx * rx + ry * ry + rz * rz;
       if (d2 > 1024 || d2 < 2.2) continue; // >32m or too close for human reaction
-      const along = rx * s.dir[0] + ry * s.dir[1] + rz * s.dir[2];
+      const dx = s.dir[0], dy = s.dir[1], dz = s.dir[2];
+      const along = rx * dx + ry * dy + rz * dz;
       if (along <= 0) continue; // flying away
-      const tImp = along / Math.max(80, s.speed);
+      const tImp = along / (s.speed > 80 ? s.speed : 80);
       // Realistic human visual-motor reaction floor (cannot Matrix-dodge point-blank rounds!)
       if (tImp > 0.27 || tImp < 0.075) continue;
 
-      const cpx = s.p[0] + s.dir[0] * along;
-      const cpy = s.p[1] + s.dir[1] * along;
-      const cpz = s.p[2] + s.dir[2] * along;
-      const missH = Math.hypot(cpx - ax, cpz - az);
-      if (missH < 0.86 && Math.abs(cpy - ay) < 0.94 && incomingPathClear(s, along, [cpx, cpy, cpz])) {
-        incoming.push({cpx, cpy, cpz, dx: s.dir[0], dz: s.dir[2], tImp, missH});
+      const cpx = sx + dx * along;
+      const cpy = sy + dy * along;
+      const cpz = sz + dz * along;
+      const ex = cpx - ax, ez = cpz - az;
+      const missH2 = ex * ex + ez * ez;
+      if (missH2 < 0.7396 && Math.abs(cpy - ay) < 0.94 && incomingPathClearCoords(s, along, cpx, cpy, cpz)) {
+        const missH = Math.sqrt(missH2);
+        const idx = incoming.length;
+        let rec = pool[idx];
+        if (!rec) rec = pool[idx] = {cpx: 0, cpy: 0, cpz: 0, dx: 0, dz: 0, tImp: 0, missH: 0};
+        rec.cpx = cpx; rec.cpy = cpy; rec.cpz = cpz;
+        rec.dx = dx; rec.dz = dz; rec.tImp = tImp; rec.missH = missH;
+        incoming.push(rec);
         if (tImp < bestImp) bestImp = tImp;
         if (missH < 0.78 && cpy > a.y + 1.15 && a.onGround) duckHigh = true;
       }
@@ -1922,6 +2005,7 @@ export class NV2 extends NV13Pro {
     // 6-direction walkable() + cover-priority footwork solver (eliminates wall-slamming!)
     const rawBlocked = !walkable(ax + refX * 0.72, az + refZ * 0.72, 0.42, a.y);
     let bestVx = 0, bestVz = 0, bestScore = -Infinity, found = false;
+    const curCov = b.cover ? dist2(ax, az, b.cover.x, b.cover.z) : 0;
 
     for (let k = 0; k < 6; k++) {
       const ang = baseAng + DODGE_DIRS6[k];
@@ -1943,9 +2027,7 @@ export class NV2 extends NV13Pro {
 
       // Strong cover-seeking footwork priority!
       if (b.cover) {
-        const curCov = dist2(ax, az, b.cover.x, b.cover.z);
-        const nextCov = dist2(fx, fz, b.cover.x, b.cover.z);
-        sc += (curCov - nextCov) * 2.4;
+        sc += (curCov - dist2(fx, fz, b.cover.x, b.cover.z)) * 2.4;
       }
       if (t < b.dodgeUntil) {
         sc += (vx * b.dodgeVec[0] + vz * b.dodgeVec[1]) * 1.3;
@@ -1981,19 +2063,23 @@ export class NV2 extends NV13Pro {
     b.lastSightStepAt = t;
     const st = this.nv2Teams[a.team];
     const av = this.match.aeroVortex;
-    const eye = eyeOf(a);
+    const hasSmoke = (av?.stats.totalSmoke || 0) > 1.8;
+    const eye = this._pEye;
+    const lean = a.lean || 0;
+    eye[0] = a.x + Math.cos(a.yaw) * lean;
+    eye[1] = a.y + (a.human ? 1.61 : 1.5) * (1 - (a.crouch || 0) * 0.34);
+    eye[2] = a.z + Math.sin(a.yaw) * lean;
     const smokeGate = b.spy ? 1.02 : 0.86;
-    const obscured = target => av?.stats.totalSmoke > 1.8 && av.smokeOcclusion(eye, target) > smokeGate;
-    const visExtra = {
-      yawRate: b.lastYawRate || 0,
-      visibleCount: Math.max(1, b.visibleEnemies?.length || 1),
-      nearSmokeEdge: false
-    };
+    const obscured = hasSmoke ? (target => av.smokeOcclusion(eye, target) > smokeGate) : null;
+    const visExtra = this._visExtra;
+    visExtra.yawRate = b.lastYawRate || 0;
+    visExtra.visibleCount = Math.max(1, b.visibleEnemies?.length || 1);
+    visExtra.nearSmokeEdge = false;
     let anyPrimed = false;
     const recognize = enemy => {
       if ((enemy.shafferTimer || 0) > 0) return false;
       if (!b.vision) return true;
-      visExtra.nearSmokeEdge = !!(av?.stats.totalSmoke > 1.8 && av.smokeOcclusion(eye, targetPoint(enemy)) > 0.28);
+      visExtra.nearSmokeEdge = hasSmoke && av.smokeOcclusion(eye, targetPoint(enemy)) > 0.28;
       const res = b.vision.evaluateSighting(a, enemy, visDt, t, b.mind, prevTargetId, this.metrics, visExtra);
       if (res?.primed && res?.recognized) anyPrimed = true;
       return !!res?.recognized;
@@ -2458,6 +2544,14 @@ export class NV2 extends NV13Pro {
   // 10-Channel Delayed Squad Comms, NV2.5 humain 8-Core Loop & Spy Integration)
   // ============================================================================
   tick(dt) {
+    // DualRate-180Hz-NV2: NPC movement/tactics/aim execute at 180Hz exact-dt (3x display rate, 2.5cm/step << 42cm radius)
+    // while projectiles & swept CCD remain at full 360Hz. Instant execution on first tick or dt >= 1/180!
+    this._tickAccum = (this._tickAccum || 0) + dt;
+    if (this._tickReady && this._tickAccum < (1 / 180 - 1e-6)) return;
+    dt = this._tickAccum;
+    this._tickAccum = 0;
+    this._tickReady = true;
+
     const t = this.match.time;
     this.tickSeq++;
     this.astarUsedThisTick = 0;
@@ -2631,23 +2725,45 @@ export class NV2 extends NV13Pro {
     }
 
     if (t >= this.trafficTime) {
-      this.traffic = [new Map(), new Map()];
-      for (const a of this.match.actors) {
+      this.traffic[0].clear();
+      this.traffic[1].clear();
+      const actors = this.match.actors;
+      const pt2 = this._pt2Scratch || (this._pt2Scratch = [0, 0]);
+      for (let ai = 0; ai < actors.length; ai++) {
+        const a = actors[ai];
         if (!a.alive) continue;
-        const i = this.nav.closest([a.x, a.z]);
+        pt2[0] = a.x; pt2[1] = a.z;
+        const i = this.nav.closest(pt2);
         if (i >= 0) this.traffic[a.team].set(i, 0.95);
       }
       this.trafficTime = t + 0.35;
+    }
+
+    // Cache exponential velocity smoothing factors for current substep dt (0 Math.exp/actor at 360Hz)
+    if (dt !== this._lastTickDt) {
+      this._lastTickDt = dt;
+      this._e26 = 1 - Math.exp(-26 * dt);
+      this._e24 = 1 - Math.exp(-24 * dt);
+      this._e19 = 1 - Math.exp(-19 * dt);
+      this._e148 = 1 - Math.exp(-14.8 * dt);
+      this._e128 = 1 - Math.exp(-12.8 * dt);
     }
 
     // Compute match-point proximity (kills remaining for either side) for late-game human tension!
     const rem0 = Number.isFinite(this.match.goals[0]) ? Math.max(0, this.match.goals[0] - this.match.scores[0]) : 99;
     const rem1 = Number.isFinite(this.match.goals[1]) ? Math.max(0, this.match.goals[1] - this.match.scores[1]) : 99;
     const killsToWin = Math.min(rem0, rem1);
+    const hasShots = this.match.shots.length > 0;
+    const actors = this.match.actors;
 
-    for (const a of this.match.actors) {
+    for (let ai = 0; ai < actors.length; ai++) {
+      const a = actors[ai];
       if (!a.alive || a.human || (this.teamFilter != null && a.team !== this.teamFilter)) continue;
-      const b = this.brains.get(a.id);
+      let b = a._nv2B;
+      if (!b || b._ownerNv !== this) {
+        b = this.brains.get(a.id);
+        if (b) { b._ownerNv = this; a._nv2B = b; }
+      }
       if (!b) continue;
       const cog = this.teams[a.team];
       const isSpy = !!b.spy;
@@ -2664,36 +2780,63 @@ export class NV2 extends NV13Pro {
       }
 
       if (t - b.damageClock > 1.45) b.recentDamage = Math.max(0, b.recentDamage - dt * 20);
-      if (b.mind) b.mind.step(a, dt, t, b.seen, {aliveAllies: allies.length, aliveEnemies: enemyCount, killsToWin, metrics: this.metrics});
-      // NV2.6 Force somatic audio/gesture drain (Blind-side Startle Gasp + Deep-Breath Reset Exhale!)
-      if (b.forceMode && b.mind?.consumePendingAudioEvent) {
-        const sEv = b.mind.consumePendingAudioEvent();
-        if (sEv) {
-          this.emitForceSignal(a, sEv.kind === 'startle' ? 'STARTLE' : 'BREATH_RESET');
-        }
-      }
-      if (b.inference) b.inference.step(a, dt, t, b.seen);
-      const prevComAbort = b.ddm ? t < b.ddm.comAbortUntil : false;
-      const ddmOut = b.ddm ? b.ddm.step(a, b, dt, t, b.mind, b.tom, this.metrics) : null;
-      if (ddmOut?.changeOfMindAbort && b.cover) {
-        b.planAt = Math.min(b.planAt, t + 0.04);
-        if (b.forceMode && !prevComAbort) {
-          this.emitForceSignal(a, 'CHANGE_OF_MIND', {gesture: FORCE_GESTURES.BREATH_SLUMP});
-        }
-      }
-      if (b.vision) b.vision.decayUnseen(dt, t, a);
 
-      // Active 360Hz 3D incoming-projectile trajectory dodge (walkable 6-dir + cover priority!)
-      this.detectIncoming(a, b);
-      if (isSpy) computeSpyDodge(this, a, b, b.spy);
-      else this.dodgeIncomingShots(a, b);
+      // MultiRate-CognitiveCoalescing (60Hz exact-dt ODE integration for psyche/inference/DDM/vision)
+      b._cogAccum += dt;
+      const runCog = !b._cogReady || b._cogAccum >= (1 / 60 - 1e-6);
+      let ddmOut = b._lastDdmOut;
+      let cogDt = 0;
+      if (runCog) {
+        cogDt = b._cogAccum;
+        b._cogAccum = 0;
+        b._cogReady = true;
+        if (b.mind) {
+          const mc = b._mindCtx;
+          mc.aliveAllies = allies.length;
+          mc.aliveEnemies = enemyCount;
+          mc.killsToWin = killsToWin;
+          mc.metrics = this.metrics;
+          b.mind.step(a, cogDt, t, b.seen, mc);
+        }
+        // NV2.6 Force somatic audio/gesture drain (Blind-side Startle Gasp + Deep-Breath Reset Exhale!)
+        if (b.forceMode && b.mind?.consumePendingAudioEvent) {
+          const sEv = b.mind.consumePendingAudioEvent();
+          if (sEv) {
+            this.emitForceSignal(a, sEv.kind === 'startle' ? 'STARTLE' : 'BREATH_RESET');
+          }
+        }
+        if (b.inference) b.inference.step(a, cogDt, t, b.seen);
+        const prevComAbort = b.ddm ? t < b.ddm.comAbortUntil : false;
+        ddmOut = b.ddm ? b.ddm.step(a, b, cogDt, t, b.mind, b.tom, this.metrics) : null;
+        b._lastDdmOut = ddmOut;
+        if (ddmOut?.changeOfMindAbort && b.cover) {
+          b.planAt = Math.min(b.planAt, t + 0.04);
+          if (b.forceMode && !prevComAbort) {
+            this.emitForceSignal(a, 'CHANGE_OF_MIND', {gesture: FORCE_GESTURES.BREATH_SLUMP});
+          }
+        }
+        if (b.vision) b.vision.decayUnseen(cogDt, t, a);
+      }
+
+      // Active 3D incoming-projectile trajectory dodge (O(1) skip when no shots; 120Hz when shots live!)
+      if (hasShots) {
+        b._dodgeAccum += dt;
+        if (b._dodgeAccum >= (1 / 120 - 1e-6)) {
+          b._dodgeAccum = 0;
+          this.detectIncoming(a, b);
+          if (isSpy) computeSpyDodge(this, a, b, b.spy);
+          else this.dodgeIncomingShots(a, b);
+        }
+      } else {
+        b._dodgeAccum = 0;
+      }
 
       if (t >= b.sightAt) {
         this.perceive(a, b);
         b.sightAt = t + (isSpy ? (b.seen ? 0.028 : 0.062) : (b.seen ? 0.060 : 0.125));
       }
-      // NV2.5 humain / NV 2.4 Manusia Active Tactical Smoke Deployment (escape / player-save / tanker screen!)
-      if (b.tactics?.evaluateSmokeDeploy) {
+      // NV2.5 humain / NV 2.4 Manusia Active Tactical Smoke Deployment (coalesced to 60Hz cog cadence)
+      if (runCog && b.tactics?.evaluateSmokeDeploy) {
         const smokeReason = b.tactics.evaluateSmokeDeploy(a, b, this.match, t, b.mind, allies, this.metrics);
         if (smokeReason) {
           this.comms.emitCallout(a.team, a.id, -1, a.x, a.z, 'SMOKE_OUT', t, this.metrics, {reason: smokeReason});
@@ -2707,11 +2850,14 @@ export class NV2 extends NV13Pro {
       }
       const p = b.pose || {crouch: false, lean: 0, ads: false};
       const wantCrouch = !!(p.crouch || t < b.crouchFeintUntil || (b.mind?.isSuppressed() && b.cover && !b.seen)) && !!a.onGround;
-      if (b.vault && a.onGround && t - b.jumpAt > 2.8 && dist2(b.vault.x, b.vault.z, a.x, a.z) < 3.55) {
-        a.vy = 6.35;
-        a.onGround = false;
-        b.jumpAt = t;
-        this.metrics.jump++;
+      if (b.vault && a.onGround && t - b.jumpAt > 2.8) {
+        const vdx = b.vault.x - a.x, vdz = b.vault.z - a.z;
+        if (vdx * vdx + vdz * vdz < 12.6025) {
+          a.vy = 6.35;
+          a.onGround = false;
+          b.jumpAt = t;
+          this.metrics.jump++;
+        }
       }
       const newPhase = !a.onGround ? '跳躍' : Math.abs(p.lean) > 0.15 ? '覗き' : wantCrouch ? 'しゃがみ' : p.ads ? '照準' : '歩行';
       if (newPhase !== b.phase) {
@@ -2723,11 +2869,22 @@ export class NV2 extends NV13Pro {
       postureStep(a, dt, wantCrouch, p.lean, p.ads);
 
       // NV2.3+ Tactical Silent Walk (sprintAmt <= 0.30 -> zero EchoPulse footsteps!) vs Adrenaline Sprint!
+      // Coalesced to 60Hz cognitive cadence with instant invalidation on state/sight/dodge/feint transitions
+      const dodgingShot = t < b.dodgeUntil;
       let silentWalk = false;
       if (b.tactics) {
-        const pace = b.tactics.computeMovementPace(a, b, t, b.mind, isSpy);
-        a.paceFactor = pace.paceFactor;
-        silentWalk = pace.silentWalk;
+        const seenFlag = !!b.seen;
+        const feintPhase = b.tom ? b.tom.feintPhase : 'none';
+        if (runCog || !b._cachedPace || b._paceState !== b.state || b._paceSeen !== seenFlag || b._paceDodge !== dodgingShot || b._paceFeint !== feintPhase) {
+          const pace = b.tactics.computeMovementPace(a, b, t, b.mind, isSpy);
+          b._paceState = b.state;
+          b._paceSeen = seenFlag;
+          b._paceDodge = dodgingShot;
+          b._paceFeint = feintPhase;
+          b._cachedPace = pace;
+        }
+        a.paceFactor = b._cachedPace.paceFactor;
+        silentWalk = b._cachedPace.silentWalk;
       } else {
         const sprinting = b.state === '戦術退避' || b.state === '連携側面展開' || b.state === 'リロード狩り'
           || b.state === '補給確保' || b.state === '前進展開' || b.state === '一斉突入'
@@ -2742,10 +2899,14 @@ export class NV2 extends NV13Pro {
         a.landCompress = clamp(Math.abs(preVy) / 7.5, 0.25, 1.0);
       }
 
-      while (b.path.length && dist2(b.path[0][0], b.path[0][1], a.x, a.z) < 0.65) b.path.shift();
+      while (b.path.length) {
+        const p0 = b.path[0];
+        const pdx = p0[0] - a.x, pdz = p0[1] - a.z;
+        if (pdx * pdx + pdz * pdz >= 0.4225) break;
+        b.path.shift();
+      }
       const pt = b.path[0];
-      let targetX = pt ? pt[0] : a.x, targetZ = pt ? pt[1] : a.z;
-      let dx = pt ? targetX - a.x : 0, dz = pt ? targetZ - a.z : 0, L = Math.hypot(dx, dz);
+      let dx = pt ? pt[0] - a.x : 0, dz = pt ? pt[1] - a.z : 0, L = Math.sqrt(dx * dx + dz * dz);
 
       // NV 2.4+ Curved Corner-Rounding: smoothly arc toward upcoming waypoint instead of sharp 90-deg bot snaps!
       if (b.manusiaMode && pt && b.path.length >= 2 && L < 2.2 && L > 0.35) {
@@ -2756,18 +2917,22 @@ export class NV2 extends NV13Pro {
         if (walkable(bx, bz, 0.44, a.y)) {
           dx = bx - a.x;
           dz = bz - a.z;
-          L = Math.hypot(dx, dz);
-          if (this.tickSeq % 90 === a.id % 90) this.metrics.manusiaCurvedTurns++;
+          L = Math.sqrt(dx * dx + dz * dz);
+          if (this.tickSeq % 45 === a.id % 45) this.metrics.manusiaCurvedTurns++;
         }
       }
       if (L) { dx /= L; dz /= L; }
 
       // Active 3D Projectile Dodge Override + Anti-Trade Post-Kill Slide + Acoustic Feint + Asymmetric Strafe!
-      const dodgingShot = t < b.dodgeUntil;
-      const closeDuelNow = !!(b.seen && b.target && dist2(a.x, a.z, b.target.x, b.target.z) < 14);
+      let closeDuelNow = false;
+      if (b.seen && b.target) {
+        const cdx = a.x - b.target.x, cdz = a.z - b.target.z;
+        closeDuelNow = (cdx * cdx + cdz * cdz) < 196;
+      }
       const postKillSliding = !!(b.forceMode && !closeDuelNow && b.tom && t < (b.tom.postKillSlideUntil || -10));
       const spyInfiltrating = isSpy && (b.spy.mode === 'SPY_INFILTRATE' || b.spy.mode === 'SPY_VANISH');
-      const acousticFeint = b.tom && !spyInfiltrating ? b.tom.evaluateAcousticFeint(a, b, t, this.metrics) : null;
+      const acousticFeint = (b.tom && !spyInfiltrating && (b.tom.feintPhase !== 'none' || runCog))
+        ? b.tom.evaluateAcousticFeint(a, b, t, this.metrics) : null;
       if (dodgingShot) {
         const wD = isSpy ? 0.90 : 0.85;
         dx = dx * (1 - wD) + b.dodgeVec[0] * wD;
@@ -2782,7 +2947,7 @@ export class NV2 extends NV13Pro {
         dz = dz * 0.35 + rz * 0.65;
       } else if (acousticFeint && b.lastPos) {
         // Acoustic Footstep Feint: noisy sprint step one way -> silent wrap opposite!
-        const toX = b.lastPos[0] - a.x, toZ = b.lastPos[1] - a.z, td = Math.hypot(toX, toZ) || 1;
+        const toX = b.lastPos[0] - a.x, toZ = b.lastPos[1] - a.z, td = Math.sqrt(toX * toX + toZ * toZ) || 1;
         const fx = -toZ / td * acousticFeint.side, fz = toX / td * acousticFeint.side;
         if (walkable(a.x + fx * 0.85, a.z + fz * 0.85, 0.42, a.y)) {
           dx = dx * 0.25 + fx * 0.75;
@@ -2802,7 +2967,7 @@ export class NV2 extends NV13Pro {
             b.strafeAt = t + (isSpy ? (0.19 + b.rng() * 0.26) : (0.30 + b.rng() * 0.44));
           }
         }
-        const toX = b.target.x - a.x, toZ = b.target.z - a.z, td = Math.hypot(toX, toZ) || 1;
+        const toX = b.target.x - a.x, toZ = b.target.z - a.z, td = Math.sqrt(toX * toX + toZ * toZ) || 1;
         const sx = -toZ / td * b.strafe, sz = toX / td * b.strafe;
         const w = L ? (isSpy ? 0.54 : 0.48) : 0.90;
         dx = dx * (1 - w) + sx * w;
@@ -2813,19 +2978,24 @@ export class NV2 extends NV13Pro {
         dz = dz * 0.48 + pz * 0.52;
       }
 
-      for (const mate of this.match.actors) {
+      // Actor separation with squared-distance broadphase & zero-alloc obstructionCoords
+      for (let mi = 0; mi < actors.length; mi++) {
+        const mate = actors[mi];
         if (mate === a || !mate.alive) continue;
-        const sx = a.x - mate.x, sz = a.z - mate.z, d = Math.hypot(sx, sz);
-        const minSep = mate.team === a.team ? 2.4 : 1.4;
-        if (d > 0.005 && d < minSep) {
+        const sx = a.x - mate.x, sz = a.z - mate.z;
+        const sameTeam = mate.team === a.team;
+        const minSep = sameTeam ? 2.4 : 1.4;
+        const d2 = sx * sx + sz * sz;
+        if (d2 > 2.5e-5 && d2 < minSep * minSep) {
           if (mate.team !== a.team && obstruction(eyeOf(a), eyeOf(mate)) <= 1) continue;
-          const v = (minSep - d) * 1.45;
-          dx += sx / d * v;
-          dz += sz / d * v;
+          const d = Math.sqrt(d2);
+          const v = (minSep - d) * 1.45 / d;
+          dx += sx * v;
+          dz += sz * v;
         }
       }
 
-      const norm = Math.hypot(dx, dz);
+      const norm = Math.sqrt(dx * dx + dz * dz);
       if (norm > 0.01) { dx /= norm; dz /= norm; }
 
       const counterStrafing = t < b.counterStrafeUntil && !dodgingShot;
@@ -2840,12 +3010,13 @@ export class NV2 extends NV13Pro {
       else if (startleFreeze) speed *= 0.35;
       else if (hesitating) speed *= 0.52;
 
-      const e = 1 - Math.exp(-(counterStrafing ? 26 : dodgingShot ? (isSpy ? 24 : 19) : (isSpy ? 14.8 : 12.8)) * dt);
+      const e = counterStrafing ? this._e26 : dodgingShot ? (isSpy ? this._e24 : this._e19) : (isSpy ? this._e148 : this._e128);
       a.vx += (dx * speed - a.vx) * e;
       a.vz += (dz * speed - a.vz) * e;
       const ox = a.x, oz = a.z;
       moveActor(a, a.vx * dt, a.vz * dt);
-      const moved = Math.hypot(a.x - ox, a.z - oz);
+      const mdx = a.x - ox, mdz = a.z - oz;
+      const moved = Math.sqrt(mdx * mdx + mdz * mdz);
       a.stride += moved;
 
       // Detect subtle container-lip snag & smoothly sidestep around it
@@ -2860,10 +3031,10 @@ export class NV2 extends NV13Pro {
         b.snagTime = 0;
       }
 
-      if (b.tom && (a.sprintAmt || 0) > 0.35 && (this.tickSeq % 90 === a.id % 90)) {
+      if (b.tom && (a.sprintAmt || 0) > 0.35 && (this.tickSeq % 45 === a.id % 45)) {
         b.tom.recordSelfNoise(a.x, a.z, 'step', t);
       }
-      if (silentWalk && moved > 0.004 && (a.sprintAmt || 0) <= 0.30 && (this.tickSeq % 90 === a.id % 90)) {
+      if (silentWalk && moved > 0.004 && (a.sprintAmt || 0) <= 0.30 && (this.tickSeq % 45 === a.id % 45)) {
         this.metrics.humanSilentSteps++;
       }
 
@@ -2877,16 +3048,23 @@ export class NV2 extends NV13Pro {
       let fermatBank = null;
       let physicsAction = null;
 
-      if (!(b.seen && b.target)) {
+      const hasSeenTarget = !!(b.seen && b.target);
+      if (!hasSeenTarget) {
         // NV2.6 Force / NV2.5 humain / NV 2.4 Manusia 4-Way Harbor Physics Mastery + Suppress Pin + Corner Pre-Fire!
+        // Coalesced to 30Hz (33ms) with instant invalidation on visibility/state change
         if (b.tactics) {
-          physicsAction = b.tactics.evaluatePhysicsTactics(a, b, this.match, t, b.mind, this.metrics);
-          if (!physicsAction && !isSpy && !spyInfiltrating && b.tactics.getActiveSuppressPin) {
-            physicsAction = b.tactics.getActiveSuppressPin(a, t, this.metrics);
+          if (t >= b._tacAt || b._prevSeenFlag) {
+            b._tacAt = t + 0.033;
+            let pa = b.tactics.evaluatePhysicsTactics(a, b, this.match, t, b.mind, this.metrics);
+            if (!pa && !isSpy && !spyInfiltrating && b.tactics.getActiveSuppressPin) {
+              pa = b.tactics.getActiveSuppressPin(a, t, this.metrics);
+            }
+            if (!pa && b.tactics.evaluateCornerPreFire) {
+              pa = b.tactics.evaluateCornerPreFire(a, b, this.match, t, b.mind, this.metrics);
+            }
+            b._cachedPhysAct = pa || null;
           }
-          if (!physicsAction && b.tactics.evaluateCornerPreFire) {
-            physicsAction = b.tactics.evaluateCornerPreFire(a, b, this.match, t, b.mind, this.metrics);
-          }
+          physicsAction = b._cachedPhysAct;
           if (physicsAction) {
             suppressMode = true;
             suppressPos = physicsAction.aimPos;
@@ -2919,64 +3097,89 @@ export class NV2 extends NV13Pro {
         } else if (!suppressMode && b.state === '予測待ち伏せ' && t < b.ambushUntil) {
           fallbackYaw = b.ambushYaw;
         } else if (!suppressMode && b.gaze) {
-          const gOut = b.gaze.computeIdleGaze(a, b, fallbackYaw, t, b.mind, this.metrics, {allies});
-          fallbackYaw = gOut.yaw;
-          fallbackPitch = gOut.pitch;
+          if (t >= b._gazeAt || b._cachedGazeState !== b.state || b._prevSeenFlag) {
+            b._gazeAt = t + 0.033;
+            b._cachedGazeState = b.state;
+            b._gazeCtx.allies = allies;
+            const gOut = b.gaze.computeIdleGaze(a, b, fallbackYaw, t, b.mind, this.metrics, b._gazeCtx);
+            b._cachedGazeYaw = gOut.yaw;
+            b._cachedGazePitch = gOut.pitch;
+          }
+          fallbackYaw = b._cachedGazeYaw;
+          fallbackPitch = b._cachedGazePitch;
         } else if (!suppressMode && b.lastPos) {
           fallbackYaw = Math.atan2(b.lastPos[0] - a.x, -(b.lastPos[1] - a.z));
         }
       } else {
         b.fermatBank = null;
+        b._cachedPhysAct = null;
       }
-
-      const backstabBonus = !!(isSpy && b.seen && b.target
-        && rearAdvantage(a.x, a.z, b.target.x, b.target.z, b.target.yaw) > 0.25);
-      const urgentRearWhip = !!(
-        t - (b.underFireAt || -10) < 0.85
-        || t - (b.vision?.lastWhizAt || -10) < 0.65
-        || b.mind?.isStartled?.(t)
-      );
-      const holdingTrapAngle = !!(
-        b.state === '負傷ベイトトラップ'
-        || b.state === 'ベイト連携待機'
-        || b.state === 'プレイヤー罠待機'
-        || b.state === '予測待ち伏せ'
-        || (b.tom && t < (b.tom.postKillCheckUntil || -10))
-      );
 
       const aa = a.aa;
       const aaTracking = !!(aa?.locked && aa.level !== 'off' && aa.level !== '1.1');
       const scherpFireReady = !!(aa?.locked && aa.level === '1.5' && (aa.solveMode === 'direct' || aa.solveMode === 'pen' || aa.solveMode === 'bank'));
-      const savedYawAA = a.yaw, savedPitchAA = a.pitch;
-      const aimRes = b.humanAim.step(a, dt, t, {
-        seenTarget: (b.seen && b.target) ? b.target : null,
-        wpn,
-        fallbackYaw,
-        fallbackPitch,
-        suppressPos: suppressMode ? suppressPos : null,
-        counterStrafing,
-        dodging: dodgingShot,
-        backstabBonus,
-        primed: !!b.lastPrimed,
-        mind: b.mind,
-        tom: b.tom,
-        metrics: this.metrics,
-        urgentRearWhip,
-        holdingTrapAngle,
-        syncStaging: b.state === '同期待機',
-        syncExecuting: b.state === '同期ダブルスイング' || b.state === 'プレイヤー命令突入',
-        baitOverwatch: b.state === 'ベイト連携待機' || b.state === 'プレイヤー罠待機'
-      });
-      if (aaTracking) {
-        a.yaw = savedYawAA;
-        a.pitch = savedPitchAA;
-      }
-      b.lastYawRate = aimRes.yawRate ?? Math.abs(b.humanAim.velYaw || 0);
-      b.lastQuietEyeShot = !!aimRes.quietEyeShot;
 
-      // NV2.6 Force 360Hz 16-Bone GPU Kinetic Embodiment Update (Head-Look + IK Hand Signals + Cardiac Breath!)
-      if (b.body) {
-        b.body.step(a, b, dt, t, b.mind, b.humanAim, b.gaze);
+      // MultiRate-CognitiveCoalescing for HumanAim: 120Hz combat / 60Hz idle smooth neuromotor control with instant 360Hz wakeup!
+      b._aimAccum += dt;
+      const curTargetId = hasSeenTarget ? b.target.id : -1;
+      const aimTransition = hasSeenTarget !== b._prevSeenFlag || curTargetId !== b._prevTargetId || suppressMode !== b._prevSuppress;
+      const fireReadySoon = (hasSeenTarget || suppressMode) && a.mag > 0 && a.reload <= 0 && a.cooldown <= dt * 2 && !a.burstLeft && t >= b.burstPauseUntil;
+      const aimInterval = (!hasSeenTarget && !suppressMode && b.humanAim?.motorPhase !== 'FLICK') ? (1 / 60 - 1e-6) : (1 / 120 - 1e-6);
+      let aimRes = b._lastAimRes;
+      if (!aimRes || b._aimAccum >= aimInterval || aimTransition || fireReadySoon) {
+        const aDt = b._aimAccum;
+        b._aimAccum = 0;
+        b._prevSeenFlag = hasSeenTarget;
+        b._prevTargetId = curTargetId;
+        b._prevSuppress = suppressMode;
+
+        const backstabBonus = !!(isSpy && hasSeenTarget
+          && rearAdvantage(a.x, a.z, b.target.x, b.target.z, b.target.yaw) > 0.25);
+        const urgentRearWhip = !!(
+          t - (b.underFireAt || -10) < 0.85
+          || t - (b.vision?.lastWhizAt || -10) < 0.65
+          || b.mind?.isStartled?.(t)
+        );
+        const holdingTrapAngle = !!(
+          b.state === '負傷ベイトトラップ'
+          || b.state === 'ベイト連携待機'
+          || b.state === 'プレイヤー罠待機'
+          || b.state === '予測待ち伏せ'
+          || (b.tom && t < (b.tom.postKillCheckUntil || -10))
+        );
+
+        const savedYawAA = a.yaw, savedPitchAA = a.pitch;
+        const ao = b._aimOpts;
+        ao.seenTarget = hasSeenTarget ? b.target : null;
+        ao.wpn = wpn;
+        ao.fallbackYaw = fallbackYaw;
+        ao.fallbackPitch = fallbackPitch;
+        ao.suppressPos = suppressMode ? suppressPos : null;
+        ao.counterStrafing = counterStrafing;
+        ao.dodging = dodgingShot;
+        ao.backstabBonus = backstabBonus;
+        ao.primed = !!b.lastPrimed;
+        ao.mind = b.mind;
+        ao.tom = b.tom;
+        ao.metrics = this.metrics;
+        ao.urgentRearWhip = urgentRearWhip;
+        ao.holdingTrapAngle = holdingTrapAngle;
+        ao.syncStaging = b.state === '同期待機';
+        ao.syncExecuting = b.state === '同期ダブルスイング' || b.state === 'プレイヤー命令突入';
+        ao.baitOverwatch = b.state === 'ベイト連携待機' || b.state === 'プレイヤー罠待機';
+        aimRes = b.humanAim.step(a, aDt, t, ao);
+        if (aaTracking) {
+          a.yaw = savedYawAA;
+          a.pitch = savedPitchAA;
+        }
+        b._lastAimRes = aimRes;
+        b.lastYawRate = aimRes.yawRate ?? Math.abs(b.humanAim.velYaw || 0);
+        b.lastQuietEyeShot = !!aimRes.quietEyeShot;
+      }
+
+      // NV2.6 Force 60Hz exact-dt 16-Bone GPU Kinetic Embodiment Update (Head-Look + IK Hand Signals + Cardiac Breath!)
+      if (runCog && b.body) {
+        b.body.step(a, b, cogDt, t, b.mind, b.humanAim, b.gaze);
       }
 
       // Tactical Reload Discipline + NV 2.4 Manusia Post-Kill Habitual Reload!
@@ -2999,7 +3202,7 @@ export class NV2 extends NV13Pro {
         const tol = (fermatBank ? 0.055 : physicsAction ? 0.095 : suppressMode ? 0.14 : (isSpy ? 0.048 : 0.060) + (d < 14 ? 0.034 : 0)) * (1 + b.spread * 0.20);
         const maxEngageD = Math.max(72, band.max * 1.42);
         if (scherpFireReady || ((aaTracking || aimRes.alignPerceived < tol) && d < maxEngageD)) {
-          if (!scherpFireReady && !suppressMode && d > 18 && (a.gun === 'SW T' || a.gun === 'MS10' || a.gun === 'SRA') && Math.hypot(a.vx, a.vz) > 3.1 && t > b.counterStrafeUntil + 0.36) {
+          if (!scherpFireReady && !suppressMode && d > 18 && (a.gun === 'SW T' || a.gun === 'MS10' || a.gun === 'SRA') && (a.vx * a.vx + a.vz * a.vz) > 9.61 && t > b.counterStrafeUntil + 0.36) {
             b.counterStrafeUntil = t + 0.058;
             this.metrics.counterStrafes++;
           }
