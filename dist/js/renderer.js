@@ -14,6 +14,7 @@ import {AERO_W, AERO_H} from './aerovortex.js';
 import {THERMO_W, THERMO_H} from './thermoflux.js';
 import {WATER_HEIGHT} from './yard.js';
 import {RIG_BONE_COUNT, IDENTITY_PALETTE, solveCharacterPalette} from './rig.js';
+import {HemoFluxGL} from './hemoflux.js';
 
 const I = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
 export const sizes = {HD: [1280, 720], FHD: [1920, 1080], '2K': [2560, 1440]};
@@ -340,6 +341,7 @@ export class Renderer {
     this.fluxGI = new FluxGI();
     this.fluxGI.initGL(gl);
     this.schlieren = new SchlierenOptics();
+    this.hemoFluxGL = new HemoFluxGL(gl, shader.shared, shader.postVS);
     this.floatHDR = this.khdr.floatHDR;
 
     const [textures, wave] = await Promise.all([loadTextures(gl), loadScenery(false)]);
@@ -869,6 +871,7 @@ export class Renderer {
       aeroOn = !lite && cfg.aeroVortex !== false && !!match?.aeroVortex,
       thermoOn = !lite && cfg.thermoFlux !== false && !!match?.thermoFlux,
       resonanceOn = !lite && cfg.resonance !== false && !!match?.resonance,
+      hemoOn = cfg.hemoFlux !== false && !!match?.hemoFlux,
       chronoOn = cfg.chronoTrace !== false && !!match?.chronoTrace,
       sfMode = this.shadowMode(),
       offscreen = this.useOffscreen(),
@@ -890,6 +893,7 @@ export class Renderer {
     const fwdF = this._fwdF32; fwdF[0] = fx0; fwdF[1] = fy0; fwdF[2] = fz0;
     const rightF = this._rightF32; rightF[0] = rx0; rightF[1] = ry0; rightF[2] = rz0;
     const upF = this._upF32; upF[0] = ux0; upF[1] = uy0; upF[2] = uz0;
+    this.lastCamBasis = {eye: eyeF, right: rightF, up: upF, fwd: fwdF};
 
     const fy = Math.tan(cam.fov * Math.PI / 360),
       fx = fy * this.aspect;
@@ -921,13 +925,15 @@ export class Renderer {
     if (offscreen) this.khdr.ensure(this.canvas.width, this.canvas.height);
     this.lastVP = vp;
 
-    // Advance FluxGI 1.0, SchlierenOptics 1.0, AeroVortex 1.0, ThermoFlux 1.0 & ResonanceCore 1.0 GPU fields
+    // Advance FluxGI 1.0, SchlierenOptics 1.0, AeroVortex 1.0, ThermoFlux 1.0, ResonanceCore 1.0 & HemoFlux 1.0 fields
     if (fluxGIOn && this.fluxGI) this.fluxGI.update(match, view.paused ? 0 : dt, true);
     if (resonanceOn) match.resonance.packUniforms();
     if (schlierenOn && this.schlieren) {
       this.schlieren.step(match, view.paused ? 0 : dt);
       this.schlieren.project(vp, eye, cam.fov, this.aspect);
     }
+    const rainFactor = match?.weather === 'disaster' ? 1 : match?.weather === 'storm' ? 0.65 : match?.weather === 'rain' ? 0.35 : 0;
+    const visorCount = (hemoOn && !lite && match?.hemoFlux) ? match.hemoFlux.stepVisor(view.paused ? 0 : dt, rainFactor) : 0;
     const flirTarget = (thermoOn && view.flir) ? 1 : 0;
     this.flirBlend = !thermoOn || view.flirSnap ? flirTarget : this.flirBlend + (flirTarget - this.flirBlend) * (1 - Math.exp(-16 * dt));
 
@@ -1170,6 +1176,7 @@ export class Renderer {
     fxOpts.viewerActor = view.spectateActor || match?.player || null;
     fxOpts.fpActorId = fpActor ? fpActor.id : -1;
     fxOpts.camPos = cam.pos;
+    fxOpts.hemoFluxGL = !!(hemoOn && this.hemoFluxGL);
     const fxMesh = movingDetails(match, time, !lite && (extra || khdrOn), lite, fxOpts);
     this.uploadDynamic(this.effects, fxMesh);
     if (this.effects.count > 0) {
@@ -1194,6 +1201,26 @@ export class Renderer {
     if (sk.uWeather != null) gl.uniform4fv(sk.uWeather, this.weatherVec);
     gl.bindVertexArray(this.empty);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+    // 3b. HemoFlux 1.0 Dedicated Physically-Based 3D Blood Pass (Forensic BPA Decals, Huppert Pools, Wall Rivulets, Backlit Aerosol Mist, Glossy Ribbons & Droplets)
+    if (hemoOn && this.hemoFluxGL && match?.hemoFlux) {
+      this.hemoFluxGL.renderWorld(match.hemoFlux, {
+        vp,
+        eye: eyeF,
+        right: rightF,
+        up: upF,
+        frustum: this._mainFrustum,
+        output: sceneOutput,
+        khdrOn,
+        quality,
+        weatherVec: this.weatherVec,
+        lightPos: this.lightPos,
+        lightCol: this.lightCol,
+        lightCount: this.activeLightCount,
+        lite
+      });
+      this._cullEnabled = false;
+    }
 
     // 4. Shadow Flame 1.0 Pro Half-Res Screen-Space Pass (Analytical Ray Basis + Hoisted Linear Stepping!)
     let sfScreenTex = null;
@@ -1346,7 +1373,19 @@ export class Renderer {
         flirBlend: this.flirBlend,
         flirActors: this.flirActors,
         invVP,
-        camEye: eyeF
+        camEye: eyeF,
+        visorOn: hemoOn && !lite && visorCount > 0,
+        visorCount,
+        visorDrops: match?.hemoFlux?.uVisorDrop || null,
+        visorMeta: match?.hemoFlux?.uVisorMeta || null
+      });
+    } else if (hemoOn && !lite && visorCount > 0 && this.hemoFluxGL && match?.hemoFlux) {
+      this.hemoFluxGL.renderVisorDirect(match.hemoFlux, {
+        aspect: this.aspect,
+        output: finalOutput,
+        khdrOn,
+        weatherVec: this.weatherVec,
+        emptyVao: this.empty
       });
     }
 

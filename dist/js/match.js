@@ -22,6 +22,7 @@ import {KineticFlowField} from './kineticflow.js';
 import {sweptMovingBodyHit, LabTelemetry} from './quantumtick.js';
 import {createMatchAI, normalizeAiModelId, aiVersionDisplay} from './ai-arena.js';
 import {muzzleOffset} from './models.js';
+import {HemoFluxEngine} from './hemoflux.js';
 
 const baseSpeed = 360, baseInterval = .24;
 export const BASE_SHIELD_MAX = 25;
@@ -365,9 +366,6 @@ export class Match {
     this.effects = [];
     this.casings = [];
     this.scorches = [];
-    this.bloodDroplets = [];
-    this.bloodMist = [];
-    this.bloodDecals = [];
     this.tankers = tankers.map(t => ({...t, cooldown: 0, maxCooldown: 25, pulse: 0, lastTeam: -1}));
     this.baizers = baizerPickups.map(b => ({...b, cooldown: 0, maxCooldown: 24, pulse: 0}));
     if (Number.isFinite(config.ammoSeed)) {
@@ -382,6 +380,10 @@ export class Match {
     this.reinforceUsesLeft = (!!config.allNpc || this.spectating || this.isZombieChallenge) ? 0 : REINFORCE_MAX_USES;
     this.reinforceWave = 0;
     this.rng = random(1939);
+    this.hemoFlux = new HemoFluxEngine(this.rng);
+    this.bloodDroplets = this.hemoFlux.droplets;
+    this.bloodMist = this.hemoFlux.mists;
+    this.bloodDecals = this.hemoFlux.decals;
     if (Number.isFinite(config.skillSeed)) {
       let sMix = Math.imul((config.skillSeed | 0) ^ 0x9e3779b9, 0x85ebca6b) >>> 0;
       sMix = Math.imul(sMix ^ (sMix >>> 13), 0xc2b2ae35) >>> 0;
@@ -1346,178 +1348,12 @@ export class Match {
     this.event('melee', {actor: a, hit: !!best, target: best, damage: dmg});
     return true;
   }
-  spawnBloodSplatter(v, hitPos, shotDir, hpLoss, isKill = false) {
-    if (!v || v.isDrone || v.inMech || hpLoss <= 0) return;
-    const px = hitPos ? hitPos[0] : v.x;
-    const py = hitPos ? hitPos[1] : (v.y + 1.15);
-    const pz = hitPos ? hitPos[2] : v.z;
-    let dx = shotDir ? shotDir[0] : (this.rng() - .5);
-    let dy = shotDir ? shotDir[1] : 0.1;
-    let dz = shotDir ? shotDir[2] : (this.rng() - .5);
-    const dl = Math.hypot(dx, dy, dz) || 1;
-    dx /= dl; dy /= dl; dz /= dl;
-    // Build tangent frame around bullet direction for cone arterial spray
-    const tx = Math.abs(dy) > 0.9 ? 1 : -dz;
-    const tz = Math.abs(dy) > 0.9 ? 0 : dx;
-    const tl = Math.hypot(tx, tz) || 1;
-    const ux = tx / tl, uz = tz / tl;
-    const wx = -dy * uz, wy = dx * uz - dz * ux, wz = dy * ux;
-
-    const dropCount = isKill ? 34 : clamp(Math.round(10 + hpLoss * 1.1), 12, 26);
-    for (let i = 0; i < dropCount; i++) {
-      const r1 = this.rng(), r2 = this.rng(), r3 = this.rng();
-      const ang = r1 * Math.PI * 2;
-      const isBack = i < dropCount * 0.22;
-      const isHeavy = i >= dropCount * 0.72;
-      const cone = isHeavy ? (0.45 + r2 * 0.65) : isBack ? (0.28 + r2 * 0.42) : (0.08 + r2 * 0.38);
-      const ca = Math.cos(ang) * cone, sa = Math.sin(ang) * cone;
-      const dirSign = isBack ? -0.65 : isHeavy ? 0.35 : 1.0;
-      const spd = isHeavy ? (1.0 + r3 * 2.4) : isBack ? (1.8 + r3 * 3.4) : (3.6 + r3 * 7.8 + (isKill ? 2.4 : 0));
-      const vx = (dx * dirSign + ux * ca + wx * sa) * spd;
-      const vy = (dy * dirSign + wy * sa + (isHeavy ? -0.15 : 0.18 + r2 * 0.32)) * spd;
-      const vz = (dz * dirSign + uz * ca + wz * sa) * spd;
-      this.bloodDroplets.push({
-        x: px + (this.rng() - .5) * .12,
-        y: Math.max(0.15, py + (this.rng() - .5) * .16),
-        z: pz + (this.rng() - .5) * .12,
-        vx, vy, vz,
-        r: isHeavy ? (0.026 + r3 * 0.022) : (0.011 + r3 * 0.016),
-        tier: i % 3, // 0=bright oxygenated arterial, 1=deep crimson, 2=dark venous oxblood
-        life: 0.75 + r2 * 0.85,
-        maxLife: 1.6
-      });
-    }
-    if (this.bloodDroplets.length > 260) this.bloodDroplets.splice(0, this.bloodDroplets.length - 260);
-
-    // Fine aerosolized hemoglobin mist puffs at entry & exit wounds
-    const mistCount = isKill ? 7 : 3;
-    for (let m = 0; m < mistCount; m++) {
-      const exitShift = (m % 2 === 0 ? 0.22 : -0.08);
-      this.bloodMist.push({
-        x: px + dx * exitShift + (this.rng() - .5) * .18,
-        y: Math.max(0.2, py + (this.rng() - .5) * .18),
-        z: pz + dz * exitShift + (this.rng() - .5) * .18,
-        vx: dx * (0.9 + this.rng() * 1.4) + (this.rng() - .5) * .6,
-        vy: 0.25 + this.rng() * 0.55,
-        vz: dz * (0.9 + this.rng() * 1.4) + (this.rng() - .5) * .6,
-        r: 0.14 + this.rng() * 0.16,
-        grow: isKill ? 0.85 : 0.55,
-        life: isKill ? 0.85 : 0.52,
-        maxLife: isKill ? 0.85 : 0.52
-      });
-    }
-    if (this.bloodMist.length > 70) this.bloodMist.splice(0, this.bloodMist.length - 70);
-
-    // On kill: spawn an expanding coagulating arterial blood pool beneath fallen body!
-    if (isKill) {
-      const groundY = floorAt(v.x, v.z, v.y + 0.5);
-      this.bloodDecals.push({
-        x: v.x + dx * 0.25,
-        y: groundY + 0.018,
-        z: v.z + dz * 0.25,
-        nx: 0, ny: 1, nz: 0,
-        vx: dx, vz: dz,
-        r: 0.22,
-        targetR: 0.92 + this.rng() * 0.35,
-        stretch: 1.25,
-        pool: true,
-        life: 28,
-        maxLife: 28
-      });
-      if (this.bloodDecals.length > 180) this.bloodDecals.shift();
-    }
-
-    const pl = this.player;
-    const distToPlayer = pl ? Math.hypot(px - pl.x, py - (pl.y + 1.4), pz - pl.z) : 99;
-    this.event('bloodSplatter', {victim: v, point: [px, py, pz], dir: [dx, dy, dz], hpLoss, isKill, distToPlayer});
+  spawnBloodSplatter(v, hitPos, shotDir, hpLoss, isKill = false, meta = null) {
+    const ev = this.hemoFlux.onImpact(v, hitPos, shotDir, hpLoss, isKill, meta, this);
+    if (ev) this.event('bloodSplatter', ev);
   }
   updateBlood(dt) {
-    const droplets = this.bloodDroplets;
-    const windBase = this.weatherSpec?.windBase || 0;
-    const rOut = this._bloodRay || (this._bloodRay = {
-      t: 0, tExit: 0, point: [0, 0, 0], normal: [0, 1, 0],
-      exitPoint: null, exitNormal: null, _exitPt: [0, 0, 0], _exitNrm: [0, 1, 0],
-      thickness: Infinity, mat: 'steel', box: null
-    });
-    let dw = 0;
-    for (let i = 0; i < droplets.length; i++) {
-      const d = droplets[i];
-      d.life -= dt;
-      if (d.life <= 0) continue;
-      const drag = Math.max(0, 1 - 1.35 * dt);
-      d.vx = d.vx * drag + windBase * 0.22 * dt;
-      d.vy -= 9.8 * this.gravityScale * dt;
-      d.vz = d.vz * drag + windBase * 0.14 * dt;
-      const nx = d.x + d.vx * dt, ny = d.y + d.vy * dt, nz = d.z + d.vz * dt;
-      const fl = floorAt(nx, nz, d.y + 0.25);
-      let splatted = false;
-      if (ny <= fl + 0.02) {
-        splatted = true;
-        const hSpd = Math.hypot(d.vx, d.vz);
-        if (this.bloodDecals.length < 180 || this.rng() < 0.35) {
-          this.bloodDecals.push({
-            x: nx, y: fl + 0.016, z: nz,
-            nx: 0, ny: 1, nz: 0,
-            vx: d.vx / (hSpd || 1), vz: d.vz / (hSpd || 1),
-            r: clamp(d.r * 5.2, 0.06, 0.24),
-            targetR: clamp(d.r * 6.5, 0.08, 0.28),
-            stretch: clamp(1 + hSpd * 0.22, 1.0, 2.8),
-            pool: false,
-            life: 22,
-            maxLife: 22
-          });
-          if (this.bloodDecals.length > 180) this.bloodDecals.shift();
-        }
-      } else if (raycastMaterialOut(d.x, d.y, d.z, nx, ny, nz, rOut)) {
-        splatted = true;
-        const p = rOut.point, n = rOut.normal;
-        this.bloodDecals.push({
-          x: p[0] + n[0] * 0.015, y: p[1] + n[1] * 0.015, z: p[2] + n[2] * 0.015,
-          nx: n[0], ny: n[1], nz: n[2],
-          vx: 0, vz: 0,
-          r: clamp(d.r * 5.6, 0.07, 0.26),
-          targetR: clamp(d.r * 6.8, 0.09, 0.30),
-          stretch: 1.4,
-          pool: false,
-          life: 24,
-          maxLife: 24
-        });
-        if (this.bloodDecals.length > 180) this.bloodDecals.shift();
-      }
-      if (!splatted) {
-        d.x = nx; d.y = ny; d.z = nz;
-        droplets[dw++] = d;
-      }
-    }
-    droplets.length = dw;
-
-    const mist = this.bloodMist;
-    let mw = 0;
-    for (let i = 0; i < mist.length; i++) {
-      const m = mist[i];
-      m.life -= dt;
-      if (m.life <= 0) continue;
-      m.x += (m.vx + windBase * 0.12) * dt;
-      m.y += m.vy * dt;
-      m.z += m.vz * dt;
-      m.vx *= Math.max(0, 1 - 2.4 * dt);
-      m.vy *= Math.max(0, 1 - 2.2 * dt);
-      m.vz *= Math.max(0, 1 - 2.4 * dt);
-      m.r += m.grow * dt;
-      mist[mw++] = m;
-    }
-    mist.length = mw;
-
-    const decals = this.bloodDecals;
-    let cw = 0;
-    for (let i = 0; i < decals.length; i++) {
-      const dc = decals[i];
-      dc.life -= dt;
-      if (dc.life <= 0) continue;
-      if (dc.r < dc.targetR) dc.r = Math.min(dc.targetR, dc.r + (dc.pool ? 0.24 : 0.45) * dt);
-      decals[cw++] = dc;
-    }
-    decals.length = cw;
+    this.hemoFlux.update(dt, this);
   }
   updateDrones(dt) {
     const actors = this.actors;
@@ -2065,7 +1901,7 @@ export class Match {
     const anyShieldHit = baizerAbsorbed > 0 || absorbed > 0;
     const anyShieldBreak = baizerBreak || shieldBreak;
     const kill = v.hp <= 0;
-    if (hpLoss > 0) this.spawnBloodSplatter(v, meta?.point, dir, hpLoss, kill);
+    if (hpLoss > 0) this.spawnBloodSplatter(v, meta?.point, dir, hpLoss, kill, meta);
     if (!owner.isHeli) this.telemetry.onHit(owner, v, power, {baizerAbsorbed, kill, shot: meta?.shot, time: meta?.time ?? this.time});
     if (meta?.shot) {
       const outcome = kill ? 'kill' : anyShieldBreak ? 'break' : anyShieldHit ? 'shield' : 'hit';

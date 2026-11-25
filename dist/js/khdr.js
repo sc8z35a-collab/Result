@@ -12,6 +12,7 @@ import {clamp} from './geometry.js';
 import {SCHLIEREN_COMPOSITE_GLSL} from './schlieren.js';
 import {AERO_COMPOSITE_GLSL} from './aerovortex.js';
 import {THERMO_COMPOSITE_GLSL} from './thermoflux.js';
+import {HEMO_VISOR_COMPOSITE_GLSL} from './hemoflux.js';
 
 function makeProgram(gl, vs, fs) {
   const obj = gl.createProgram(), sh = [];
@@ -328,11 +329,13 @@ function buildCompositeFS(flags = null) {
     flags.khdr ? '#define SFZ_KHDR 1' : '#define SFZ_KHDR 0',
     flags.bloom ? '#define SFZ_BLOOM 1' : '#define SFZ_BLOOM 0',
     flags.fxaa ? '#define SFZ_FXAA 1' : '#define SFZ_FXAA 0',
-    flags.sfScreen ? '#define SFZ_SFSCREEN 1' : '#define SFZ_SFSCREEN 0'
+    flags.sfScreen ? '#define SFZ_SFSCREEN 1' : '#define SFZ_SFSCREEN 0',
+    flags.visorBlood ? '#define SFZ_VISOR_BLOOD 1' : '#define SFZ_VISOR_BLOOD 0'
   ].join('\n') : '';
   const includeSchlieren = !isSpec || flags.schlieren;
   const includeAero = !isSpec || flags.aero;
   const includeFlir = !isSpec || flags.flir;
+  const includeVisorBlood = !isSpec || flags.visorBlood;
 
   return `#version 300 es
 precision highp float;
@@ -359,6 +362,7 @@ ${KHDR_TONE_GLSL}
 ${includeSchlieren ? SCHLIEREN_COMPOSITE_GLSL : ''}
 ${includeAero ? AERO_COMPOSITE_GLSL : ''}
 ${includeFlir ? THERMO_COMPOSITE_GLSL : ''}
+${includeVisorBlood ? HEMO_VISOR_COMPOSITE_GLSL : ''}
 
 vec3 dec(vec3 v){
 #ifdef SFZ_LINEAR
@@ -607,6 +611,20 @@ ${(includeAero || includeFlir) ? `
   }
 #endif
 
+  // 5b. HemoFlux 1.0 Optical Visor Blood Refraction + Beer-Lambert Absorption + Stick-Slip Smear Trails
+${includeVisorBlood ? `
+  if(uVisorOn==1 && uVisorCount>0){
+    float vh, vSmear, vDry, vOxy;
+    vec2 vGrad;
+    hemoVisorEvaluate(vUV, uVisorAspect, vh, vGrad, vSmear, vDry, vOxy);
+    if(vh>.015 || vSmear>.015){
+      vec2 refrUV=clamp(vUV-vec2(vGrad.x/max(uVisorAspect,0.5),vGrad.y)*0.022*(1.-vDry*0.65),vec2(.001),vec2(.999));
+      vec3 refrCol=dec(texture(uScene,refrUV).rgb);
+      c=hemoVisorShade(c,refrCol,vh,vGrad,vSmear,vDry,vOxy);
+    }
+  }
+` : ''}
+
   // 6. Subtle optical edge vignette + hash-without-sine anti-banding micro-dither
   float vig=1.-r2*(uKHDR==1?.36:.40);
   c*=vig;
@@ -692,7 +710,8 @@ export class KHDRPipeline {
       (flags.khdr ? 16 : 0) |
       (flags.bloom ? 32 : 0) |
       (flags.fxaa ? 64 : 0) |
-      (flags.sfScreen ? 128 : 0);
+      (flags.sfScreen ? 128 : 0) |
+      (flags.visorBlood ? 256 : 0);
     let prog = this._compVariants.get(key);
     if (!prog) {
       prog = makeProgram(this.gl, this.postVS, buildCompositeFS(flags));
@@ -863,7 +882,8 @@ export class KHDRPipeline {
     w, h, finalOutput, khdrOn, hasBloom, useFXAA, sfScreenTex, dt, shake, hurt, time, emptyVao,
     schlierenOn = false, shockCount = 0, shocks = null, shockMeta = null, gunHeat = 0, aspect = 16 / 9,
     aeroOn = false, aeroTex = null, aeroBounds = null, thermoTex = null, fluxGITex = null, fluxGIOn = false,
-    flirBlend = 0, flirActors = null, invVP = null, camEye = null
+    flirBlend = 0, flirActors = null, invVP = null, camEye = null,
+    visorOn = false, visorCount = 0, visorDrops = null, visorMeta = null
   }) {
     const gl = this.gl, t = this.targets;
     gl.disable(gl.DEPTH_TEST);
@@ -875,6 +895,7 @@ export class KHDRPipeline {
     const activeAero = !!(aeroOn && aeroTex && invVP);
     const activeFlir = !!(thermoTex && invVP && flirBlend > 0.005);
     const activeSchlieren = !!(schlierenOn && ((shockCount || 0) > 0 || (gunHeat || 0) > 0.01));
+    const activeVisor = !!(visorOn && (visorCount || 0) > 0 && visorDrops && visorMeta);
 
     // ShaderForge-Zero: select lazily compiled compile-time specialized composite permutation!
     const cp = this.getSpecializedComp({
@@ -885,7 +906,8 @@ export class KHDRPipeline {
       khdr: !!khdrOn,
       bloom: !!hasBloom,
       fxaa: !!useFXAA,
-      sfScreen: !!sfScreenTex
+      sfScreen: !!sfScreenTex,
+      visorBlood: activeVisor
     });
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -953,6 +975,11 @@ export class KHDRPipeline {
     if (cp.uFlirOn != null) gl.uniform1i(cp.uFlirOn, activeFlir ? 1 : 0);
     if (cp.uFlirBlend != null) gl.uniform1f(cp.uFlirBlend, activeFlir ? clamp(flirBlend || 0, 0, 1) : 0);
     if (cp.uFlirActors != null && flirActors) gl.uniform4fv(cp.uFlirActors, flirActors);
+    if (cp.uVisorOn != null) gl.uniform1i(cp.uVisorOn, activeVisor ? 1 : 0);
+    if (cp.uVisorCount != null) gl.uniform1i(cp.uVisorCount, activeVisor ? visorCount : 0);
+    if (cp.uVisorAspect != null) gl.uniform1f(cp.uVisorAspect, aspect || 16 / 9);
+    if (cp.uVisorDrop != null && visorDrops) gl.uniform4fv(cp.uVisorDrop, visorDrops);
+    if (cp.uVisorMeta != null && visorMeta) gl.uniform4fv(cp.uVisorMeta, visorMeta);
 
     gl.bindVertexArray(emptyVao);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
