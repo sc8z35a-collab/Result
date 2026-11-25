@@ -1928,6 +1928,11 @@ body.light-mode #chronoBanner {
   border-color: #b8ffe8;
   box-shadow: 0 0 16px #3ce6b44c;
 }
+.hemo-toggle[aria-checked=true] {
+  background: linear-gradient(90deg, #9e141c, #e63946);
+  border-color: #ff9da5;
+  box-shadow: 0 0 16px #e6394658;
+}
 .chrono-toggle[aria-checked=true] {
   background: linear-gradient(90deg, #f2be4c, #52d8f5);
   border-color: #fff0b8;

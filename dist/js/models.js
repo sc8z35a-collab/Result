@@ -1262,48 +1262,61 @@ export function movingDetails(match, time, extra = false, lite = false, opts = n
     m.ringS(bx, .16, bz, 0, 1, 0, pulse, .08, lite ? 8 : 16, 0, 1.0, .20, .16, 3, true);
   }
 
-  // Ultra-Realistic 3D Arterial Blood Splatter: decals/pools + airborne hemoglobin mist + velocity-stretched droplets!
-  if (match.bloodDecals && match.bloodDecals.length) {
-    const decals = match.bloodDecals;
-    const step = lite ? 3 : 1;
-    for (let bi = 0; bi < decals.length; bi += step) {
-      const dc = decals[bi];
-      if (camPos && ((dc.x - camX) * (dc.x - camX) + (dc.z - camZ) * (dc.z - camZ)) > 2025) continue;
-      if (frustum && !sphereInFrustum(frustum, dc.x, dc.y, dc.z, dc.r * 1.6)) continue;
-      const ageFrac = clamp(1 - dc.life / (dc.maxLife || 24), 0, 1);
-      // Coagulation darkening over time (fresh arterial bright crimson -> wet deep oxblood!)
-      const cr = dc.pool ? (0.36 - ageFrac * 0.14) : (0.50 - ageFrac * 0.18);
-      const cg = 0.025 - ageFrac * 0.012;
-      const cb = 0.028 - ageFrac * 0.012;
-      m.discS(dc.x, dc.y, dc.z, dc.nx, dc.ny, dc.nz, dc.r, lite ? 5 : (dc.pool ? 10 : 7), 0, cr, cg, cb, 1);
-      if (!lite && !dc.pool && dc.stretch > 1.3 && dc.ny > 0.5) {
-        // Directional impact tail droplet streak
-        m.discS(dc.x + dc.vx * dc.r * 0.9, dc.y + 0.002, dc.z + dc.vz * dc.r * 0.9, 0, 1, 0, dc.r * 0.52, 6, 0, cr * 1.15, cg, cb, 1);
+  // HemoFlux 1.0 Software / Standalone Fallback (skipped in WebGL2 where dedicated HemoFluxGL PBR shaders render!)
+  if (!opts?.hemoFluxGL) {
+    if (match.bloodDecals && match.bloodDecals.length) {
+      const decals = match.bloodDecals;
+      const step = lite ? 3 : 1;
+      for (let bi = 0; bi < decals.length; bi += step) {
+        const dc = decals[bi];
+        if (camPos && ((dc.x - camX) * (dc.x - camX) + (dc.z - camZ) * (dc.z - camZ)) > 2025) continue;
+        if (frustum && !sphereInFrustum(frustum, dc.x, dc.y, dc.z, dc.r * 1.6)) continue;
+        const ageFrac = clamp(1 - dc.life / (dc.maxLife || 28), 0, 1);
+        const oxy = dc.oxygen ?? 0.85;
+        const cr = (dc.pool ? 0.24 : (0.34 + oxy * 0.16)) * (1 - ageFrac * 0.55);
+        const cg = 0.016 * (1 - ageFrac * 0.45);
+        const cb = 0.018 * (1 - ageFrac * 0.45);
+        m.discS(dc.x, dc.y, dc.z, dc.nx, dc.ny, dc.nz, dc.r, lite ? 5 : (dc.pool ? 10 : 7), 0, cr, cg, cb, 1);
+        if (!lite && !dc.pool && dc.stretch > 1.25) {
+          const tx = dc.tx ?? dc.vx ?? 0, ty = dc.ty ?? 0, tz = dc.tz ?? dc.vz ?? 0;
+          m.discS(dc.x + tx * dc.r * 0.85, dc.y + ty * dc.r * 0.85 + (dc.ny > 0.5 ? 0.002 : 0), dc.z + tz * dc.r * 0.85, dc.nx, dc.ny, dc.nz, dc.r * 0.48, 6, 0, cr * 1.15, cg, cb, 1);
+        }
       }
     }
-  }
-  if (match.bloodMist && match.bloodMist.length && !lite) {
-    const mist = match.bloodMist;
-    for (let mi = 0; mi < mist.length; mi++) {
-      const bm = mist[mi];
-      if (frustum && !sphereInFrustum(frustum, bm.x, bm.y, bm.z, bm.r * 1.5)) continue;
-      const fade = clamp(bm.life / (bm.maxLife || .6), 0, 1);
-      m.ellipsoidS(bm.x, bm.y, bm.z, bm.r, bm.r * 0.85, bm.r, 0, .58 * fade + .12, .03, .035, 0, 5, 3);
+    const rivs = match.hemoFlux?.rivulets;
+    if (rivs && rivs.length && !lite) {
+      for (let ri = 0; ri < rivs.length; ri++) {
+        const rv = rivs[ri];
+        if (frustum && !sphereInFrustum(frustum, rv.x, rv.y - rv.len * 0.5, rv.z, rv.len + 0.15)) continue;
+        m.beamS(rv.x, rv.y, rv.z, rv.x, rv.y - rv.len, rv.z, rv.width * 0.55, rv.width * 0.9, 0, 0.28, 0.014, 0.016, 1);
+      }
     }
-  }
-  if (match.bloodDroplets && match.bloodDroplets.length) {
-    const drops = match.bloodDroplets;
-    const step = lite ? 3 : 1;
-    for (let di = 0; di < drops.length; di += step) {
-      const d = drops[di];
-      if (frustum && !sphereInFrustum(frustum, d.x, d.y, d.z, .35)) continue;
-      const spd = Math.hypot(d.vx, d.vy, d.vz) || 1;
-      const len = clamp(spd * 0.032, 0.04, 0.28);
-      const ux = d.vx / spd, uy = d.vy / spd, uz = d.vz / spd;
-      const cr = d.tier === 0 ? .76 : d.tier === 1 ? .52 : .32;
-      const cg = d.tier === 0 ? .04 : .02;
-      const cb = d.tier === 0 ? .045 : .025;
-      m.beamS(d.x - ux * len, d.y - uy * len, d.z - uz * len, d.x + ux * len * .35, d.y + uy * len * .35, d.z + uz * len * .35, d.r * 1.25, d.r * 0.65, 0, cr, cg, cb, d.tier === 0 ? 1 : 0);
+    const ribbons = match.hemoFlux?.ribbons;
+    if (ribbons && ribbons.length && !lite) {
+      for (let rbi = 0; rbi < ribbons.length; rbi++) {
+        const rb = ribbons[rbi], nd = rb.nodes;
+        if (frustum && !sphereInFrustum(frustum, nd[0], nd[1], nd[2], 1.8)) continue;
+        for (let k = 0; k < rb.count - 1; k++) {
+          const o0 = k * 6, o1 = (k + 1) * 6;
+          m.beamS(nd[o0], nd[o0 + 1], nd[o0 + 2], nd[o1], nd[o1 + 1], nd[o1 + 2], rb.thickness * 0.9, rb.thickness * 0.45, 0, 0.52, 0.022, 0.024, 1);
+        }
+      }
+    }
+    if (match.bloodDroplets && match.bloodDroplets.length) {
+      const drops = match.bloodDroplets;
+      const step = lite ? 3 : 1;
+      for (let di = 0; di < drops.length; di += step) {
+        const d = drops[di];
+        if (frustum && !sphereInFrustum(frustum, d.x, d.y, d.z, .35)) continue;
+        const spd = Math.hypot(d.vx, d.vy, d.vz) || 1;
+        const len = clamp(spd * 0.026, 0.03, 0.24);
+        const ux = d.vx / spd, uy = d.vy / spd, uz = d.vz / spd;
+        const oxy = d.oxygen ?? (d.tier === 0 ? 0.9 : d.tier === 1 ? 0.65 : 0.3);
+        const cr = 0.22 + oxy * 0.46;
+        const cg = 0.014 + oxy * 0.018;
+        const cb = 0.016 + oxy * 0.016;
+        m.beamS(d.x - ux * len, d.y - uy * len, d.z - uz * len, d.x + ux * len * .35, d.y + uy * len * .35, d.z + uz * len * .35, d.r * 1.15, d.r * 0.58, 0, cr, cg, cb, 1);
+      }
     }
   }
 

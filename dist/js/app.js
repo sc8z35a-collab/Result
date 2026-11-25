@@ -974,7 +974,7 @@ function isHqTechEnabled() {
   return !!(
     settings.hdr || settings.khdr || settings.shadowMode !== 'off' ||
     settings.fluxGI || settings.schlieren || settings.aeroVortex ||
-    settings.thermoFlux || settings.resonance || settings.chronoTrace ||
+    settings.thermoFlux || settings.resonance || settings.hemoFlux || settings.chronoTrace ||
     settings.fermatCore || settings.spectraField || settings.echoPulse
   );
 }
@@ -992,6 +992,7 @@ function setHqTechAll(enabled) {
     settings.aeroVortex = true;
     settings.thermoFlux = true;
     settings.resonance = true;
+    settings.hemoFlux = true;
     settings.chronoTrace = true;
     settings.fermatCore = true;
     settings.spectraField = true;
@@ -1008,6 +1009,7 @@ function setHqTechAll(enabled) {
     settings.aeroVortex = false;
     settings.thermoFlux = false;
     settings.resonance = false;
+    settings.hemoFlux = false;
     settings.chronoTrace = false;
     settings.fermatCore = false;
     settings.spectraField = false;
@@ -1094,6 +1096,8 @@ function drawSettings() {
   $('thermoHint').textContent = lite ? '軽量モード中' : settings.thermoFlux ? 'ON' : 'OFF';
   $('resonanceSwitch').setAttribute('aria-checked', String(settings.resonance));
   $('resonanceHint').textContent = lite ? '軽量モード中' : settings.resonance ? 'ON' : 'OFF';
+  if ($('hemoSwitch')) $('hemoSwitch').setAttribute('aria-checked', String(settings.hemoFlux !== false));
+  if ($('hemoHint')) $('hemoHint').textContent = lite ? '軽量モード中' : settings.hemoFlux !== false ? 'ON · 物理流体PBR' : 'OFF';
   $('chronoSwitch').setAttribute('aria-checked', String(settings.chronoTrace));
   $('chronoHint').textContent = settings.chronoTrace ? 'ON' : 'OFF';
   $('fermatSwitch').setAttribute('aria-checked', String(settings.fermatCore));
@@ -1152,6 +1156,7 @@ $('thermoSwitch').onclick = () => {
   if (!settings.thermoFlux) flirActive = false;
 };
 $('resonanceSwitch').onclick = () => setGraphics('resonance', !settings.resonance);
+if ($('hemoSwitch')) $('hemoSwitch').onclick = () => setGraphics('hemoFlux', settings.hemoFlux === false);
 $('chronoSwitch').onclick = () => {
   setGraphics('chronoTrace', !settings.chronoTrace);
   if (!settings.chronoTrace) chronoActive = false;
@@ -1469,8 +1474,20 @@ function event(e) {
     feed.push({line: '💥 ガス管爆発 (5m 衝撃波 25DMG)', team: e.actor?.team ?? 0, until: match.time + 3.5});
   }
   if (e.type === 'bloodSplatter' && !settings.lightMode) {
-    const nearMe = (p && e.victim === p) || (typeof e.distToPlayer === 'number' && e.distToPlayer < 8.0);
-    if (nearMe) spawnScreenBlood(e, p && e.victim === p);
+    const isSelf = !!(p && e.victim === p);
+    const nearMe = isSelf || (typeof e.distToPlayer === 'number' && e.distToPlayer < 9.0);
+    if (nearMe) {
+      if (renderer?.native && settings.hemoFlux !== false && match?.hemoFlux) {
+        const cb = renderer.lastCamBasis;
+        match.hemoFlux.onVisorSplatter(e, isSelf, cb?.eye, cb?.right, cb?.up, cb?.fwd);
+      } else {
+        spawnScreenBlood(e, isSelf);
+      }
+    }
+  }
+  if (e.type === 'respawn' && p && e.actor === p) {
+    match?.hemoFlux?.clearVisor();
+    if ($('bloodOverlay')) $('bloodOverlay').replaceChildren();
   }
   if (e.type === 'droneBought' && p && e.actor === p) {
     $('combatNotice').textContent = `NV2.6 ドローン配備 (稼働 ${e.activeDrones}機 · -${e.cost}発)`;
@@ -2595,6 +2612,7 @@ function frame(ms) {
   setData(appEl, 'aeroVortex', !!(renderer.native && settings.aeroVortex && !settings.lightMode));
   setData(appEl, 'thermoFlux', !!(renderer.native && settings.thermoFlux && !settings.lightMode));
   setData(appEl, 'resonance', !!(renderer.native && settings.resonance && !settings.lightMode));
+  setData(appEl, 'hemoFlux', !!(renderer.native && settings.hemoFlux !== false && !settings.lightMode));
   setData(appEl, 'chronoTrace', !!settings.chronoTrace);
   setData(appEl, 'chronoActive', !!(chronoActive && settings.chronoTrace));
   setData(appEl, 'fermatCore', !!settings.fermatCore);

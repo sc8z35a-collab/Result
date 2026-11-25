@@ -6,7 +6,7 @@ import {AUDIO_MODES} from './audio.js';
 const defaultSettings = {
   lightMode: false, resolution: 'HD', graphics: 'high', rate: 360, rateV2: true,
   hdr: true, khdr: true, shadowMode: 'pro', shadows: true,
-  fluxGI: true, schlieren: true, aeroVortex: true, thermoFlux: true, resonance: true,
+  fluxGI: true, schlieren: true, aeroVortex: true, thermoFlux: true, resonance: true, hemoFlux: true,
   chronoTrace: true, fermatCore: true, spectraField: true, echoPulse: true,
   autoAim: true, autoAimMode: 'standard',
   audioMode: 'ultra300', audioV2: true, sensitivity: 1, volume: 55, sound: false
